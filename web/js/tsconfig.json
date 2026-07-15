@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+	 "target": "ES2022",
+	 "module": "ES2022",
+	 "moduleResolution": "bundler",
+	 "lib": [
+		"ES2022",
+		"DOM",
+		"DOM.Iterable"
+	 ],
+	 "strict": true,
+	 "declaration": true,
+	 "sourceMap": true,
+	 "noEmit": true
+  },
+  "files": [
+	 "app.ts",
+	 "dialog.ts",
+	 "graffiti-api.ts",
+	 "identity.ts",
+	 "main.ts",
+	 "messages.ts",
+	 "network.ts",
+	 "peers.ts",
+	 "storage.ts",
+	 "table.ts"
+  ]
+}
+

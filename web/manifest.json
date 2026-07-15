@@ -1,0 +1,23 @@
+{
+  "name": "Graffiti",
+  "short_name": "Graffiti",
+  "description": "A peer-to-peer communication and messaging application.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#000000",
+  "theme_color": "#909090",
+  "icons": [
+	 {
+		"src": "favicon.ico",
+		"sizes": "64x64 32x32 24x24 16x16",
+		"type": "image/x-icon"
+	 },
+	 {
+		"src": "graffiti.png",
+		"sizes": "512x512",
+		"type": "image/png",
+		"purpose": "any"
+	 }
+  ]
+}

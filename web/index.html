@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html data-theme="dark" lang="en">
+
+<head>
+	<meta charset="UTF-8" />
+	<meta content="width=device-width, initial-scale=1.0" name="viewport" />
+	<title>Graffiti</title>
+	<link href="css/theme.css" rel="stylesheet" />
+	<link href="css/main.css" rel="stylesheet" />
+	<link href="manifest.json" rel="manifest" />
+	<meta content="#2d2dff" name="theme-color" />
+</head>
+
+<body>
+	<div class="container">
+		<header>
+			<nav class="app-nav">
+				<ul>
+					<li><a class="app-nav-link" data-section="section-network" href="#"
+							title="Network Connections & Discovery"><span class="material-symbols-outlined">public</span>
+							Net</a></li>
+					<li><a class="app-nav-link" data-section="section-messages" href="#" title="Secure P2P Messages"><span
+								class="material-symbols-outlined">mail</span> Msgs</a></li>
+					<li><a class="app-nav-link" data-section="section-identity" href="#"
+							title="Manage Forum and Personal Identities"><span class="material-symbols-outlined">person</span>
+							ID</a></li>
+					<li><a class="app-nav-link" data-section="section-peers" href="#" title="Manage Peer Public Keys"><span
+								class="material-symbols-outlined">group</span> Peers</a></li>
+					<li><a class="app-nav-link" data-section="section-settings" href="#" title="Settings & Help"><span
+								class="material-symbols-outlined">settings</span></a></li>
+				</ul>
+			</nav>
+		</header>
+
+		<!-- ══════════════════════════════════════════════════════════════════════════
+Network
+══════════════════════════════════════════════════════════════════════ -->
+		<section class="app-section" id="section-network">
+			<main>
+				<!-- ── My Node ─────────────────────────────────────────────── -->
+				<section class="net-card">
+					<h3>My Node</h3>
+					<div class="node-id-display">
+						<img alt="node avatar" height="32" id="node-avatar" style="border-radius:6px; flex-shrink:0"
+							width="32">
+						<div>
+							<strong id="node-name">—</strong>
+							<code id="node-key"
+								style="display:block; font-size:0.75rem; opacity:0.6; word-break:break-all"></code>
+						</div>
+					</div>
+					<div style="display:flex; flex-wrap:wrap; gap:1rem; margin-top:0.75rem">
+						<fieldset style="flex: 1 1 200px">
+							<legend style="font-size:0.9rem">Relay mode</legend>
+							<label style="margin-right:1rem">
+								<input checked id="relay-mode-off" name="relay-mode" type="radio" value="off">
+								Off
+							</label>
+							<label>
+								<input id="relay-mode-on" name="relay-mode" type="radio" value="on">
+								On
+							</label>
+							<p class="status-text" hidden id="relay-mode-status" style="margin-top:0.5rem"></p>
+						</fieldset>
+
+						<fieldset style="flex: 1 1 200px">
+							<legend style="font-size:0.9rem">Server</legend>
+							<div id="server-stopped">
+								<p style="margin:0 0 0.5rem 0">Status: <span class="status-text">Not running</span></p>
+								<div class="toolbar" style="margin-top:0.5rem; border-bottom: none">
+									<label>Port:
+										<input id="server-port-input" max="65535" min="0" style="width:6ch" type="number"
+											value="0">
+									</label>
+									<button id="btn-server-start" type="button">Start Server</button>
+								</div>
+							</div>
+							<div hidden id="server-running">
+								<p style="margin:0 0 0.5rem 0">Status: <span class="status-connected">● Running</span>
+									on port <strong id="server-port-display"></strong></p>
+								<button id="btn-server-stop" type="button">Stop Server</button>
+							</div>
+						</fieldset>
+					</div>
+				</section>
+
+				<!-- ── Nearby Nodes (Discovery) ─────────────────────────────────── -->
+				<section class="net-card">
+					<div class="net-card-header">
+						<h3>Nearby Nodes</h3>
+						<div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
+							<label style="font-size: 0.85rem; display: inline-flex; align-items: center; gap: 0.25rem; cursor: pointer;">
+								<input id="discover-scan-quick" checked name="discover-scan-type" type="radio" value="quick">
+								Quick (Multicast)
+							</label>
+							<label style="font-size: 0.85rem; display: inline-flex; align-items: center; gap: 0.25rem; cursor: pointer;">
+								<input id="discover-scan-full" name="discover-scan-type" type="radio" value="full">
+								Full (IP Scan)
+							</label>
+							<button id="btn-discover" style="display: inline-flex; align-items: center; gap: 0.25rem;"
+								type="button"><span class="material-symbols-outlined" style="font-size: 1.1rem;">search</span>
+								Discover
+							</button>
+						</div>
+					</div>
+					<p class="status-text" hidden id="discover-status"></p>
+					<div class="net-items-container" id="tbl-discovered-body">
+						<div class="empty-row" id="discover-empty">Press Discover to scan for nearby nodes.</div>
+					</div>
+				</section>
+
+				<!-- ── Active Connections ────────────────────────────────────────── -->
+				<section class="net-card">
+					<div class="net-card-header">
+						<h3>Active Connections</h3>
+					</div>
+					<div class="net-items-container" id="tbl-connections-body">
+						<div class="empty-row" id="connections-empty">No active connections.</div>
+					</div>
+				</section>
+
+				<!-- ── Manual Connect ───────────────────────────────────────────── -->
+				<section class="net-card">
+					<h3>Manually Connect to Peer</h3>
+					<div class="toolbar" style="border-bottom: none">
+						<label>Host
+							<input id="manual-connect-host" placeholder="192.168.1.x or hostname" style="width:18ch"
+								type="text">
+						</label>
+						<label>Port
+							<input id="manual-connect-port" max="65535" min="1" style="width:6ch" type="number" value="1337">
+						</label>
+						<button id="btn-manual-connect" type="button">Connect</button>
+					</div>
+					<p class="status-text" hidden id="manual-connect-status"></p>
+				</section>
+			</main>
+		</section>
+
+		<!-- ══════════════════════════════════════════════════════════════════════════
+Messages
+══════════════════════════════════════════════════════════════════════ -->
+		<section class="app-section" id="section-messages">
+			<div class="messages-layout">
+				<aside class="identities-sidebar" id="identities-sidebar">
+					<div class="sidebar-header">
+						<h2>Filter by Identity</h2>
+						<button id="btn-sidebar-close" class="sidebar-close-btn" title="Close Filters" type="button">
+							<span class="material-symbols-outlined">close</span>
+						</button>
+					</div>
+					<div class="sidebar-actions">
+						<button id="btn-filter-all" type="button">All</button>
+						<button id="btn-filter-none" type="button">None</button>
+					</div>
+					<div class="identities-filter-list" id="identities-filter-list">
+						<!-- Dynamically populated -->
+					</div>
+					<div class="sidebar-footer"
+						style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--button);">
+						<button id="btn-messages-refresh" style="width: 100%; padding: 0.5rem;" type="button">Refresh</button>
+					</div>
+				</aside>
+
+				<div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
+				<main class="messages-page">
+					<button id="btn-filter-toggle" class="filter-toggle-btn" type="button"
+						style="margin-bottom: 0.5rem; align-self: start;">
+						<span class="material-symbols-outlined"
+							style="font-size: 1.2rem; vertical-align: middle;">filter_alt</span> Filter
+					</button>
+
+					<div id="messages"></div>
+
+					<section class="composer">
+						<form class="composer-form" id="message-form" novalidate>
+							<div class="field-grid">
+								<label class="field" style="display: flex; flex-direction: row; align-items: center; gap: 0.5rem;">
+									<span style="flex-shrink: 0;">From:</span>
+									<select id="from-field" required
+										style="flex: 1; min-width: 0; padding: 0.45rem 0.6rem;"></select>
+									<span id="from-empty-message" style="display: none; color: #ff5555; font-size: 0.88rem; font-weight: bold; padding: 0.45rem 0.6rem;">No identities available</span>
+								</label>
+								<label class="field" style="display: flex; flex-direction: row; align-items: center; gap: 0.5rem;">
+									<span style="flex-shrink: 0;">To:</span>
+									<select id="to-field" required
+										style="flex: 1; min-width: 0; padding: 0.45rem 0.6rem;"></select>
+									<span id="to-empty-message" style="display: none; color: #ff5555; font-size: 0.88rem; font-weight: bold; padding: 0.45rem 0.6rem;">No peers available</span>
+								</label>
+							</div>
+
+							<label class="field">
+								<span>Text</span>
+								<textarea id="message-text" placeholder="Type your message" rows="6"></textarea>
+							</label>
+
+							<div class="composer-actions">
+								<button id="send-text" type="submit">Send</button>
+								<button id="send-file" type="button">Send File</button>
+								<input hidden id="file-input" type="file">
+							</div>
+
+
+							<p aria-live="polite" class="send-status" id="send-status">Ready</p>
+						</form>
+					</section>
+				</main>
+			</div>
+		</section>
+
+		<!-- ══════════════════════════════════════════════════════════════════════════
+Identity
+══════════════════════════════════════════════════════════════════════ -->
+		<section class="app-section" id="section-identity">
+			<main>
+				<div class="toolbar">
+					<button id="create-identity">Create</button>
+				</div>
+				<table class="data-table" id="identities">
+					<thead>
+						<tr>
+							<th>User</th>
+							<th>Actions</th>
+						</tr>
+					</thead>
+					<tbody></tbody>
+				</table>
+			</main>
+		</section>
+
+		<!-- ══════════════════════════════════════════════════════════════════════════
+Peers
+══════════════════════════════════════════════════════════════════════ -->
+		<section class="app-section" id="section-peers">
+			<main>
+				<div class="toolbar">
+					<button id="import-peer">Import</button>
+				</div>
+				<table class="data-table" id="peers">
+					<thead>
+						<tr>
+							<th>User</th>
+							<th>Actions</th>
+						</tr>
+					</thead>
+					<tbody></tbody>
+				</table>
+			</main>
+		</section>
+
+		<!-- ══════════════════════════════════════════════════════════════════════════
+Settings
+══════════════════════════════════════════════════════════════════════ -->
+		<section class="app-section" id="section-settings">
+			<main>
+				<!-- ── Appearance ────────────────────────────────────────── -->
+				<section class="net-card">
+					<h3>Appearance</h3>
+					<p style="font-size:0.88rem; opacity:0.7; margin:0 0 0.75rem">
+						Customize the typography.
+					</p>
+					<div style="display:flex; flex-wrap:wrap; gap:1.5rem;">
+						<label style="display:flex; flex-direction:column; gap:0.35rem; font-size:0.88rem; font-weight:600;">
+							Font Size
+							<select id="settings-font-size"
+								style="padding:0.4rem 0.6rem; border-radius:4px; background:var(--background); color:var(--primary); border:1px solid var(--button);">
+								<option value="50%">50%</option>
+								<option value="60%">60%</option>
+								<option value="70%">70%</option>
+								<option value="80%">80%</option>
+								<option value="90%">90%</option>
+								<option selected value="100%">100%</option>
+								<option value="110%">110%</option>
+								<option value="120%">120%</option>
+								<option value="130%">130%</option>
+								<option value="140%">140%</option>
+								<option value="150%">150%</option>
+								<option value="160%">160%</option>
+								<option value="170%">170%</option>
+								<option value="180%">180%</option>
+								<option value="190%">190%</option>
+								<option value="200%">200%</option>
+							</select>
+						</label>
+						<label style="display:flex; flex-direction:column; gap:0.35rem; font-size:0.88rem; font-weight:600;">
+							Font Family
+							<select id="settings-font-family"
+								style="padding:0.4rem 0.6rem; border-radius:4px; background:var(--background); color:var(--primary); border:1px solid var(--button);">
+								<option selected value="inherit">Default</option>
+								<option value="sans-serif">Sans-serif</option>
+								<option value="serif">Serif</option>
+								<option value="monospace">Monospace</option>
+								<option value="system-ui">System UI</option>
+							</select>
+						</label>
+					</div>
+				</section>
+				<!-- ── Storage ────────────────────────────────────────── -->
+				<section class="net-card">
+					<h3>Storage</h3>
+					<p style="font-size:0.88rem; opacity:0.7; margin:0 0 1rem">
+						Manage disk storage space used by your messages and content files.
+					</p>
+					<div style="font-size:0.95rem; font-weight:600; margin-bottom:1rem; display: flex; flex-wrap: wrap; gap: 2rem; align-items: center;">
+						<div>Total Storage Used: <span id="storage-total-overall">—</span></div>
+						<label style="font-size:0.88rem; font-weight:600; display: inline-flex; align-items: center; gap: 0.5rem;">
+							Storage Quota (MB):
+							<input id="settings-storage-quota" min="0" placeholder="Unlimited" style="padding:0.35rem 0.5rem; border-radius:4px; background:var(--background); color:var(--primary); border:1px solid var(--button); width:12ch;" type="number">
+						</label>
+					</div>
+					<div class="net-items-container" id="storage-list">
+						<div class="empty-row">Loading storage stats…</div>
+					</div>
+				</section>
+
+				<!-- ── Help & Documentation Link ───────────────────────── -->
+				<section class="net-card">
+					<h3>Help & Documentation</h3>
+					<p style="font-size:0.88rem; opacity:0.7; margin:0 0 0.75rem">
+						Learn how Graffiti works, how to configure servers, relays, and manage identities.
+					</p>
+					<button id="btn-show-help" style="display: inline-flex; align-items: center; gap: 0.25rem;"
+						type="button">
+						<span class="material-symbols-outlined" style="font-size: 1.1rem;">help</span> Read Help Documentation
+					</button>
+				</section>
+			</main>
+		</section>
+
+		<!-- ══════════════════════════════════════════════════════════════════════════
+	Help & Documentation Section
+	══════════════════════════════════════════════════════════════════════ -->
+		<section class="app-section" id="section-help">
+			<main>
+				<div class="net-card-header" style="margin-bottom: 1.5rem;">
+					<h1>Help & Documentation</h1>
+					<button id="btn-close-help" style="display: inline-flex; align-items: center; gap: 0.25rem;"
+						type="button">
+						<span class="material-symbols-outlined" style="font-size: 1.1rem;">close</span> Close
+					</button>
+				</div>
+
+				<section class="net-card">
+					<h3>What is Graffiti?</h3>
+					<p style="font-size:0.9rem; opacity:0.8; line-height:1.4; margin-top:0.5rem">
+						Graffiti is a secure, decentralized, peer-to-peer (P2P) messaging application. It allows you to
+						communicate directly with other nodes without central servers. All messages are encrypted end-to-end,
+						ensuring that only the intended recipient can read the content.
+					</p>
+				</section>
+
+				<section class="net-card">
+					<h3>Server & Connections</h3>
+					<p style="font-size:0.9rem; opacity:0.8; line-height:1.4; margin-top:0.5rem">
+						To receive direct connections, you can start a <strong>Server</strong> on your node. This opens a port
+						(typically <code>1337</code>) so that other peers on the network can connect to you, handshake, and
+						synchronize messages.
+					</p>
+				</section>
+
+				<section class="net-card">
+					<h3>Peer Discovery & Syncing</h3>
+					<p style="font-size:0.9rem; opacity:0.8; line-height:1.4; margin-top:0.5rem">
+						Graffiti discovers local network nodes automatically using multicast discovery. You can also manually
+						connect to any reachable peer by inputting their IP/host and port in the Network tab. Once connected,
+						Graffiti automatically runs an initial sync, exchanging encrypted message metadata so both nodes get
+						caught up.
+					</p>
+				</section>
+
+				<section class="net-card">
+					<h3>Topic / Relay Workflow</h3>
+					<p style="font-size:0.9rem; opacity:0.8; line-height:1.4; margin-top:0.5rem">
+						To start messaging in a shared topic/forum using a relay node, follow this standard flow:
+					</p>
+					<ol
+						style="font-size:0.9rem; opacity:0.8; line-height:1.4; margin-left:1.2rem; margin-top:0.5rem; display: flex; flex-direction: column; gap: 0.5rem;">
+						<li><strong>Setup the Shared Topic:</strong> Create or import the target Identity using its
+							deterministic
+							seed phrase. Ensure this identity is active in your "Identities" tab.
+						</li>
+						<li><strong>Import Peers:</strong> Add the public keys of the peers you want to send messages to in
+							the
+							"Peers" tab.
+						</li>
+						<li><strong>Connect to the Relay:</strong> In the "Network" tab, input the host/IP and port of the
+							relay
+							node and click <strong>Connect</strong>. Alternatively, scan and connect via "Nearby Nodes".
+						</li>
+						<li><strong>Write and Send:</strong> Go to the "Messages" tab. Compose your message, selecting your
+							sender identity in the "From" field and the shared/recipient peer in the "To" field. Click
+							<strong>Send</strong>.
+						</li>
+						<li><strong>Propagation:</strong> The message is encrypted locally, stored on your disk, and
+							automatically pushed to the connected relay. The relay caches the encrypted payload and serves it
+							to
+							the recipient when they connect and synchronize.
+						</li>
+					</ol>
+				</section>
+
+				<section class="net-card">
+					<h3>Relay Mode</h3>
+					<p style="font-size:0.9rem; opacity:0.8; line-height:1.4; margin-top:0.5rem">
+						If you enable <strong>Relay mode</strong>, your node acts as a store-and-forward peer. It will
+						download
+						and cache encrypted messages destined for other identities and pass them along when those nodes
+						connect
+						to you. This is highly useful for bridging communication when peers are not online at the same time.
+					</p>
+				</section>
+
+				<section class="net-card">
+					<h3>Identities & Passphrases</h3>
+					<p style="font-size:0.9rem; opacity:0.8; line-height:1.4; margin-top:0.5rem">
+						In Graffiti, accounts are called <strong>Identities</strong>.
+					</p>
+					<ul
+						style="font-size:0.9rem; opacity:0.8; line-height:1.4; margin-left:1.2rem; margin-top:0.5rem; display: flex; flex-direction: column; gap: 0.5rem;">
+						<li><strong>Receiving Messages:</strong> You can only read and decrypt messages addressed to an
+							Identity
+							key that you currently have active in your "Identities" tab.
+						</li>
+						<li><strong>Seed Phrases:</strong> Identities are created deterministically using a seed phrase
+							(password/passphrase). If you share this seed phrase with someone else (or use it on a second
+							device),
+							that device will recreate the exact same Identity and can view and receive the same message
+							history.
+						</li>
+						<li><strong>Forums & Uniqueness:</strong> You can uniquely identify yourself to others by creating
+							your
+							own private Identity and using it to write to forum topics. Emojis and avatar colors represent the
+							unique fingerprint of each identity key.
+						</li>
+					</ul>
+				</section>
+			</main>
+		</section>
+	</div>
+
+	<!-- ══════════════════════════════════════════════════════════════════════════
+ Message templates
+ ══════════════════════════════════════════════════════════════════════ -->
+
+	<template id="tpl-text-message">
+		<article class="message-item msg-type-text">
+			<header class="message-header">
+				<figure class="msg-author">
+					<img alt="" class="msg-author-avatar msg-avatar">
+					<figcaption class="msg-author-name msg-name"></figcaption>
+				</figure>
+				<span aria-hidden="true" class="msg-arrow">→</span>
+				<figure class="msg-recipient">
+					<img alt="" class="msg-recipient-avatar msg-avatar">
+					<figcaption class="msg-recipient-name msg-name"></figcaption>
+				</figure>
+				<time class="msg-time"></time>
+				<button class="msg-btn-special msg-btn-export" title="Export" type="button"><span
+						class="material-symbols-outlined" style="font-size: 1.15rem;">ios_share</span></button>
+				<button class="msg-btn-special msg-btn-delete" title="Delete" type="button"><span
+						class="material-symbols-outlined" style="font-size: 1.15rem;">delete</span></button>
+			</header>
+			<div class="message-body">
+				<pre class="msg-text-content"></pre>
+			</div>
+		</article>
+	</template>
+
+	<template id="tpl-image-message">
+		<article class="message-item msg-type-image">
+			<header class="message-header">
+				<figure class="msg-author">
+					<img alt="" class="msg-author-avatar msg-avatar">
+					<figcaption class="msg-author-name msg-name"></figcaption>
+				</figure>
+				<span aria-hidden="true" class="msg-arrow">→</span>
+				<figure class="msg-recipient">
+					<img alt="" class="msg-recipient-avatar msg-avatar">
+					<figcaption class="msg-recipient-name msg-name"></figcaption>
+				</figure>
+				<time class="msg-time"></time>
+				<button class="msg-btn-special msg-btn-export" title="Export" type="button"><span
+						class="material-symbols-outlined" style="font-size: 1.15rem;">ios_share</span></button>
+				<button class="msg-btn-special msg-btn-delete" title="Delete" type="button"><span
+						class="material-symbols-outlined" style="font-size: 1.15rem;">delete</span></button>
+			</header>
+			<div class="message-body">
+				<img alt="" class="msg-media msg-image">
+			</div>
+		</article>
+	</template>
+
+	<template id="tpl-audio-message">
+		<article class="message-item msg-type-audio">
+			<header class="message-header">
+				<figure class="msg-author">
+					<img alt="" class="msg-author-avatar msg-avatar">
+					<figcaption class="msg-author-name msg-name"></figcaption>
+				</figure>
+				<span aria-hidden="true" class="msg-arrow">→</span>
+				<figure class="msg-recipient">
+					<img alt="" class="msg-recipient-avatar msg-avatar">
+					<figcaption class="msg-recipient-name msg-name"></figcaption>
+				</figure>
+				<time class="msg-time"></time>
+				<button class="msg-btn-special msg-btn-export" title="Export" type="button"><span
+						class="material-symbols-outlined" style="font-size: 1.15rem;">ios_share</span></button>
+				<button class="msg-btn-special msg-btn-delete" title="Delete" type="button"><span
+						class="material-symbols-outlined" style="font-size: 1.15rem;">delete</span></button>
+			</header>
+			<div class="message-body">
+				<span class="msg-file-name"></span>
+				<audio class="msg-media" controls></audio>
+			</div>
+		</article>
+	</template>
+
+	<template id="tpl-video-message">
+		<article class="message-item msg-type-video">
+			<header class="message-header">
+				<figure class="msg-author">
+					<img alt="" class="msg-author-avatar msg-avatar">
+					<figcaption class="msg-author-name msg-name"></figcaption>
+				</figure>
+				<span aria-hidden="true" class="msg-arrow">→</span>
+				<figure class="msg-recipient">
+					<img alt="" class="msg-recipient-avatar msg-avatar">
+					<figcaption class="msg-recipient-name msg-name"></figcaption>
+				</figure>
+				<time class="msg-time"></time>
+				<button class="msg-btn-special msg-btn-export" title="Export" type="button"><span
+						class="material-symbols-outlined" style="font-size: 1.15rem;">ios_share</span></button>
+				<button class="msg-btn-special msg-btn-delete" title="Delete" type="button"><span
+						class="material-symbols-outlined" style="font-size: 1.15rem;">delete</span></button>
+			</header>
+			<div class="message-body">
+				<span class="msg-file-name"></span>
+				<video class="msg-media" controls></video>
+			</div>
+		</article>
+	</template>
+
+	<template id="tpl-binary-message">
+		<article class="message-item msg-type-binary">
+			<header class="message-header">
+				<figure class="msg-author">
+					<img alt="" class="msg-author-avatar msg-avatar">
+					<figcaption class="msg-author-name msg-name"></figcaption>
+				</figure>
+				<span aria-hidden="true" class="msg-arrow">→</span>
+				<figure class="msg-recipient">
+					<img alt="" class="msg-recipient-avatar msg-avatar">
+					<figcaption class="msg-recipient-name msg-name"></figcaption>
+				</figure>
+				<time class="msg-time"></time>
+				<button class="msg-btn-special msg-btn-export" title="Export" type="button"><span
+						class="material-symbols-outlined" style="font-size: 1.15rem;">ios_share</span></button>
+				<button class="msg-btn-special msg-btn-delete" title="Delete" type="button"><span
+						class="material-symbols-outlined" style="font-size: 1.15rem;">delete</span></button>
+			</header>
+			<div class="message-body">
+				<span aria-hidden="true" class="material-symbols-outlined msg-file-icon"
+					style="font-size: 2rem;">description</span>
+				<span class="msg-file-name"></span>
+				<a class="msg-download-link" download href="#">Download file</a>
+			</div>
+		</article>
+	</template>
+
+	<!-- ══════════════════════════════════════════════════════════════════════════
+ Dialog templates
+ ══════════════════════════════════════════════════════════════════════ -->
+
+	<template id="tpl-identity-create">
+		<div class="dialog-field">
+			<label for="dlg-iden-seed">Seed phrase <small>(required)</small></label>
+			<input autocomplete="off" id="dlg-iden-seed" name="seed" placeholder="Deterministic key generation" required
+				type="text">
+			<small>The same seed always produces the same identity.</small>
+		</div>
+		<div class="dialog-field" style="margin-top: 0.25rem;">
+			<label class="dialog-checkbox-label">
+				<input type="checkbox" name="splitByComma" checked>
+				<span>Interpret comma-separated seeds</span>
+			</label>
+		</div>
+	</template>
+
+
+	<!-- Hidden file input for peer import -->
+	<input id="import-peer-file" style="display:none" type="file">
+
+
+	<!-- Single module entry point -->
+	<script src="js/main.js" type="module"></script>
+</body>
+
+</html>
