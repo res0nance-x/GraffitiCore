@@ -34,6 +34,12 @@ async function download(path, params = {}) {
     const url = new URL(path, window.location.origin);
     for (const [k, v] of Object.entries(params))
         url.searchParams.set(k, v);
+
+    if (window.Android && window.Android.download) {
+        window.Android.download(url.toString());
+        return;
+    }
+
     const res = await fetch(url.toString());
     if (!res.ok) {
         let msg = `HTTP ${res.status}`;

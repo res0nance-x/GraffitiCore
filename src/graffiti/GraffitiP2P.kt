@@ -199,6 +199,10 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 						headerList.forEach { msgHeader ->
 							val deletedMetaFile = File(deletedDir, "${msgHeader.key}")
 							if (deletedMetaFile.exists()) return@forEach
+							if (msgHeader.author.arr.contentEquals(msgHeader.recipient.arr)) {
+								log("Ignoring header ${msgHeader.key} from ${node.remoteAddress}: author and recipient are the same")
+								return@forEach
+							}
 							// Non-relay mode: ignore meta not addressed to us or our direct friends
 							// (Peers we have explicitly added)
 							if (!relayEnabled &&
@@ -244,6 +248,9 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 						if (deletedMetaFile.exists()) {
 							file.delete()
 							log("Ignoring content ${eMeta.key.name} from ${node.remoteAddress}: key is deleted")
+						} else if (eMeta.author.arr.contentEquals(eMeta.recipient.arr)) {
+							file.delete()
+							log("Ignoring content ${eMeta.key.name} from ${node.remoteAddress}: author and recipient are the same")
 						} else {
 							val peer = listPeers().firstOrNull { it.key == eMeta.author }
 								?: ephemeralIdentities.firstOrNull { it.asPeer().key == eMeta.author }?.asPeer()

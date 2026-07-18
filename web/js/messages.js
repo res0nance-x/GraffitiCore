@@ -347,6 +347,7 @@ async function populateSelects() {
         graffiti.listPeers(),
         graffiti.nodeInfo(),
     ]);
+    knownIdentities = identities;
     nameToKey.clear();
     for (const id of identities) {
         nameToKey.set(id.name, id.key);
@@ -419,6 +420,7 @@ async function populateSelects() {
             }
         }
     }
+    updateSameAuthorRecipientWarning();
 }
 function getEnvelope() {
     return {
@@ -481,6 +483,26 @@ form?.addEventListener('submit', async (event) => {
 });
 messageText?.addEventListener('input', () => autoResizeTextarea(messageText));
 sendFileButton?.addEventListener('click', () => fileInput?.click());
+function updateSameAuthorRecipientWarning() {
+    const warningEl = document.getElementById('same-author-recipient-warning');
+    if (!warningEl)
+        return;
+    const fromKey = fromField?.value;
+    const toKey = toField?.value;
+    if (!fromKey || !toKey) {
+        warningEl.style.display = 'none';
+        return;
+    }
+    const selectedIdentity = knownIdentities.find(id => id.key === fromKey);
+    if (selectedIdentity && selectedIdentity.peerKey === toKey) {
+        warningEl.style.display = 'block';
+    }
+    else {
+        warningEl.style.display = 'none';
+    }
+}
+fromField?.addEventListener('change', updateSameAuthorRecipientWarning);
+toField?.addEventListener('change', updateSameAuthorRecipientWarning);
 refreshBtn?.addEventListener('click', () => {
     void refreshMessages();
 });

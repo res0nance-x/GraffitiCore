@@ -379,6 +379,7 @@ async function populateSelects(): Promise<void> {
       graffiti.listPeers(),
       graffiti.nodeInfo(),
    ]);
+   knownIdentities = identities;
 
    nameToKey.clear();
    for (const id of identities) {
@@ -449,6 +450,7 @@ async function populateSelects(): Promise<void> {
          }
       }
    }
+   updateSameAuthorRecipientWarning();
 }
 
 function getEnvelope(): { identityKey: string; peerKey: string } {
@@ -518,6 +520,27 @@ form?.addEventListener('submit', async (event: SubmitEvent) => {
 messageText?.addEventListener('input', () => autoResizeTextarea(messageText));
 
 sendFileButton?.addEventListener('click', () => fileInput?.click());
+
+function updateSameAuthorRecipientWarning(): void {
+   const warningEl = document.getElementById('same-author-recipient-warning');
+   if (!warningEl) return;
+   const fromKey = fromField?.value;
+   const toKey = toField?.value;
+   if (!fromKey || !toKey) {
+      warningEl.style.display = 'none';
+      return;
+   }
+   const selectedIdentity = knownIdentities.find(id => id.key === fromKey);
+   if (selectedIdentity && selectedIdentity.peerKey === toKey) {
+      warningEl.style.display = 'block';
+   } else {
+      warningEl.style.display = 'none';
+   }
+}
+
+fromField?.addEventListener('change', updateSameAuthorRecipientWarning);
+toField?.addEventListener('change', updateSameAuthorRecipientWarning);
+
 refreshBtn?.addEventListener('click', () => {
    void refreshMessages()
 });

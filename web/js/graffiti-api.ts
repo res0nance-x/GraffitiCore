@@ -142,6 +142,12 @@ async function get<T extends { ok: boolean; error?: string }>(
 async function download(path: string, params: Record<string, string> = {}): Promise<void> {
    const url = new URL(path, window.location.origin);
    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+
+   if ((window as any).Android && (window as any).Android.download) {
+      (window as any).Android.download(url.toString());
+      return;
+   }
+
    const res = await fetch(url.toString());
    if (!res.ok) {
       let msg = `HTTP ${res.status}`;
