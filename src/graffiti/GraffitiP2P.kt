@@ -69,7 +69,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 
 	// ── Storage Size ───────────────────────────────────────────────
 	val totalContentSize = AtomicLong(0L)
-	private var defaultQuota = 100_000_000L
+	private var defaultQuota = 0L
 
 	@Volatile
 	private var storageQuotaBytes: Long = defaultQuota
@@ -130,8 +130,9 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	@Synchronized
 	fun checkAndEnforceQuota() {
 		val quota = storageQuotaBytes
+		if (quota <= 0) return
 		val currentSize = totalContentSize.get()
-		if (quota in 0..<currentSize) {
+		if (currentSize > quota) {
 			log("Quota exceeded: $currentSize > $quota. Purging oldest half...")
 			val purgedCount = purgeOldestHalfOverall()
 			log("Purged $purgedCount messages. New total size: ${totalContentSize.get()}")

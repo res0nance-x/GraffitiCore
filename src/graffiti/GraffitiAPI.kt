@@ -1,14 +1,24 @@
 package graffiti
 
-import r3.org.json.JSONArray
-import r3.org.json.JSONObject
+import org.nanohttpd.protocols.http.response.Response
 import org.nanohttpd.protocols.http.response.Status
-import r3.content.*
+import r3.content.BinaryContent
+import r3.content.Content
+import r3.content.ContentMeta
+import r3.content.JsonContent
+import r3.content.TextContent
 import r3.http.ContentHandler
 import r3.io.log
 import r3.io.serialize
 import r3.key.Key256
-import r3.pke.*
+import r3.org.json.JSONArray
+import r3.org.json.JSONObject
+import r3.pke.EncryptContent
+import r3.pke.EncryptedMetaKey
+import r3.pke.IdentityKey
+import r3.pke.Peer
+import r3.pke.PeerKey
+import r3.pke.name
 import r3.source.FileSource
 import r3.source.readString
 import java.io.DataInputStream
@@ -119,7 +129,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/node/relay" -> relay(header)
 			"/api/server/status" -> status(header)
 			"/api/connections" -> connections()
-			"/api/discover" -> if (header.optBoolean("scan")) discover(true ) else discover(false)
+			"/api/discover" -> if (header.optBoolean("scan")) discover(true) else discover(false)
 			"/api/store" -> handleStore(header, content)
 			else -> null
 		}
@@ -489,8 +499,9 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 	 * When discovery finishes, a final event is sent:
 	 *   { "event": "discover_done" }
 	 */
-	private fun discover(scan:Boolean): Content {
-		p2p.discoverAsync(scan,
+	private fun discover(scan: Boolean): Content {
+		p2p.discoverAsync(
+			scan,
 			found = { info ->
 				sendToAll(
 					JSONObject()
@@ -558,7 +569,6 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 	}
 
 	private val settingsFile = File(p2p.graffitiDir, "settings.json")
-
 	private fun saveSetting(key: String, value: String) {
 		synchronized(settingsFile) {
 			val obj = if (settingsFile.exists()) {
@@ -605,7 +615,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		}
 	}
 
-	override fun invoke(header: JSONObject, content: Content?): Content? {
+	override fun handle(header: JSONObject, content: Content?): Content? {
 		return try {
 			dispatch(header, content)
 		} catch (e: Exception) {
@@ -613,5 +623,9 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			e.printStackTrace(System.out)
 			err(e.message ?: "Unknown error")
 		}
+	}
+
+	override fun onResponse(header: JSONObject, response: Response) {
+		response.addHeader("Cache-Control", "no-store")
 	}
 }
