@@ -47,17 +47,6 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			)
 		}
 		p2p.onNodeIdentified = { node, peer ->
-			val peerFile = File(p2p.peerDir, "${peer.key}")
-			if (!peerFile.exists()) {
-				try {
-					peerFile.writeBytes(peer.serialize())
-					sendToAll(
-						JSONObject().put("event", "peers_update")
-					)
-				} catch (e: Exception) {
-					log("Failed to auto-import peer ${peer.key.name}: ${e.message}")
-				}
-			}
 			sendToAll(
 				JSONObject()
 					.put("event", "node_identified")
