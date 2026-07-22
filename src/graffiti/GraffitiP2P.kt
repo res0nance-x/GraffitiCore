@@ -3,14 +3,11 @@ package graffiti
 import r3.content.Content
 import r3.content.ContentMeta
 import r3.hash.hash256
-import r3.http.WebServer
 import r3.io.*
 import r3.key.hash256
 import r3.net.discover.*
 import r3.net.tcp.TCPNode
 import r3.net.tcp.TCPServer
-import r3.pack.BinaryPack
-import r3.pack.PackRouter
 import r3.pke.*
 import r3.source.FileSink
 import r3.source.FileSource
@@ -705,7 +702,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	// ── Async discovery ───────────────────────────────────────────────────────
 	// Runs multicast and scan discovery concurrently on a background thread.
 	// Calls found() for each unique peer as it is discovered; calls done() when finished.
-	fun discoverAsync(scan:Boolean, found: (PeerAddressInfo) -> Unit, done: () -> Unit = {}) {
+	fun discoverAsync(scan: Boolean, found: (PeerAddressInfo) -> Unit, done: () -> Unit = {}) {
 		thread(isDaemon = true, name = "GraffitiDiscover") {
 			val seen = Collections.synchronizedSet(LinkedHashSet<ServerKey>())
 			fun notify(addr: PeerAddressInfo) {
@@ -713,7 +710,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			}
 			// Multicast blocks for ~1 s internally — run it concurrently with the scan.
 			val mFuture = async { MulticastDiscover().discover { notify(it) } }
-			if(scan) {
+			if (scan) {
 				ScanDiscover().discover { notify(it) }
 				// Give both mechanisms up to 6 s (covers large /24 subnet scans).
 				Thread.sleep(6000)
@@ -763,60 +760,5 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		// Belt-and-suspenders: prune entries that closed without firing their onClose.
 		synchronized(connectionMap) { connectionMap.entries.removeIf { it.value.isClosed() } }
 		tcpServer?.nodeList?.removeIf { it.isClosed() }
-	}
-
-	fun createPack(sourceDir: String, outDir: String) {
-		createPack(File(sourceDir), File(outDir))
-	}
-
-	fun createPack(sourceDir: File, outDir: File) {
-		if (!sourceDir.exists() || !sourceDir.isDirectory) {
-			error("Source directory does not exist or is not a directory: $sourceDir")
-		}
-		if (!outDir.exists()) {
-			outDir.mkdirs()
-		} else if (!outDir.isDirectory) {
-			error("Output path exists but is not a directory: $outDir")
-		}
-		val packFile = File(outDir, "${sourceDir.name}.pack")
-		BinaryPack.create(sourceDir.iterable(), FileSink(packFile, false))
-		log("Pack created at ${packFile.absolutePath}")
-	}
-
-	fun listPack(packFile: String): List<Content> {
-		return listPack(File(packFile))
-	}
-
-	fun listPack(packFile: File): List<Content> {
-		if (!packFile.exists() || !packFile.isFile) {
-			error("Pack file does not exist or is not a file: $packFile")
-		}
-		val contentList = ArrayList<Content>()
-		val pack = BinaryPack(FileSource(packFile))
-		pack.forEach {
-			contentList.add(it)
-		}
-		return contentList
-	}
-
-	fun viewPack(packFile: String) {
-		viewPack(File(packFile))
-	}
-
-	fun viewPack(packFile: File) {
-		if (!packFile.exists() || !packFile.isFile) {
-			error("Pack file does not exist or is not a file: $packFile")
-		}
-		val pack = BinaryPack(FileSource(packFile))
-		val packRouter = PackRouter(pack)
-		val ws = WebServer(
-			"localhost",
-			0,
-			tmpDir
-		)
-		ws.start(0, false)
-		// TODO - replace with way that is Android and Desktop compatible
-//		Desktop.getDesktop().browse(URI.create("http://localhost:${ws.listeningPort}/"))
-		log("Pack server started on port ${ws.listeningPort}")
 	}
 }
