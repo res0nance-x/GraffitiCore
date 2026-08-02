@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+	<title>Pack Media Viewer</title>
+	<style>
+		:root {
+			--bg-dark: #090d16;
+			--panel-bg: #111827;
+			--card-bg: #1f2937;
+			--accent: #38bdf8;
+			--accent-hover: #0284c7;
+			--accent-glow: rgba(56, 189, 248, 0.25);
+			--text-main: #f9fafb;
+			--text-muted: #9ca3af;
+			--border-color: #1f2937;
+			--active-item-bg: #1e3a5f;
+			--active-item-border: #38bdf8;
+		}
+
+		* {
+			box-sizing: border-box;
+			margin: 0;
+			padding: 0;
+		}
+
+		html, body {
+			height: 100%;
+			width: 100%;
+			overflow: hidden;
+			background-color: var(--bg-dark);
+			color: var(--text-main);
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+		}
+
+		.app-container {
+			display: flex;
+			flex-direction: column;
+			width: 100%;
+			height: 100%;
+		}
+
+		/* Header */
+		.viewport-header {
+			height: 56px;
+			padding: 0 1rem;
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			background-color: var(--panel-bg);
+			border-bottom: 1px solid var(--border-color);
+			z-index: 10;
+		}
+
+		.item-title-container {
+			display: flex;
+			align-items: center;
+			gap: 0.5rem;
+			overflow: hidden;
+			flex: 1;
+		}
+
+		.item-title {
+			font-size: 0.95rem;
+			font-weight: 600;
+			white-space: nowrap;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			color: var(--text-main);
+		}
+
+		.item-type-badge {
+			padding: 0.2rem 0.4rem;
+			border-radius: 4px;
+			font-size: 0.65rem;
+			font-weight: 700;
+			text-transform: uppercase;
+			background: var(--card-bg);
+			color: var(--accent);
+			border: 1px solid var(--border-color);
+			flex-shrink: 0;
+		}
+
+		.header-actions {
+			display: flex;
+			align-items: center;
+			gap: 0.75rem;
+		}
+
+		.toggle-label {
+			display: flex;
+			align-items: center;
+			gap: 0.4rem;
+			font-size: 0.75rem;
+			color: var(--text-muted);
+			cursor: pointer;
+			user-select: none;
+		}
+
+		.toggle-label input[type="checkbox"] {
+			accent-color: var(--accent);
+			width: 14px;
+			height: 14px;
+			cursor: pointer;
+		}
+
+		/* Stage Display */
+		.stage {
+			flex: 1;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			position: relative;
+			overflow: hidden;
+			background: radial-gradient(circle at center, #0f172a 0%, #030712 100%);
+		}
+
+		.media-element {
+			max-width: 100%;
+			max-height: 100%;
+			object-fit: contain;
+			box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+		}
+
+		video.media-element {
+			width: 100%;
+			height: 100%;
+			background: #000;
+		}
+
+		.audio-card {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			gap: 1rem;
+			padding: 2rem;
+			background: var(--panel-bg);
+			border-radius: 16px;
+			border: 1px solid var(--border-color);
+			box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+			width: 90%;
+			max-width: 320px;
+			text-align: center;
+		}
+
+		.audio-icon-wrapper {
+			width: 80px;
+			height: 80px;
+			border-radius: 50%;
+			background: linear-gradient(135deg, var(--accent), #0284c7);
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			box-shadow: 0 0 25px var(--accent-glow);
+			animation: pulse 2s infinite ease-in-out;
+		}
+
+		@keyframes pulse {
+			0%, 100% { transform: scale(1); box-shadow: 0 0 20px var(--accent-glow); }
+			50% { transform: scale(1.05); box-shadow: 0 0 35px var(--accent-glow); }
+		}
+
+		.audio-icon-wrapper svg {
+			width: 40px;
+			height: 40px;
+			fill: #fff;
+		}
+
+		.audio-card audio {
+			width: 100%;
+		}
+
+		.text-viewer {
+			width: 95%;
+			height: 90%;
+			background: var(--panel-bg);
+			border: 1px solid var(--border-color);
+			border-radius: 12px;
+			padding: 1rem;
+			overflow: auto;
+			font-family: "Fira Code", "Courier New", Courier, monospace;
+			font-size: 0.85rem;
+			line-height: 1.5;
+			color: #e2e8f0;
+			white-space: pre-wrap;
+			word-break: break-all;
+			box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+		}
+
+		.info-card {
+			display: flex;
+			flex-direction: column;
+			gap: 0.75rem;
+			padding: 1.5rem;
+			background: var(--panel-bg);
+			border-radius: 16px;
+			border: 1px solid var(--border-color);
+			width: 90%;
+			max-width: 400px;
+			box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+		}
+
+		.info-card h3 {
+			color: var(--accent);
+			font-size: 1.1rem;
+			word-break: break-all;
+		}
+
+		.info-row {
+			display: flex;
+			justify-content: space-between;
+			border-bottom: 1px solid var(--border-color);
+			padding-bottom: 0.4rem;
+			font-size: 0.8rem;
+		}
+
+		.info-label {
+			color: var(--text-muted);
+		}
+
+		.info-value {
+			color: var(--text-main);
+			font-weight: 500;
+		}
+
+		.btn-download {
+			margin-top: 0.5rem;
+			padding: 0.6rem;
+			background: var(--accent);
+			color: #000;
+			font-weight: 600;
+			text-align: center;
+			text-decoration: none;
+			border-radius: 8px;
+			transition: background 0.2s;
+			font-size: 0.9rem;
+		}
+
+		.btn-download:hover {
+			background: var(--accent-hover);
+			color: #fff;
+		}
+
+		/* Control Bar */
+		.control-bar {
+			height: 72px;
+			background: var(--panel-bg);
+			border-top: 1px solid var(--border-color);
+			display: flex;
+			flex-direction: column;
+			position: relative;
+			z-index: 10;
+		}
+
+		.timer-progress-bar-container {
+			width: 100%;
+			height: 4px;
+			background: #1f2937;
+			position: absolute;
+			top: 0;
+			left: 0;
+		}
+
+		.timer-progress-bar {
+			height: 100%;
+			width: 0%;
+			background: linear-gradient(90deg, var(--accent), #0284c7);
+			transition: width 0.1s linear;
+		}
+
+		.controls-content {
+			flex: 1;
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			padding: 0 1rem;
+		}
+
+		.control-buttons {
+			display: flex;
+			align-items: center;
+			gap: 1rem;
+		}
+
+		.ctrl-btn {
+			background: var(--card-bg);
+			border: 1px solid var(--border-color);
+			color: var(--text-main);
+			width: 42px;
+			height: 42px;
+			border-radius: 50%;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			cursor: pointer;
+			transition: all 0.2s ease;
+		}
+
+		.ctrl-btn:hover {
+			background: var(--accent);
+			color: #000;
+			border-color: var(--accent);
+		}
+
+		.ctrl-btn.play-btn {
+			width: 50px;
+			height: 50px;
+			background: var(--accent);
+			color: #000;
+			border: none;
+		}
+
+		.ctrl-btn svg {
+			width: 20px;
+			height: 20px;
+			fill: currentColor;
+		}
+
+		.status-info {
+			font-size: 0.8rem;
+			color: var(--text-muted);
+			display: flex;
+			align-items: center;
+			gap: 0.75rem;
+		}
+
+		.list-toggle-btn {
+			background: none;
+			border: none;
+			color: var(--text-muted);
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			cursor: pointer;
+			padding: 4px;
+			border-radius: 4px;
+			transition: all 0.2s;
+		}
+
+		.list-toggle-btn:hover, .list-toggle-btn.active {
+			color: var(--accent);
+			background: var(--card-bg);
+		}
+
+		.list-toggle-btn svg {
+			width: 20px;
+			height: 20px;
+			fill: currentColor;
+		}
+
+		/* List View */
+		#listView {
+			flex: 1;
+			display: flex;
+			flex-direction: column;
+			overflow: hidden;
+			background: var(--bg-dark);
+		}
+
+		.search-container {
+			padding: 1rem;
+			background: var(--panel-bg);
+			border-bottom: 1px solid var(--border-color);
+			position: sticky;
+			top: 0;
+			z-index: 5;
+		}
+
+		.search-input {
+			width: 100%;
+			padding: 0.75rem 1rem;
+			background: var(--card-bg);
+			border: 1px solid var(--border-color);
+			border-radius: 8px;
+			color: var(--text-main);
+			font-size: 0.9rem;
+			outline: none;
+			transition: border-color 0.2s;
+		}
+
+		.search-input:focus {
+			border-color: var(--accent);
+		}
+
+		.file-list {
+			flex: 1;
+			overflow-y: auto;
+			list-style: none;
+			padding: 0.5rem 0;
+		}
+
+		.file-item {
+			padding: 0.75rem 1rem;
+			display: flex;
+			align-items: center;
+			gap: 0.75rem;
+			cursor: pointer;
+			border-bottom: 1px solid rgba(255,255,255,0.03);
+			transition: background 0.2s;
+		}
+
+		.file-item:hover {
+			background: rgba(255,255,255,0.05);
+		}
+
+		.file-item.current {
+			background: var(--active-item-bg);
+			border-left: 3px solid var(--active-item-border);
+		}
+
+		.file-item-info {
+			flex: 1;
+			overflow: hidden;
+		}
+
+		.file-item-name {
+			font-size: 0.85rem;
+			font-weight: 500;
+			white-space: nowrap;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			color: var(--text-main);
+		}
+
+		.file-item-meta {
+			font-size: 0.7rem;
+			color: var(--text-muted);
+			margin-top: 2px;
+		}
+
+		.file-item-type {
+			padding: 0.1rem 0.3rem;
+			border-radius: 3px;
+			font-size: 0.6rem;
+			font-weight: 700;
+			background: rgba(255,255,255,0.1);
+			color: var(--text-muted);
+			text-transform: uppercase;
+		}
+
+		.file-item.current .file-item-name {
+			color: var(--accent);
+		}
+
+		.center-msg {
+			color: var(--text-muted);
+			font-size: 1rem;
+			text-align: center;
+			padding: 2rem;
+		}
+	</style>
+</head>
+<body>
+
+<div class="app-container">
+	<!-- Header -->
+	<header class="viewport-header">
+		<div class="item-title-container">
+			<span class="item-type-badge" id="typeBadge">-</span>
+			<span class="item-title" id="itemTitle">Loading...</span>
+		</div>
+		<div class="header-actions">
+			<label class="toggle-label">
+				<input type="checkbox" id="autoAdvanceCheck" checked>
+				Auto-play
+			</label>
+		</div>
+	</header>
+
+	<!-- Stage Area -->
+	<main class="stage" id="stage">
+		<div class="center-msg" id="loadingMsg">Loading archive...</div>
+	</main>
+
+	<!-- List View -->
+	<section id="listView" style="display: none;">
+		<div class="search-container">
+			<input type="text" id="searchInput" class="search-input" placeholder="Search files..." autocomplete="off">
+		</div>
+		<ul id="fileList" class="file-list">
+			<!-- Items injected via JS -->
+		</ul>
+	</section>
+
+	<!-- Control Bar -->
+	<footer class="control-bar">
+		<div class="timer-progress-bar-container">
+			<div class="timer-progress-bar" id="progressBar"></div>
+		</div>
+		<div class="controls-content">
+			<div class="control-buttons">
+				<button class="ctrl-btn" id="prevBtn" title="Previous (Left Arrow)">
+					<svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+				</button>
+				<button class="ctrl-btn play-btn" id="playBtn" title="Play/Pause (Space)">
+					<svg id="playIcon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+					<svg id="pauseIcon" viewBox="0 0 24 24" style="display:none;"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+				</button>
+				<button class="ctrl-btn" id="nextBtn" title="Next (Right Arrow)">
+					<svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+				</button>
+			</div>
+			<div class="status-info">
+				<span id="counterStatus">0 / 0</span>
+				<span id="timerStatus"></span>
+				<button class="list-toggle-btn" id="listToggleBtn" title="Show/Hide File List">
+					<svg viewBox="0 0 24 24"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg>
+				</button>
+			</div>
+		</div>
+	</footer>
+</div>
+
+<script>
+	const HOLD_DURATION = 3000;
+	let allFiles = [];
+	let filteredFiles = [];
+	let currentIndex = 0;
+	let isPlaying = true;
+	let isListView = false;
+	let currentMediaElement = null;
+
+	let timerStartTime = 0;
+	let timerRemaining = HOLD_DURATION;
+	let timerAnimFrame = null;
+
+	function toggleView() {
+		isListView = !isListView;
+		const stage = document.getElementById('stage');
+		const listView = document.getElementById('listView');
+		const listBtn = document.getElementById('listToggleBtn');
+
+		if (isListView) {
+			stage.style.display = 'none';
+			listView.style.display = 'flex';
+			listBtn.classList.add('active');
+			renderFileList();
+			// Focus search input
+			setTimeout(() => document.getElementById('searchInput').focus(), 100);
+		} else {
+			stage.style.display = 'flex';
+			listView.style.display = 'none';
+			listBtn.classList.remove('active');
+		}
+	}
+
+	function renderFileList() {
+		const listContainer = document.getElementById('fileList');
+		const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+
+		filteredFiles = allFiles.filter(f => f.path.toLowerCase().includes(searchTerm));
+
+		listContainer.innerHTML = '';
+		filteredFiles.forEach((file) => {
+			const realIndex = allFiles.indexOf(file);
+			const li = document.createElement('li');
+			li.className = `file-item ${realIndex === currentIndex ? 'current' : ''}`;
+
+			const mType = getMediaType(file);
+
+			li.innerHTML = `
+				<span class="file-item-type">${mType}</span>
+				<div class="file-item-info">
+					<div class="file-item-name">${file.path}</div>
+					<div class="file-item-meta">${formatBytes(file.length)}</div>
+				</div>
+			`;
+
+			li.onclick = () => {
+				loadItem(realIndex);
+				toggleView(); // Go back to media view on selection
+			};
+
+			listContainer.appendChild(li);
+			if (realIndex === currentIndex && isListView) {
+				li.scrollIntoView({ block: 'nearest' });
+			}
+		});
+	}
+
+	function getMediaType(file) {
+		const type = (file.type || '').toLowerCase();
+		const ext = (file.path.split('.').pop() || '').toLowerCase();
+		if (type.startsWith('video/') || ['mp4', 'webm', 'ogv', 'mkv', 'avi', 'mov'].includes(ext)) return 'video';
+		if (type.startsWith('audio/') || ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'opus'].includes(ext)) return 'audio';
+		if (type.startsWith('image/') || ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'].includes(ext)) return 'image';
+		if (type.startsWith('text/') || ['json', 'xml', 'csv', 'md', 'txt', 'html', 'css', 'js', 'ts', 'kt', 'java', 'py', 'c', 'cpp', 'h', 'sh', 'log', 'yaml', 'yml'].includes(ext)) return 'text';
+		return 'binary';
+	}
+
+	function formatBytes(bytes) {
+		if (!bytes) return '0 B';
+		const k = 1024;
+		const sizes = ['B', 'KB', 'MB', 'GB'];
+		const i = Math.floor(Math.log(bytes) / Math.log(k));
+		return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+	}
+
+	function stopCurrentMedia() {
+		if (timerAnimFrame) { cancelAnimationFrame(timerAnimFrame); timerAnimFrame = null; }
+		document.getElementById('progressBar').style.width = '0%';
+		document.getElementById('timerStatus').textContent = '';
+		if (currentMediaElement) {
+			currentMediaElement.pause?.();
+			currentMediaElement.src = '';
+			currentMediaElement = null;
+		}
+	}
+
+	function startStaticTimer(duration) {
+		stopCurrentMedia();
+		timerRemaining = duration;
+		timerStartTime = performance.now();
+		function step(now) {
+			if (!isPlaying) return;
+			const elapsed = now - timerStartTime;
+			const remaining = Math.max(0, timerRemaining - elapsed);
+			const progress = Math.min(100, ((duration - remaining) / duration) * 100);
+			document.getElementById('progressBar').style.width = `${progress}%`;
+			document.getElementById('timerStatus').textContent = `(${(remaining / 1000).toFixed(1)}s)`;
+			if (remaining <= 0) {
+				document.getElementById('progressBar').style.width = '100%';
+				if (document.getElementById('autoAdvanceCheck').checked) nextItem();
+			} else {
+				timerAnimFrame = requestAnimationFrame(step);
+			}
+		}
+		if (isPlaying) timerAnimFrame = requestAnimationFrame(step);
+	}
+
+	function loadItem(index) {
+		if (allFiles.length === 0) return;
+		currentIndex = index;
+		stopCurrentMedia();
+		if (isListView) renderFileList();
+
+		const file = allFiles[currentIndex];
+		const mType = getMediaType(file);
+
+		document.getElementById('itemTitle').textContent = file.path;
+		document.getElementById('typeBadge').textContent = mType;
+		document.getElementById('counterStatus').textContent = `${currentIndex + 1} / ${allFiles.length}`;
+
+		const stage = document.getElementById('stage');
+		stage.innerHTML = '';
+
+		switch (mType) {
+			case 'video': {
+				const video = document.createElement('video');
+				video.className = 'media-element';
+				video.src = file.path;
+				video.controls = true;
+				video.autoplay = isPlaying;
+				video.onended = () => { if (document.getElementById('autoAdvanceCheck').checked) nextItem(); };
+				stage.appendChild(video);
+				currentMediaElement = video;
+				break;
+			}
+			case 'audio': {
+				const card = document.createElement('div');
+				card.className = 'audio-card';
+				card.innerHTML = `<div class="audio-icon-wrapper"><svg viewBox="0 0 24 24"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg></div><div style="font-weight: 600; font-size: 1rem; color: #fff; word-break: break-all; margin-bottom: 1rem;">${file.path}</div>`;
+				const audio = document.createElement('audio');
+				audio.src = file.path;
+				audio.controls = true;
+				audio.autoplay = isPlaying;
+				audio.onended = () => { if (document.getElementById('autoAdvanceCheck').checked) nextItem(); };
+				card.appendChild(audio);
+				stage.appendChild(card);
+				currentMediaElement = audio;
+				break;
+			}
+			case 'image': {
+				const img = document.createElement('img');
+				img.className = 'media-element';
+				img.src = file.path;
+				stage.appendChild(img);
+				startStaticTimer(HOLD_DURATION);
+				break;
+			}
+			case 'text': {
+				const viewer = document.createElement('pre');
+				viewer.className = 'text-viewer';
+				viewer.textContent = 'Loading...';
+				stage.appendChild(viewer);
+				fetch(file.path).then(res => res.text()).then(text => { viewer.textContent = text; }).catch(err => { viewer.textContent = 'Error: ' + err; });
+				startStaticTimer(HOLD_DURATION);
+				break;
+			}
+			default: {
+				const infoCard = document.createElement('div');
+				infoCard.className = 'info-card';
+				infoCard.innerHTML = `<h3>${file.path}</h3><div class="info-row"><span class="info-label">Type</span><span class="info-value">${file.type || 'Unknown'}</span></div><div class="info-row"><span class="info-label">Size</span><span class="info-value">${formatBytes(file.length)}</span></div><a href="${file.path}" download class="btn-download">Download</a>`;
+				stage.appendChild(infoCard);
+				startStaticTimer(HOLD_DURATION);
+				break;
+			}
+		}
+		updatePlayPauseUI();
+	}
+
+	function nextItem() { if (allFiles.length > 0) loadItem((currentIndex + 1) % allFiles.length); }
+	function prevItem() { if (allFiles.length > 0) loadItem((currentIndex - 1 + allFiles.length) % allFiles.length); }
+
+	function togglePlayPause() {
+		isPlaying = !isPlaying;
+		if (currentMediaElement) {
+			if (isPlaying) currentMediaElement.play(); else currentMediaElement.pause();
+		} else if (timerAnimFrame || timerRemaining > 0) {
+			if (isPlaying) {
+				timerStartTime = performance.now() - (HOLD_DURATION - timerRemaining);
+				startStaticTimer(timerRemaining);
+			} else {
+				if (timerAnimFrame) cancelAnimationFrame(timerAnimFrame);
+				timerAnimFrame = null;
+			}
+		}
+		updatePlayPauseUI();
+	}
+
+	function updatePlayPauseUI() {
+		document.getElementById('playIcon').style.display = isPlaying ? 'none' : 'block';
+		document.getElementById('pauseIcon').style.display = isPlaying ? 'block' : 'none';
+	}
+
+	document.addEventListener('keydown', (e) => {
+		if (e.target.tagName === 'INPUT') return;
+		if (e.code === 'Space') { e.preventDefault(); togglePlayPause(); }
+		else if (e.code === 'ArrowRight') { e.preventDefault(); nextItem(); }
+		else if (e.code === 'ArrowLeft') { e.preventDefault(); prevItem(); }
+	});
+
+	document.getElementById('playBtn').onclick = togglePlayPause;
+	document.getElementById('nextBtn').onclick = nextItem;
+	document.getElementById('prevBtn').onclick = prevItem;
+	document.getElementById('listToggleBtn').onclick = toggleView;
+	document.getElementById('searchInput').oninput = renderFileList;
+
+	async function init() {
+		try {
+			const res = await fetch('pack_list');
+			if (!res.ok) throw new Error('Failed to fetch content list');
+			allFiles = await res.json();
+			if (allFiles.length === 0) {
+				document.getElementById('stage').innerHTML = `<div class="center-msg">Archive is empty.</div>`;
+				return;
+			}
+			loadItem(0);
+		} catch (err) {
+			document.getElementById('stage').innerHTML = `<div class="center-msg" style="color: #ef4444;">Error: ${err.message}</div>`;
+		}
+	}
+	init();
+</script>
+</body>
+</html>
