@@ -5,6 +5,7 @@ export type TableItem = IdentityEntry | PeerEntry;
 export interface TableOptions {
    onRemove?: (item: TableItem) => void | Promise<void>;
    onExport?: (item: TableItem) => void | Promise<void>;
+   onTogglePersist?: (item: IdentityEntry) => void | Promise<void>;
    nodeKey?: string;
 }
 
@@ -14,7 +15,7 @@ export interface TableOptions {
 export function buildTable(
    table: HTMLTableElement,
    items: TableItem[],
-   {onRemove, onExport, nodeKey}: TableOptions = {},
+   {onRemove, onExport, onTogglePersist, nodeKey}: TableOptions = {},
 ): void {
    const tbody = table.tBodies[0] ?? table.createTBody();
    tbody.replaceChildren();
@@ -43,15 +44,28 @@ export function buildTable(
          badge.style.cursor = 'default';
          badge.textContent = 'Node';
          figcaption.appendChild(badge);
+      } else if ('persistent' in item) {
+         const isPersistent = (item as IdentityEntry).persistent;
+         const badge = document.createElement('span');
+         badge.className = isPersistent ? 'badge-relay' : 'badge-session';
+         badge.textContent = isPersistent ? 'Saved' : 'Session';
+         figcaption.appendChild(badge);
       }
 
       figure.append(img, figcaption);
       userCell.append(figure);
 
-
-
       // Actions
       const actionsCell = row.insertCell();
+
+      if (onTogglePersist && 'persistent' in item && item.key !== nodeKey) {
+         const persistBtn = document.createElement('button');
+         const isPersistent = (item as IdentityEntry).persistent;
+         persistBtn.textContent = isPersistent ? 'Make Ephemeral' : 'Save';
+         persistBtn.style.marginRight = '8px';
+         persistBtn.addEventListener('click', () => onTogglePersist(item as IdentityEntry));
+         actionsCell.append(persistBtn);
+      }
 
       if (onRemove && item.key !== nodeKey) {
          const removeBtn = document.createElement('button');

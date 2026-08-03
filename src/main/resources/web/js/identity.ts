@@ -12,6 +12,14 @@ export async function refresh(): Promise<void> {
    ]);
    buildTable(table, identities, {
       nodeKey: node.peerKey,
+      onTogglePersist: async (item: IdentityEntry) => {
+         try {
+            await graffiti.setIdentityPersistence(item.key, !item.persistent);
+            await refresh();
+         } catch (err) {
+            alert(`Persistence update failed: ${(err as Error).message}`);
+         }
+      },
       onRemove: async (item: TableItem) => {
          const iden = item as IdentityEntry;
          if (iden.key === node.peerKey) {

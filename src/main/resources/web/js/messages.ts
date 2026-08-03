@@ -298,10 +298,6 @@ function fillHeader(item: HTMLElement, msg: MessageData): void {
 }
 
 function wireActions(item: HTMLElement, msg: MessageData): void {
-   item.querySelector<HTMLButtonElement>('.msg-btn-export')?.addEventListener('click', () => {
-      graffiti.exportMessage(msg.key)
-         .catch((err: Error) => setStatus(`Export failed: ${err.message}`));
-   });
    item.querySelector<HTMLButtonElement>('.msg-btn-delete')?.addEventListener('click', () => {
       graffiti.removeMessage(msg.key)
          .then(() => {

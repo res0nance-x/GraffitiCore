@@ -32,21 +32,42 @@ import kotlin.text.get
 class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : ContentHandler {
 	init {
 		// Wire up p2p event callbacks — p2p is always ready at construction.
+		p2p.onLogEvent = { category, status, title, details, name, size, peer ->
+			sendToAll(
+				JSONObject()
+					.put("event", "log_event")
+					.put("id", "log_${System.currentTimeMillis()}_${(1000..9999).random()}")
+					.put("timestamp", System.currentTimeMillis())
+					.put("category", category)
+					.put("status", status)
+					.put("title", title)
+					.put("details", details)
+					.put("name", name ?: "")
+					.put("size", size ?: 0L)
+					.put("peer", peer ?: "")
+			)
+		}
 		p2p.onNodeConnected = { node, inbound ->
+			val host = node.remoteAddress.address.hostAddress
+			val port = node.remoteAddress.port
+			p2p.onLogEvent?.invoke("network", "info", "Peer Connected", "Connected to peer at $host:$port (${if (inbound) "inbound" else "outbound"})", null, null, "$host:$port")
 			sendToAll(
 				JSONObject()
 					.put("event", "node_connected")
-					.put("host", node.remoteAddress.address.hostAddress)
-					.put("port", node.remoteAddress.port)
+					.put("host", host)
+					.put("port", port)
 					.put("inbound", inbound)
 			)
 		}
 		p2p.onNodeDisconnected = { node ->
+			val host = node.remoteAddress.address.hostAddress
+			val port = node.remoteAddress.port
+			p2p.onLogEvent?.invoke("network", "info", "Peer Disconnected", "Disconnected from peer at $host:$port", null, null, "$host:$port")
 			sendToAll(
 				JSONObject()
 					.put("event", "node_disconnected")
-					.put("host", node.remoteAddress.address.hostAddress)
-					.put("port", node.remoteAddress.port)
+					.put("host", host)
+					.put("port", port)
 			)
 		}
 		p2p.onNodeIdentified = { node, peer ->
@@ -98,6 +119,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/avatar" -> serveAvatar(header)
 			"/api/identities" -> listIdentities()
 			"/api/identity/create" -> createIdentity(header, content)
+			"/api/identity/persist" -> persistIdentity(header)
 			"/api/identity/remove" -> removeIdentity(header)
 			"/api/peers" -> listPeers(header)
 			"/api/peer/export" -> exportPeer(header)
@@ -105,7 +127,6 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/peer/remove" -> removePeer(header)
 			"/api/messages" -> listMessages()
 			"/api/messages/refresh" -> refreshMessages()
-			"/api/message/export" -> exportMessage(header)
 			"/api/message/remove" -> removeMessage(header)
 			"/api/message/send/text" -> content?.let { sendTextMessage(header, it) }
 			"/api/message/send/file" -> content?.let { sendFileMessage(header, it) }
@@ -193,6 +214,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 						.put("name", iden.key.name)
 						.put("key", keyStr)
 						.put("peerKey", iden.asPeer().key.toString())
+						.put("persistent", p2p.isIdentityPersistent(iden.key))
 				)
 			}
 		return ok { put("identities", arr) }
@@ -212,6 +234,18 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		sendToAll(JSONObject().put("event", "identities_update"))
 		sendToAll(JSONObject().put("event", "messages_reload"))
 		return if (removed) ok() else err("Identity not found")
+	}
+
+	private fun persistIdentity(header: JSONObject): Content {
+		val keyStr = header.getString("key")
+		val persistent = header.optBoolean("persistent", true)
+		val key = IdentityKey(keyStr)
+		val success = p2p.setIdentityPersistence(key, persistent)
+		if (success) {
+			sendToAll(JSONObject().put("event", "identities_update"))
+			return ok()
+		}
+		return err("Identity not found or failed to set persistence")
 	}
 
 	// ── Peer ──────────────────────────────────────────────────────────────────
@@ -446,18 +480,6 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			JSONObject().put("event", "messages_update").put("action", "remove").put("key", key)
 		)
 		return ok()
-	}
-
-	private fun exportMessage(header: JSONObject): Content {
-		val keyStr = header.getString("key")
-		val key = EncryptedMetaKey(keyStr)
-		val metaFile = File(p2p.metaDir, "$key")
-		if (!metaFile.exists()) return err("Message not found")
-		val eMeta = DataInputStream(metaFile.inputStream()).use { EncryptedContentMetaData.read(it) }
-		val iden = p2p.getIdentityByKey(eMeta.recipient) ?: error("No Identity found for ${eMeta.recipient}")
-		val (meta, pass) = eMeta.decrypt(iden)
-		val contentFile = File(p2p.contentDir, "$key")
-		return EncryptContent(pass, FileSource(contentFile), meta)
 	}
 
 	private fun sendTextMessage(header: JSONObject, content: Content): Content {

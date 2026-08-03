@@ -21,6 +21,7 @@ export interface IdentityEntry {
    key: string;
    /** The Peer key derived from this identity — used as the recipient key when sending. */
    peerKey: string;
+   persistent?: boolean;
 }
 
 export interface PeerEntry {
@@ -186,6 +187,10 @@ export const graffiti = {
       return get('/api/identity/remove', {key});
    },
 
+   setIdentityPersistence(key: string, persistent: boolean): Promise<ApiOk> {
+      return get('/api/identity/persist', {key, persistent: String(persistent)});
+   },
+
 
    // ── Peer ──────────────────────────────────────────────────────────────
 
@@ -221,10 +226,6 @@ export const graffiti = {
 
    removeMessage(key: string): Promise<ApiOk> {
       return get('/api/message/remove', {key});
-   },
-
-   exportMessage(key: string): Promise<void> {
-      return download('/api/message/export', {key});
    },
 
    async sendText(identityKey: string, peerKey: string, text: string): Promise<SendMessageResponse> {

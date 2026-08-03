@@ -20,12 +20,14 @@
 							title="Network Connections & Discovery"><span class="material-symbols-outlined">public</span>
 							Net</a></li>
 					<li><a class="app-nav-link" data-section="section-messages" href="#" title="Secure P2P Messages"><span
-								class="material-symbols-outlined">mail</span> Msgs</a></li>
+								class="material-symbols-outlined">mail</span> Msg</a></li>
 					<li><a class="app-nav-link" data-section="section-identity" href="#"
 							title="Manage Forum and Personal Identities"><span class="material-symbols-outlined">person</span>
 							ID</a></li>
 					<li><a class="app-nav-link" data-section="section-peers" href="#" title="Manage Peer Public Keys"><span
-								class="material-symbols-outlined">group</span> Peers</a></li>
+								class="material-symbols-outlined">group</span> Peer</a></li>
+					<li><a class="app-nav-link" data-section="section-logs" href="#" title="Activity & Transfer Logs"><span
+								class="material-symbols-outlined">receipt_long</span> Logs</a></li>
 					<li><a class="app-nav-link" data-section="section-settings" href="#" title="Settings & Help"><span
 								class="material-symbols-outlined">settings</span></a></li>
 				</ul>
@@ -253,6 +255,46 @@ Peers
 		</section>
 
 		<!-- ══════════════════════════════════════════════════════════════════════════
+Logs
+══════════════════════════════════════════════════════════════════════ -->
+		<section class="app-section" id="section-logs">
+			<main>
+				<section class="net-card">
+					<div class="net-card-header" style="flex-wrap: wrap; gap: 0.75rem;">
+						<div>
+							<h3 style="font-size: 1.1rem; margin-bottom: 0.25rem;">Activity & Transfer Logs</h3>
+							<p style="font-size:0.85rem; opacity:0.75; margin:0;">
+								Track file downloads, message transfers, peer syncs, and network activity.
+							</p>
+						</div>
+						<div style="display: flex; gap: 0.5rem; align-items: center;">
+							<button id="btn-logs-clear" type="button" style="display: inline-flex; align-items: center; gap: 0.25rem;">
+								<span class="material-symbols-outlined" style="font-size: 1rem;">delete_sweep</span> Clear Logs
+							</button>
+						</div>
+					</div>
+
+					<div class="logs-toolbar" style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0.75rem; margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--button);">
+						<div class="logs-filter-group" style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+							<button class="logs-filter-btn is-active" data-filter="all" type="button">All</button>
+							<button class="logs-filter-btn" data-filter="download" type="button">Downloads</button>
+							<button class="logs-filter-btn" data-filter="send" type="button">Sending</button>
+							<button class="logs-filter-btn" data-filter="sync" type="button">Sync</button>
+							<button class="logs-filter-btn" data-filter="network" type="button">Network</button>
+						</div>
+						<div style="font-size: 0.85rem; opacity: 0.8;" id="logs-summary-count">
+							0 entries
+						</div>
+					</div>
+
+					<div id="logs-container" class="logs-feed" style="margin-top: 1rem; display: flex; flex-direction: column; gap: 0.5rem; max-height: 600px; overflow-y: auto;">
+						<div class="empty-row" id="logs-empty">No activity logged yet.</div>
+					</div>
+				</section>
+			</main>
+		</section>
+
+		<!-- ══════════════════════════════════════════════════════════════════════════
 Settings
 ══════════════════════════════════════════════════════════════════════ -->
 		<section class="app-section" id="section-settings">
@@ -459,8 +501,6 @@ Settings
 					<figcaption class="msg-recipient-name msg-name"></figcaption>
 				</figure>
 				<time class="msg-time"></time>
-				<button class="msg-btn-special msg-btn-export" title="Export" type="button"><span
-						class="material-symbols-outlined" style="font-size: 1.15rem;">ios_share</span></button>
 				<button class="msg-btn-special msg-btn-delete" title="Delete" type="button"><span
 						class="material-symbols-outlined" style="font-size: 1.15rem;">delete</span></button>
 			</header>
@@ -483,8 +523,6 @@ Settings
 					<figcaption class="msg-recipient-name msg-name"></figcaption>
 				</figure>
 				<time class="msg-time"></time>
-				<button class="msg-btn-special msg-btn-export" title="Export" type="button"><span
-						class="material-symbols-outlined" style="font-size: 1.15rem;">ios_share</span></button>
 				<button class="msg-btn-special msg-btn-delete" title="Delete" type="button"><span
 						class="material-symbols-outlined" style="font-size: 1.15rem;">delete</span></button>
 			</header>
@@ -507,8 +545,6 @@ Settings
 					<figcaption class="msg-recipient-name msg-name"></figcaption>
 				</figure>
 				<time class="msg-time"></time>
-				<button class="msg-btn-special msg-btn-export" title="Export" type="button"><span
-						class="material-symbols-outlined" style="font-size: 1.15rem;">ios_share</span></button>
 				<button class="msg-btn-special msg-btn-delete" title="Delete" type="button"><span
 						class="material-symbols-outlined" style="font-size: 1.15rem;">delete</span></button>
 			</header>
@@ -532,8 +568,6 @@ Settings
 					<figcaption class="msg-recipient-name msg-name"></figcaption>
 				</figure>
 				<time class="msg-time"></time>
-				<button class="msg-btn-special msg-btn-export" title="Export" type="button"><span
-						class="material-symbols-outlined" style="font-size: 1.15rem;">ios_share</span></button>
 				<button class="msg-btn-special msg-btn-delete" title="Delete" type="button"><span
 						class="material-symbols-outlined" style="font-size: 1.15rem;">delete</span></button>
 			</header>
@@ -557,8 +591,6 @@ Settings
 					<figcaption class="msg-recipient-name msg-name"></figcaption>
 				</figure>
 				<time class="msg-time"></time>
-				<button class="msg-btn-special msg-btn-export" title="Export" type="button"><span
-						class="material-symbols-outlined" style="font-size: 1.15rem;">ios_share</span></button>
 				<button class="msg-btn-special msg-btn-delete" title="Delete" type="button"><span
 						class="material-symbols-outlined" style="font-size: 1.15rem;">delete</span></button>
 			</header>
