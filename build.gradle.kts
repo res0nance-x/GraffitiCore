@@ -12,25 +12,15 @@ repositories {
 }
 
 dependencies {
+	implementation("org.example:R3:1.0-SNAPSHOT")
 	testImplementation(kotlin("test"))
 }
 
-sourceSets {
-	main {
-		java.srcDirs(
-			file("src/main/kotlin"),
-			file("../R3/src/main/kotlin")
-		)
-		kotlin.srcDirs(
-			file("src/main/kotlin"),
-			file("../R3/src/main/kotlin")
-		)
-	}
-}
 
 kotlin {
-	jvmToolchain(26)
+	jvmToolchain(25)
 }
+
 
 tasks.test {
 	useJUnitPlatform()
