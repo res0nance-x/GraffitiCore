@@ -48,6 +48,7 @@ document.getElementById('create-identity')!.addEventListener('click', async () =
    if (!data) return;
    const rawSeed = data.seed || '';
    const splitByComma = data.splitByComma === 'on';
+   const saveOnDevice = data.saveOnDevice === 'on';
    const seeds = splitByComma
       ? rawSeed.split(',').map((s: string) => s.trim()).filter((s: string) => s.length > 0)
       : [rawSeed.trim()].filter(s => s.length > 0);
@@ -58,7 +59,10 @@ document.getElementById('create-identity')!.addEventListener('click', async () =
    const errors: string[] = [];
    for (const seed of seeds) {
       try {
-         await graffiti.createIdentity(seed);
+         const res = await graffiti.createIdentity(seed);
+         if (saveOnDevice && res?.key) {
+            await graffiti.setIdentityPersistence(res.key, true);
+         }
       } catch (err) {
          errors.push(`"${seed}": ${(err as Error).message}`);
       }

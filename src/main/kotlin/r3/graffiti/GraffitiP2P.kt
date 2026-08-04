@@ -61,7 +61,16 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		const val PING_INTERVAL_MS = 30_000L  // send a ping every 30 s
 		const val PING_TIMEOUT_MS = 3 * PING_INTERVAL_MS  // close after 90 s of silence (3 missed pings)
 		const val MAX_STREAM_SIZE = 100 * 1024 * 1024 * 1024L // 100 GB
+		const val SMALL_CONTENT_THRESHOLD_BYTES = 256L
+		const val MAX_SMALL_CONTENT_ITEMS = 10000
 	}
+
+	// ── Backing maps (caches) ──────────────────────────────────────────────────
+	private val identityCache = ConcurrentHashMap<IdentityKey, Identity>()
+	private val peerCache = ConcurrentHashMap<PeerKey, Peer>()
+	private val metaCache = ConcurrentHashMap<EncryptedMetaKey, EncryptedContentMetaData>()
+	private val smallContentCache = ConcurrentHashMap<EncryptedMetaKey, ByteArray>()
+	private val deletedCache = ConcurrentHashMap.newKeySet<EncryptedMetaKey>()
 
 	// ── Server identity ───────────────────────────────────────────────────────
 	// A dedicated, persistent identity used solely for peer-connection
@@ -154,6 +163,44 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 				log("Created new server identity: ${iden.key.name}")
 			}
 		}
+
+		// Populate identityCache from disk
+		identityDir.listFiles { f -> f.isFile }?.forEach { file ->
+			runCatching { file.readBytes().toDataInputStream().use { Identity.read(it) } }
+				.getOrNull()?.let { identityCache[it.key] = it }
+		}
+
+		// Populate peerCache from disk
+		peerDir.listFiles { f -> f.isFile }?.forEach { file ->
+			runCatching { file.readBytes().toDataInputStream().use { Peer.read(it) } }
+				.getOrNull()?.let { peerCache[it.key] = it }
+		}
+
+		// Populate metaCache from disk
+		metaDir.listFiles { f -> f.isFile }?.forEach { file ->
+			runCatching {
+				val eMeta = file.toDataInputStream().use { EncryptedContentMetaData.read(it) }
+				metaCache[eMeta.key] = eMeta
+			}
+		}
+
+		// Populate smallContentCache from disk (up to MAX_SMALL_CONTENT_ITEMS)
+		val smallFiles = contentDir.listFiles { f -> f.isFile && f.length() <= SMALL_CONTENT_THRESHOLD_BYTES }
+		if (smallFiles != null) {
+			for (file in smallFiles) {
+				if (smallContentCache.size >= MAX_SMALL_CONTENT_ITEMS) break
+				runCatching {
+					val key = EncryptedMetaKey(file.name)
+					smallContentCache[key] = file.readBytes()
+				}
+			}
+		}
+
+		// Populate deletedCache from disk
+		deletedDir.listFiles { f -> f.isFile }?.forEach { file ->
+			runCatching { deletedCache.add(EncryptedMetaKey(file.name)) }
+		}
+
 		// Initialize totalContentSize cache
 		totalContentSize.set(contentDir.listFiles().orEmpty().sumOf { it.length() })
 		loadQuota()
@@ -169,19 +216,10 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 					val msg = QueryMessage.read(rawHead.toDataInputStream())
 					nodeQueryMap[node] = msg
 					val metaList = mutableListOf<EncryptedContentMetaData>()
-					metaDir.listFiles { f -> f.isFile }
-						.orEmpty()
-						.sortedBy { it.lastModified() }
-						.forEach { metaFile ->
-							try {
-								val eMeta =
-									metaFile.toDataInputStream().use { dis -> EncryptedContentMetaData.read(dis) }
-								val contentFile = File(contentDir, "${eMeta.key}")
-								if (msg.matches(eMeta) && contentFile.exists()) metaList.add(eMeta)
-							} catch (e: Exception) {
-								log("Error reading meta file ${metaFile.absolutePath}: ${e.message}")
-							}
-						}
+					metaCache.values.forEach { eMeta ->
+						val contentExists = smallContentCache.containsKey(eMeta.key) || File(contentDir, "${eMeta.key}").exists()
+						if (msg.matches(eMeta) && contentExists) metaList.add(eMeta)
+					}
 					if (metaList.isNotEmpty()) {
 						node.send(
 							StringWritable(QueryResponseMessage.type).serialize(),
@@ -202,10 +240,9 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 						val wantContent = mutableListOf<EncryptedMetaKey>()
 						log("Received QueryResponse from ${node.remoteAddress}: ${headerList.size} header item(s)")
 						headerList.forEach { msgHeader ->
-							val deletedMetaFile = File(deletedDir, "${msgHeader.key}")
-							if (deletedMetaFile.exists()) return@forEach
+							if (deletedCache.contains(msgHeader.key)) return@forEach
 							if (msgHeader.author.arr.contentEquals(msgHeader.recipient.arr)) {
-								log("Ignoring header ${msgHeader.key} from ${node.remoteAddress}: author and recipient are the same")
+								log("Ignoring header ${msgHeader.key.name} from ${node.remoteAddress}: author and recipient are the same")
 								return@forEach
 							}
 							// Non-relay mode: ignore meta not addressed to us or our direct friends
@@ -214,12 +251,12 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 								msgHeader.recipient !in myIdentityKeys &&
 								PeerKey(msgHeader.recipient) !in myPeerKeys
 							) {
-								log("Ignoring off-recipient meta ${msgHeader.key} from ${node.remoteAddress}")
+								log("Ignoring off-recipient meta ${msgHeader.key.name} from ${node.remoteAddress}")
 								return@forEach
 							}
-							val metaFile = File(metaDir, "${msgHeader.key}")
+							val metaExists = metaCache.containsKey(msgHeader.key) || File(metaDir, "${msgHeader.key}").exists()
 							// Ask for it only if we don't already have it
-							if (!metaFile.exists()) wantContent.add(msgHeader.key)
+							if (!metaExists) wantContent.add(msgHeader.key)
 						}
 						if (wantContent.isNotEmpty()) {
 							val peerLabel = nodePeerMap[node]?.key?.name ?: node.remoteAddress.toString()
@@ -234,14 +271,25 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 				// We serve each key's EncryptedMetaMessage and EncryptedContentMessage in turn.
 				ContentRequestMessage.type -> {
 					val req = ContentRequestMessage.read(rawHead.toDataInputStream())
-					log("Received ContentRequest from ${node.remoteAddress}: ${req.keys.joinToString()}")
+					log("Received ContentRequest from ${node.remoteAddress}: ${req.keys.joinToString { it.name }}")
 					req.keys.forEach { key ->
-						if (File(deletedDir, "$key").exists()) return@forEach
-						val metaFile = File(metaDir, "$key")
-						val contentFile = File(contentDir, "$key")
-						if (metaFile.exists() && contentFile.exists()) {
-							val eMeta = metaFile.readBytes().toDataInputStream().use { EncryptedContentMetaData.read(it) }
-							node.send(EncryptedContentMessage(eMeta).serialize(), contentFile)
+						if (deletedCache.contains(key)) return@forEach
+						val eMeta = metaCache[key] ?: run {
+							val metaFile = File(metaDir, "$key")
+							if (metaFile.exists()) {
+								metaFile.toDataInputStream().use { EncryptedContentMetaData.read(it) }
+							} else null
+						}
+						val smallBytes = smallContentCache[key]
+						if (eMeta != null) {
+							if (smallBytes != null) {
+								node.send(EncryptedContentMessage(eMeta).serialize(), smallBytes)
+							} else {
+								val contentFile = File(contentDir, "$key")
+								if (contentFile.exists()) {
+									node.send(EncryptedContentMessage(eMeta).serialize(), contentFile)
+								}
+							}
 						}
 					}
 					log("ContentRequest from ${node.remoteAddress}: served ${req.keys.size} keys")
@@ -251,8 +299,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 					val contentMessage = EncryptedContentMessage.read(rawHead.toDataInputStream())
 					val eMeta = contentMessage.eMeta
 					if (file != null) {
-						val deletedMetaFile = File(deletedDir, eMeta.key.toString())
-						if (deletedMetaFile.exists()) {
+						if (deletedCache.contains(eMeta.key)) {
 							file.delete()
 							log("Ignoring content ${eMeta.key.name} from ${node.remoteAddress}: key is deleted")
 						} else if (eMeta.author.arr.contentEquals(eMeta.recipient.arr)) {
@@ -286,21 +333,27 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 									log("Failed to move content file to content directory")
 								}
 							}
-							if (contentStored && !metaFile.exists()) {
-								metaFile.writeBytes(eMeta.serialize())
-								if (metaFile.exists()) {
-									onMessageReceived?.invoke(eMeta.key)
-									val peerName = listPeers().firstOrNull { it.key == eMeta.author }?.key?.name ?: node.remoteAddress.toString()
-									val fileSize = destFile.length()
-									onLogEvent?.invoke("download", "completed", "Download Finished", "Received content payload (${fileSize} bytes) from $peerName", eMeta.key.toString(), fileSize, peerName)
-									if (relayEnabled) {
-										pushNewMessage(eMeta.key, excludeNode = node)
+							if (contentStored) {
+								metaCache[eMeta.key] = eMeta
+								val fileSize = destFile.length()
+								if (fileSize <= SMALL_CONTENT_THRESHOLD_BYTES && smallContentCache.size < MAX_SMALL_CONTENT_ITEMS) {
+									smallContentCache[eMeta.key] = destFile.readBytes()
+								}
+								if (!metaFile.exists()) {
+									metaFile.writeBytes(eMeta.serialize())
+									if (metaFile.exists()) {
+										onMessageReceived?.invoke(eMeta.key)
+										val peerName = listPeers().firstOrNull { it.key == eMeta.author }?.key?.name ?: node.remoteAddress.toString()
+										onLogEvent?.invoke("download", "completed", "Download Finished", "Received content payload (${fileSize} bytes) from $peerName", eMeta.key.toString(), fileSize, peerName)
+										if (relayEnabled) {
+											pushNewMessage(eMeta.key, excludeNode = node)
+										}
 									}
 								}
 							}
 						}
 					}
-					log("Received content ${eMeta.key} from ${node.remoteAddress}")
+					log("Received content ${eMeta.key.name} from ${node.remoteAddress}")
 				}
 				// Keepalive ping — respond immediately with a pong so the sender resets our activity timer.
 				PingMessage.type -> node.send(StringWritable(PongMessage.type).serialize())
@@ -402,7 +455,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		val recipientFilter = if (relayEnabled) QueryCondition.ALL
 		else QueryCondition(myIdentityKeys, QueryCondition.ConditionType.Include)
 		val peerLabel = nodePeerMap[node]?.key?.name ?: node.remoteAddress.toString()
-		log("Syncing with ${node.remoteAddress} (${if (relayEnabled) "relay/all recipients" else "recipient filter ${myIdentityKeys.joinToString()}"})")
+		log("Syncing with ${node.remoteAddress} (${if (relayEnabled) "relay/all recipients" else "recipient filter ${myIdentityKeys.joinToString { it.name }}"})")
 		onLogEvent?.invoke("sync", "in_progress", "Syncing Node", "Syncing message index with $peerLabel", null, null, peerLabel)
 		node.send(
 			QueryMessage(
@@ -455,16 +508,16 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	// Pushes a newly stored message's metadata to all currently connected peers.
 	// Each peer will automatically request content if they want it.
 	fun pushNewMessage(metaKey: EncryptedMetaKey, excludeNode: TCPNode? = null) {
-		val metaFile = File(metaDir, "$metaKey")
-		if (!metaFile.exists()) return
-		val contentFile = File(contentDir, "$metaKey")
-		if (!contentFile.exists()) return // Must have the content before we push/relay it!
-		val eMeta = try {
+		val eMeta = metaCache[metaKey] ?: try {
+			val metaFile = File(metaDir, "$metaKey")
+			if (!metaFile.exists()) return
 			metaFile.toDataInputStream().use { EncryptedContentMetaData.read(it) }
 		} catch (e: Exception) {
-			log("pushNewMessage: failed to read meta for $metaKey: ${e.message}")
+			log("pushNewMessage: failed to read meta for ${metaKey.name}: ${e.message}")
 			return
 		}
+		val contentExists = smallContentCache.containsKey(metaKey) || File(contentDir, "$metaKey").exists()
+		if (!contentExists) return // Must have the content before we push/relay it!
 		val header = StringWritable(QueryResponseMessage.type).serialize()
 		val body = ListWritable(listOf(eMeta.toHeader())).serialize()
 		allNodes.filter { !it.isClosed() && it != excludeNode }.forEach { node ->
@@ -487,16 +540,13 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	}
 
 	fun listIdentities(): List<Identity> {
-		val diskIdentities = (identityDir.listFiles { file -> file.isFile } ?: emptyArray())
-			.mapNotNull { file ->
-				runCatching { file.readBytes().toDataInputStream().use { Identity.read(it) } }.getOrNull()
-			}
+		val diskIdentities = identityCache.values.toList()
 		val all = diskIdentities + ephemeralIdentities
 		return all.distinctBy { it.key }
 	}
 
 	fun isIdentityPersistent(key: IdentityKey): Boolean {
-		return File(identityDir, "$key").exists()
+		return identityCache.containsKey(key)
 	}
 
 	fun setIdentityPersistence(key: IdentityKey, persistent: Boolean): Boolean {
@@ -504,8 +554,10 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		val targetFile = File(identityDir, "$key")
 		return if (persistent) {
 			targetFile.writeBytes(iden.serialize())
+			identityCache[key] = iden
 			true
 		} else {
+			identityCache.remove(key)
 			if (targetFile.exists()) targetFile.delete() else true
 		}
 	}
@@ -521,20 +573,24 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	}
 
 	fun removeIdentity(key: IdentityKey): Boolean {
+		identityCache.remove(key)
 		val removedEphemeral = ephemeralIdentities.removeIf { it.key == key }
 		val targetFile = File(identityDir, "$key")
 		val removedDisk = if (targetFile.exists()) targetFile.delete() else false
 		return removedEphemeral || removedDisk
 	}
 
+	fun savePeer(peer: Peer) {
+		File(peerDir, "${peer.key}").writeBytes(peer.serialize())
+		peerCache[peer.key] = peer
+	}
+
 	fun listPeers(): List<Peer> {
-		// Only disk-persisted peers — these are explicitly imported contacts.
-		val peerFiles =
-			peerDir.listFiles { file -> file.isFile } ?: emptyArray()
-		return peerFiles.map { file -> file.readBytes().toDataInputStream().use { Peer.read(it) } }
+		return peerCache.values.toList()
 	}
 
 	fun removePeer(key: PeerKey): Boolean {
+		peerCache.remove(key)
 		val file = findPeerFile(key)
 		return if (file != null) {
 			file.delete()
@@ -551,11 +607,18 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		val eMeta = meta.encrypt(authorIdentity, recipientPeer, contentKey, pass)
 		val contentFile = File(contentDir, eMeta.key.toString()).consistentFile()
 		content.encrypt(pass, FileSink(contentFile, false))
-		totalContentSize.addAndGet(contentFile.length())
+		val fileSize = contentFile.length()
+		totalContentSize.addAndGet(fileSize)
 		val metaDest = File(metaDir, eMeta.key.toString()).consistentFile()
 		metaDest.writeBytes(eMeta.serialize())
+
+		metaCache[eMeta.key] = eMeta
+		if (fileSize <= SMALL_CONTENT_THRESHOLD_BYTES && smallContentCache.size < MAX_SMALL_CONTENT_ITEMS) {
+			smallContentCache[eMeta.key] = contentFile.readBytes()
+		}
+
 		checkAndEnforceQuota()
-		onLogEvent?.invoke("send", "completed", "Message Sent", "Sent message payload (${contentFile.length()} bytes) to peer ${recipientPeer.key.name}", recipientPeer.key.name, contentFile.length(), recipientPeer.key.name)
+		onLogEvent?.invoke("send", "completed", "Message Sent", "Sent message payload (${fileSize} bytes) to peer ${recipientPeer.key.name}", recipientPeer.key.name, fileSize, recipientPeer.key.name)
 		return eMeta.key
 	}
 
@@ -613,43 +676,55 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	}
 
 	fun getIdentityByKey(key: IdentityKey): Identity? =
-		listIdentities().firstOrNull { it.key == key }
+		identityCache[key] ?: ephemeralIdentities.firstOrNull { it.key == key }
 
 	fun getPeerByKey(key: PeerKey): Peer? =
-		listPeers().firstOrNull { it.key == key }
-			?: ephemeralIdentities.firstOrNull { it.asPeer().key == key }?.asPeer()
+		peerCache[key] ?: ephemeralIdentities.firstOrNull { it.asPeer().key == key }?.asPeer()
 
 	fun getContent(key: EncryptedMetaKey): Content {
-		val metaFile = File(metaDir, "$key").consistentFile()
-		if (!metaFile.exists()) {
-			error("Meta file not found for key: $key")
+		val eMeta = metaCache[key] ?: run {
+			val metaFile = File(metaDir, "$key").consistentFile()
+			if (!metaFile.exists()) {
+				error("Meta file not found for key: $key")
+			}
+			metaFile.toDataInputStream().use { EncryptedContentMetaData.read(it) }
 		}
-		val eMeta = metaFile.toDataInputStream().use { dis -> EncryptedContentMetaData.read(dis) }
 		val recipientIdentity = getIdentityByKey(eMeta.recipient) ?: error("No Identity found for ${eMeta.recipient}")
 		val (meta, pass) = try {
 			eMeta.decrypt(recipientIdentity)
 		} catch (e: Exception) {
 			error("Failed to decrypt metadata. Wrong identity or corrupted file. ${e.message}")
 		}
-		val contentFile = File(contentDir, "$key").consistentFile()
-		if (!contentFile.exists()) {
-			error("Content file not found for key: $key")
+		val smallBytes = smallContentCache[key]
+		val contentSource = if (smallBytes != null) {
+			r3.source.BinarySource(smallBytes)
+		} else {
+			val contentFile = File(contentDir, "$key").consistentFile()
+			if (!contentFile.exists()) {
+				error("Content file not found for key name: ${key.name}")
+			}
+			FileSource(contentFile)
 		}
-		return EncryptContent(pass, FileSource(contentFile), meta)
+		return EncryptContent(pass, contentSource, meta)
 	}
+
+	fun isMessageDeleted(key: EncryptedMetaKey): Boolean = deletedCache.contains(key)
 
 	@Synchronized
 	fun deleteMessage(key: EncryptedMetaKey): Boolean {
+		metaCache.remove(key)
+		smallContentCache.remove(key)
+		val hadMeta = metaCache.containsKey(key) || deletedCache.contains(key) || File(metaDir, "$key").exists() || File(deletedDir, "$key").exists()
+		deletedCache.add(key)
 		val metaFile = File(metaDir, "$key")
 		val deletedMetaFile = File(deletedDir, "$key")
-		val hadMeta = metaFile.exists() || deletedMetaFile.exists()
 		if (metaFile.exists()) {
 			if (!metaFile.renameTo(deletedMetaFile)) {
 				runCatching {
 					deletedMetaFile.writeBytes(metaFile.readBytes())
 					metaFile.delete()
 				}.onFailure {
-					log("Failed to move meta $key to deleted directory: ${it.message}")
+					log("Failed to move meta ${key.name} to deleted directory: ${it.message}")
 					return false
 				}
 			}
@@ -660,7 +735,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			if (contentFile.delete()) {
 				totalContentSize.addAndGet(-size)
 			} else {
-				log("Failed to delete content file for $key")
+				log("Failed to delete content file for ${key.name}")
 			}
 		}
 		return hadMeta

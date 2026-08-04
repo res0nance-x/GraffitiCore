@@ -152,6 +152,20 @@ async function get<T extends { ok: boolean; error?: string }>(
    return parseJson<T>(await fetch(url.toString()));
 }
 
+async function putJson<T extends { ok: boolean; error?: string }>(
+   path: string,
+   body: Record<string, any>,
+): Promise<T> {
+   const url = new URL(path, window.location.origin);
+   const res = await fetch(url.toString(), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+   });
+   return parseJson<T>(res);
+}
+
+
 async function download(path: string, params: Record<string, string> = {}): Promise<void> {
    const url = new URL(path, window.location.origin);
    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
@@ -180,7 +194,7 @@ export const graffiti = {
    },
 
    createIdentity(seed: string): Promise<CreateIdentityResponse> {
-      return get('/api/identity/create', {seed}) as Promise<CreateIdentityResponse>;
+      return putJson('/api/identity/create', { seed }) as Promise<CreateIdentityResponse>;
    },
 
    removeIdentity(key: string): Promise<ApiOk> {
@@ -218,6 +232,10 @@ export const graffiti = {
 
    listMessages(): Promise<ListMessagesResponse> {
       return get('/api/messages');
+   },
+
+   refreshMessages(): Promise<ApiOk> {
+      return get('/api/messages/refresh');
    },
 
    contentUrl(key: string): string {
@@ -350,7 +368,7 @@ export const graffiti = {
 
    // ── Pack Viewing ────────────────────────────────────────────────────────
    openPack(params: OpenPackParams): Promise<OpenPackResponse> {
-      return get('/api/pack/open', params as Record<string, string>) as Promise<OpenPackResponse>;
+      return putJson('/api/pack/open', params);
    },
 
    closePack(sessionId: string): Promise<ApiOk> {

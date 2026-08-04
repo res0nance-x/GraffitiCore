@@ -20,6 +20,8 @@ export function buildTable(
    const tbody = table.tBodies[0] ?? table.createTBody();
    tbody.replaceChildren();
 
+   const hasStorageColumn = (table.tHead?.rows[0]?.cells.length ?? 2) >= 3;
+
    for (const item of items) {
       const row = tbody.insertRow();
 
@@ -37,23 +39,46 @@ export function buildTable(
       const figcaption = document.createElement('figcaption');
       figcaption.textContent = item.name;
 
-      if (nodeKey && item.key === nodeKey) {
-         const badge = document.createElement('span');
-         badge.className = 'badge-relay';
-         badge.style.background = '#2d2dff';
-         badge.style.cursor = 'default';
-         badge.textContent = 'Node';
-         figcaption.appendChild(badge);
-      } else if ('persistent' in item) {
-         const isPersistent = (item as IdentityEntry).persistent;
-         const badge = document.createElement('span');
-         badge.className = isPersistent ? 'badge-relay' : 'badge-session';
-         badge.textContent = isPersistent ? 'Saved' : 'Session';
-         figcaption.appendChild(badge);
+      if (!hasStorageColumn) {
+         if (nodeKey && item.key === nodeKey) {
+            const badge = document.createElement('span');
+            badge.className = 'badge-relay';
+            badge.style.background = '#2d2dff';
+            badge.style.cursor = 'default';
+            badge.textContent = 'Node';
+            figcaption.appendChild(badge);
+         } else if ('persistent' in item) {
+            const isPersistent = (item as IdentityEntry).persistent;
+            const badge = document.createElement('span');
+            badge.className = isPersistent ? 'badge-relay' : 'badge-session';
+            badge.textContent = isPersistent ? 'Saved' : 'Session';
+            figcaption.appendChild(badge);
+         }
       }
 
       figure.append(img, figcaption);
       userCell.append(figure);
+
+      // Storage Column (if table header defines 3 columns)
+      if (hasStorageColumn) {
+         const storageCell = row.insertCell();
+         if (nodeKey && item.key === nodeKey) {
+            const badge = document.createElement('span');
+            badge.className = 'badge-relay';
+            badge.style.background = '#2d2dff';
+            badge.style.cursor = 'default';
+            badge.textContent = 'Node';
+            storageCell.appendChild(badge);
+         } else if ('persistent' in item) {
+            const isPersistent = (item as IdentityEntry).persistent;
+            const badge = document.createElement('span');
+            badge.className = isPersistent ? 'badge-relay' : 'badge-session';
+            badge.textContent = isPersistent ? 'Saved' : 'Session';
+            storageCell.appendChild(badge);
+         } else {
+            storageCell.textContent = '—';
+         }
+      }
 
       // Actions
       const actionsCell = row.insertCell();

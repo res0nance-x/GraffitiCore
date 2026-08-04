@@ -43,8 +43,8 @@ async function refreshNameMaps(): Promise<void> {
    }
 }
 
-async function populateIdentityFilters(): Promise<void> {
-   const { identities } = await graffiti.listIdentities();
+async function populateIdentityFilters(passedIdentities?: IdentityEntry[]): Promise<void> {
+   const identities = passedIdentities ?? (await graffiti.listIdentities()).identities;
    const filterList = document.getElementById('identities-filter-list');
    if (!filterList) return;
 
@@ -62,7 +62,7 @@ async function populateIdentityFilters(): Promise<void> {
       }
    }
 
-   const isFirstLoad = seenIdentityKeys.size === 0;
+   const isFirstLoad = seenIdentityKeys.size === 0 || activeFilterKeys.size === 0;
 
    filterList.replaceChildren();
 
@@ -83,6 +83,15 @@ async function populateIdentityFilters(): Promise<void> {
       const nameSpan = document.createElement('span');
       nameSpan.className = 'filter-item-name';
       nameSpan.textContent = id.name;
+
+      if (id.persistent !== undefined) {
+         const badge = document.createElement('span');
+         badge.className = id.persistent ? 'badge-relay' : 'badge-session';
+         badge.style.fontSize = '0.65rem';
+         badge.style.marginLeft = '0.35rem';
+         badge.textContent = id.persistent ? 'Saved' : 'Session';
+         nameSpan.appendChild(badge);
+      }
 
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
@@ -123,14 +132,19 @@ function queueRefreshMessages(): void {
 }
 
 async function refreshMessages(): Promise<void> {
-   await refreshNameMaps();
-   const { messages } = await graffiti.listMessages();
-   const container = document.getElementById('messages');
-   if (!container) return;
+   if (isRefreshing) return;
+   isRefreshing = true;
+   try {
+      await refreshNameMaps();
+      await populateIdentityFilters(knownIdentities);
+      const { messages } = await graffiti.listMessages();
+      const container = document.getElementById('messages');
+      if (!container) return;
 
-   // Filter the messages
+   // Filter the messages: show all decrypted messages by default (or when all identities are checked).
+   // Only filter down if the user has specifically unchecked one or more identities.
    let filteredMessages = messages;
-   if (activeFilterKeys.size > 0) {
+   if (knownIdentities.length > 0 && activeFilterKeys.size > 0 && activeFilterKeys.size < knownIdentities.length) {
       filteredMessages = messages.filter(msg => {
          const authorKey = msg.authorKey || nameToKey.get(msg.author || '');
          const recipientKey = msg.recipientKey || nameToKey.get(msg.recipient || '');
@@ -139,17 +153,23 @@ async function refreshMessages(): Promise<void> {
          if (recipientKey && activeFilterKeys.has(recipientKey)) {
             return true;
          }
-         // 2. Author key matches peerKey of active filter identity
+         // 2. Author key matches peerKey or identity key of active filter identity
          if (authorKey) {
-            const matchingId = knownIdentities.find(id => id.peerKey === authorKey);
+            const matchingId = knownIdentities.find(id => id.peerKey === authorKey || id.key === authorKey);
             if (matchingId && activeFilterKeys.has(matchingId.key)) {
                return true;
             }
          }
+         // 3. Fallback: match by author or recipient display name
+         for (const id of knownIdentities) {
+            if (activeFilterKeys.has(id.key)) {
+               if (msg.recipient === id.name || msg.author === id.name) {
+                  return true;
+               }
+            }
+         }
          return false;
       });
-   } else {
-      filteredMessages = [];
    }
 
    const targetKeys = new Set(filteredMessages.map(m => m.key));
@@ -194,6 +214,9 @@ async function refreshMessages(): Promise<void> {
    currentMessages.clear();
    for (const msg of filteredMessages) {
       currentMessages.add(msg.key);
+   }
+   } finally {
+      isRefreshing = false;
    }
 }
 
@@ -640,19 +663,29 @@ filterNoneBtn?.addEventListener('click', () => {
    void refreshMessages();
 });
 
+refreshBtn?.addEventListener('click', async () => {
+   try {
+      await graffiti.refreshMessages();
+   } catch (e) {
+      console.warn('Backend refresh failed:', e);
+   }
+   await refreshMessages();
+});
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 setStatus('Ready');
 autoResizeTextarea(messageText);
 onSectionShow('section-messages', () => {
    void populateSelects();
-   void populateIdentityFilters();
+   void queueRefreshMessages();
 });
 
 onWsOpen(() => {
-   void refreshMessages();
+   void populateSelects();
+   void queueRefreshMessages();
 });
 
-refreshMessages().catch(e => console.error('[messages] bootstrap error:', e));
+queueRefreshMessages();
 
 // ── Notifications ─────────────────────────────────────────────────────────────
 let lastNotificationTime = 0;
@@ -707,8 +740,11 @@ onWsEvent('messages_update', async (msg: Record<string, unknown>) => {
 });
 onWsEvent('identities_update', () => {
    void populateSelects();
-   void populateIdentityFilters();
+   void queueRefreshMessages();
 });
 onWsEvent('messages_reload', queueRefreshMessages);
-onWsEvent('peers_update', populateSelects);
+onWsEvent('peers_update', () => {
+   void populateSelects();
+   void queueRefreshMessages();
+});
 

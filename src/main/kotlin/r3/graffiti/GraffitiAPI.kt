@@ -2,23 +2,14 @@ package r3.graffiti
 
 import org.nanohttpd.protocols.http.response.Response
 import org.nanohttpd.protocols.http.response.Status
-import r3.content.BinaryContent
-import r3.content.Content
-import r3.content.ContentMeta
-import r3.content.JsonContent
-import r3.content.TextContent
+import r3.content.*
 import r3.http.ContentHandler
 import r3.io.log
 import r3.io.serialize
 import r3.key.Key256
 import r3.org.json.JSONArray
 import r3.org.json.JSONObject
-import r3.pke.EncryptContent
-import r3.pke.EncryptedMetaKey
-import r3.pke.IdentityKey
-import r3.pke.Peer
-import r3.pke.PeerKey
-import r3.pke.name
+import r3.pke.*
 import r3.source.FileSource
 import r3.source.readString
 import java.io.DataInputStream
@@ -27,7 +18,6 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.URLDecoder
-import kotlin.text.get
 
 class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : ContentHandler {
 	init {
@@ -144,7 +134,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/connections" -> connections()
 			"/api/discover" -> if (header.optBoolean("scan")) discover(true) else discover(false)
 			"/api/store" -> handleStore(header, content)
-			"/api/pack/open" -> openPackApi(header)
+			"/api/pack/open" -> openPackApi(header, content)
 			"/api/pack/close" -> closePackApi(header)
 			else -> null
 		}
@@ -154,8 +144,15 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 	var onOpenPack: ((source: r3.source.Source, fileName: String, password: String?) -> Pair<String, Int>)? = null
 	var onClosePack: ((sessionId: String) -> Unit)? = null
 
-	private fun openPackApi(header: JSONObject): Content {
-		val params = header.optJSONObject("param")
+	private fun openPackApi(header: JSONObject, content: Content?): Content {
+		val bodyParams = content?.let {
+			try {
+				JSONObject(it.readString())
+			} catch (_: Exception) {
+				null
+			}
+		}
+		val params = bodyParams ?: header.optJSONObject("param")
 		val pathStr = params?.optString("path", null)
 		val encKey = params?.optString("encKey", null)
 		val password = params?.optString("password", null).takeIf { !it.isNullOrEmpty() }
@@ -167,7 +164,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 					val content = p2p.getContent(key)
 					Pair(content, content.path)
 				} catch (e: Exception) {
-					return err("Failed to retrieve pack content for key $encKey: ${e.message}")
+					return err("Failed to retrieve pack content: ${e.message}")
 				}
 			}
 			!pathStr.isNullOrEmpty() -> {
@@ -221,7 +218,13 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 	}
 
 	private fun createIdentity(header: JSONObject, content: Content?): Content {
-		val seed = header.getString("seed")
+		val seed = content?.let {
+			try {
+				JSONObject(it.readString()).optString("seed", null)
+			} catch (_: Exception) {
+				null
+			}
+		} ?: header.optString("seed", null) ?: return err("Missing 'seed' parameter")
 		val iden = p2p.createIdentity(seed)
 		sendToAll(JSONObject().put("event", "identities_update"))
 		sendToAll(JSONObject().put("event", "messages_reload"))
@@ -270,7 +273,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		} catch (e: Exception) {
 			return err("Invalid peer file: ${e.message}")
 		}
-		File(p2p.peerDir, "${peer.key}").writeBytes(peer.serialize())
+		p2p.savePeer(peer)
 		sendToAll(JSONObject().put("event", "peers_update"))
 		return ok { put("name", peer.key.name).put("key", peer.key) }
 	}
