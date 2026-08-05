@@ -393,9 +393,17 @@ h6 {
 /* ── Message list ─────────────────────────────────────────────────────────── */
 
 #messages {
-    display: grid;
+    display: flex;
+    flex-direction: column;
     gap: 0.75rem;
     font-family: var(--message-font-family, inherit);
+}
+
+.vlist-spacer-top,
+.vlist-spacer-bottom {
+    width: 100%;
+    pointer-events: none;
+    flex-shrink: 0;
 }
 
 .message-item {

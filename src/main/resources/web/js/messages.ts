@@ -131,6 +131,185 @@ function queueRefreshMessages(): void {
    }, 50);
 }
 
+// ── Virtual List Controller State ─────────────────────────────────────────────
+const DEFAULT_ITEM_HEIGHT = 120;
+const ITEM_GAP = 12; // 0.75rem flex gap in #messages
+const BUFFER_ITEMS = 8;
+
+const itemHeights = new Map<string, number>();
+const textContentCache = new Map<string, string>();
+let allFilteredMessages: MessageData[] = [];
+let vlistTopSpacer: HTMLDivElement | null = null;
+let vlistBottomSpacer: HTMLDivElement | null = null;
+let isVListRenderScheduled = false;
+
+const itemResizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver((entries) => {
+   let heightChanged = false;
+   for (const entry of entries) {
+      const el = entry.target as HTMLElement;
+      const key = el.dataset.msgKey;
+      if (key) {
+         const newH = Math.round(el.offsetHeight);
+         const oldH = itemHeights.get(key);
+         if (newH > 0 && (oldH === undefined || Math.abs(newH - oldH) > 2)) {
+            itemHeights.set(key, newH);
+            heightChanged = true;
+         }
+      }
+   }
+   if (heightChanged) {
+      scheduleVListRender();
+   }
+}) : null;
+
+function scheduleVListRender(): void {
+   if (isVListRenderScheduled) return;
+   isVListRenderScheduled = true;
+   requestAnimationFrame(() => {
+      isVListRenderScheduled = false;
+      renderVirtualList();
+   });
+}
+
+function ensureSpacers(container: HTMLElement): { topSpacer: HTMLDivElement; bottomSpacer: HTMLDivElement } {
+   if (!vlistTopSpacer || !vlistTopSpacer.parentElement) {
+      vlistTopSpacer = document.createElement('div');
+      vlistTopSpacer.className = 'vlist-spacer-top';
+   }
+   if (!vlistBottomSpacer || !vlistBottomSpacer.parentElement) {
+      vlistBottomSpacer = document.createElement('div');
+      vlistBottomSpacer.className = 'vlist-spacer-bottom';
+   }
+
+   if (container.firstElementChild !== vlistTopSpacer) {
+      container.insertBefore(vlistTopSpacer, container.firstElementChild);
+   }
+   if (container.lastElementChild !== vlistBottomSpacer) {
+      container.appendChild(vlistBottomSpacer);
+   }
+   return { topSpacer: vlistTopSpacer, bottomSpacer: vlistBottomSpacer };
+}
+
+function renderVirtualList(): void {
+   const container = document.getElementById('messages');
+   if (!container) return;
+
+   const { topSpacer, bottomSpacer } = ensureSpacers(container);
+
+   if (allFilteredMessages.length === 0) {
+      topSpacer.style.height = '0px';
+      topSpacer.style.display = 'none';
+      bottomSpacer.style.height = '0px';
+      bottomSpacer.style.display = 'none';
+      const children = Array.from(container.children) as HTMLElement[];
+      for (const child of children) {
+         if (child !== topSpacer && child !== bottomSpacer) {
+            itemResizeObserver?.unobserve(child);
+            child.remove();
+         }
+      }
+      currentMessages.clear();
+      return;
+   }
+
+   const rect = container.getBoundingClientRect();
+   const viewportTop = Math.max(0, -rect.top);
+   const viewportBottom = viewportTop + window.innerHeight;
+
+   let currentTop = 0;
+   let rawStartIndex = 0;
+   let rawEndIndex = allFilteredMessages.length - 1;
+   let foundStart = false;
+
+   for (let i = 0; i < allFilteredMessages.length; i++) {
+      const msg = allFilteredMessages[i];
+      const h = itemHeights.get(msg.key) ?? DEFAULT_ITEM_HEIGHT;
+      const itemBottom = currentTop + h;
+
+      if (!foundStart && itemBottom >= viewportTop) {
+         rawStartIndex = i;
+         foundStart = true;
+      }
+      if (currentTop <= viewportBottom) {
+         rawEndIndex = i;
+      }
+      currentTop += h + ITEM_GAP;
+   }
+
+   const startIndex = Math.max(0, rawStartIndex - BUFFER_ITEMS);
+   const endIndex = Math.min(allFilteredMessages.length - 1, rawEndIndex + BUFFER_ITEMS);
+
+   let topSpacerHeight = 0;
+   if (startIndex > 0) {
+      for (let i = 0; i < startIndex; i++) {
+         const msg = allFilteredMessages[i];
+         topSpacerHeight += itemHeights.get(msg.key) ?? DEFAULT_ITEM_HEIGHT;
+      }
+      topSpacerHeight += (startIndex - 1) * ITEM_GAP;
+   }
+
+   let bottomSpacerHeight = 0;
+   if (endIndex < allFilteredMessages.length - 1) {
+      const unrenderedBottomCount = (allFilteredMessages.length - 1) - endIndex;
+      for (let i = endIndex + 1; i < allFilteredMessages.length; i++) {
+         const msg = allFilteredMessages[i];
+         bottomSpacerHeight += itemHeights.get(msg.key) ?? DEFAULT_ITEM_HEIGHT;
+      }
+      bottomSpacerHeight += (unrenderedBottomCount - 1) * ITEM_GAP;
+   }
+
+   topSpacer.style.height = `${topSpacerHeight}px`;
+   topSpacer.style.display = topSpacerHeight > 0 ? '' : 'none';
+   bottomSpacer.style.height = `${bottomSpacerHeight}px`;
+   bottomSpacer.style.display = bottomSpacerHeight > 0 ? '' : 'none';
+
+   const visibleSlice = allFilteredMessages.slice(startIndex, endIndex + 1);
+   const visibleElements: HTMLElement[] = [];
+
+   for (const msg of visibleSlice) {
+      let el = container.querySelector(`[data-msg-key="${CSS.escape(msg.key)}"]`) as HTMLElement | null;
+      if (el) {
+         fillHeader(el, msg);
+      } else {
+         el = createMessageElement(msg);
+         if (el) {
+            itemResizeObserver?.observe(el);
+         }
+      }
+      if (el) {
+         visibleElements.push(el);
+      }
+   }
+
+   const keepSet = new Set<HTMLElement>([topSpacer, bottomSpacer, ...visibleElements]);
+   const children = Array.from(container.children) as HTMLElement[];
+   for (const child of children) {
+      if (!keepSet.has(child)) {
+         itemResizeObserver?.unobserve(child);
+         child.remove();
+         const key = child.dataset.msgKey;
+         if (key) currentMessages.delete(key);
+      }
+   }
+
+   let refNode: Node = bottomSpacer;
+   for (let i = visibleElements.length - 1; i >= 0; i--) {
+      const el = visibleElements[i];
+      if (el.nextElementSibling !== refNode) {
+         container.insertBefore(el, refNode);
+      }
+      refNode = el;
+   }
+
+   currentMessages.clear();
+   for (const msg of visibleSlice) {
+      currentMessages.add(msg.key);
+   }
+}
+
+window.addEventListener('scroll', scheduleVListRender, { passive: true });
+window.addEventListener('resize', scheduleVListRender, { passive: true });
+
 async function refreshMessages(): Promise<void> {
    if (isRefreshing) return;
    isRefreshing = true;
@@ -141,80 +320,34 @@ async function refreshMessages(): Promise<void> {
       const container = document.getElementById('messages');
       if (!container) return;
 
-   // Filter the messages: show all decrypted messages by default (or when all identities are checked).
-   // Only filter down if the user has specifically unchecked one or more identities.
-   let filteredMessages = messages;
-   if (knownIdentities.length > 0 && activeFilterKeys.size > 0 && activeFilterKeys.size < knownIdentities.length) {
-      filteredMessages = messages.filter(msg => {
-         const authorKey = msg.authorKey || nameToKey.get(msg.author || '');
-         const recipientKey = msg.recipientKey || nameToKey.get(msg.recipient || '');
+      let filteredMessages = messages;
+      if (knownIdentities.length > 0 && activeFilterKeys.size > 0 && activeFilterKeys.size < knownIdentities.length) {
+         filteredMessages = messages.filter(msg => {
+            const authorKey = msg.authorKey || nameToKey.get(msg.author || '');
+            const recipientKey = msg.recipientKey || nameToKey.get(msg.recipient || '');
 
-         // 1. Recipient key matches active filter key
-         if (recipientKey && activeFilterKeys.has(recipientKey)) {
-            return true;
-         }
-         // 2. Author key matches peerKey or identity key of active filter identity
-         if (authorKey) {
-            const matchingId = knownIdentities.find(id => id.peerKey === authorKey || id.key === authorKey);
-            if (matchingId && activeFilterKeys.has(matchingId.key)) {
+            if (recipientKey && activeFilterKeys.has(recipientKey)) {
                return true;
             }
-         }
-         // 3. Fallback: match by author or recipient display name
-         for (const id of knownIdentities) {
-            if (activeFilterKeys.has(id.key)) {
-               if (msg.recipient === id.name || msg.author === id.name) {
+            if (authorKey) {
+               const matchingId = knownIdentities.find(id => id.peerKey === authorKey || id.key === authorKey);
+               if (matchingId && activeFilterKeys.has(matchingId.key)) {
                   return true;
                }
             }
-         }
-         return false;
-      });
-   }
-
-   const targetKeys = new Set(filteredMessages.map(m => m.key));
-
-   // 1. Remove elements that are no longer present
-   const children = Array.from(container.children) as HTMLElement[];
-   for (const child of children) {
-      const key = child.dataset.msgKey;
-      if (key && !targetKeys.has(key)) {
-         child.remove();
-         currentMessages.delete(key);
-      }
-   }
-
-   // 2. Insert or move elements to align with the backend's sorted list
-   for (let i = 0; i < filteredMessages.length; i++) {
-      const msg = filteredMessages[i];
-      const existingEl = container.children[i] as HTMLElement | undefined;
-
-      if (existingEl && existingEl.dataset.msgKey === msg.key) {
-         // Already in correct position — update headers in case name changed
-         fillHeader(existingEl, msg);
-         continue;
+            for (const id of knownIdentities) {
+               if (activeFilterKeys.has(id.key)) {
+                  if (msg.recipient === id.name || msg.author === id.name) {
+                     return true;
+                  }
+               }
+            }
+            return false;
+         });
       }
 
-      // See if it exists elsewhere in the DOM
-      const foundEl = container.querySelector(`[data-msg-key="${CSS.escape(msg.key)}"]`) as HTMLElement | null;
-
-      if (foundEl) {
-         // Move it to index i
-         container.insertBefore(foundEl, existingEl ?? null);
-      } else {
-         // Create new element and insert it at index i
-         const newEl = createMessageElement(msg);
-         if (newEl) {
-            container.insertBefore(newEl, existingEl ?? null);
-         }
-      }
-   }
-
-   // 3. Keep currentMessages in sync
-   currentMessages.clear();
-   for (const msg of filteredMessages) {
-      currentMessages.add(msg.key);
-   }
+      allFilteredMessages = filteredMessages;
+      renderVirtualList();
    } finally {
       isRefreshing = false;
    }
@@ -325,7 +458,10 @@ function wireActions(item: HTMLElement, msg: MessageData): void {
       graffiti.removeMessage(msg.key)
          .then(() => {
             currentMessages.delete(msg.key);
-            item.remove();
+            itemHeights.delete(msg.key);
+            textContentCache.delete(msg.key);
+            allFilteredMessages = allFilteredMessages.filter(m => m.key !== msg.key);
+            renderVirtualList();
          })
          .catch((err: Error) => setStatus(`Delete failed: ${err.message}`));
    });
@@ -345,14 +481,20 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
    if (isText(msg.type)) {
       const pre = el.querySelector<HTMLPreElement>('.msg-text-content');
       if (pre) {
-         fetch(url)
-            .then(r => r.text())
-            .then(t => {
-               pre.textContent = t;
-            })
-            .catch((err: Error) => {
-               pre.textContent = `[Error loading content: ${err.message}]`;
-            });
+         const cached = textContentCache.get(msg.key);
+         if (cached !== undefined) {
+            pre.textContent = cached;
+         } else {
+            fetch(url)
+               .then(r => r.text())
+               .then(t => {
+                  textContentCache.set(msg.key, t);
+                  pre.textContent = t;
+               })
+               .catch((err: Error) => {
+                  pre.textContent = `[Error loading content: ${err.message}]`;
+               });
+         }
       }
    } else if (isImage(msg.type)) {
       const imgEl = el.querySelector<HTMLImageElement>('.msg-media');
@@ -399,10 +541,8 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
 }
 
 function displayMessage(msg: MessageData): void {
-   const el = createMessageElement(msg);
-   if (el) {
-      document.getElementById('messages')?.append(el);
-   }
+   allFilteredMessages.push(msg);
+   renderVirtualList();
 }
 
 async function populateSelects(): Promise<void> {
@@ -726,8 +866,11 @@ if (typeof Notification !== 'undefined' && Notification.permission === 'default'
 // ── WebSocket hooks ───────────────────────────────────────────────────────────
 onWsEvent('messages_update', async (msg: Record<string, unknown>) => {
    if (msg.action === 'remove') {
-      currentMessages.delete(msg.key as string);
-      document.querySelector(`[data-msg-key="${CSS.escape(msg.key as string)}"]`)?.remove();
+      const removedKey = msg.key as string;
+      currentMessages.delete(removedKey);
+      itemHeights.delete(removedKey);
+      allFilteredMessages = allFilteredMessages.filter(m => m.key !== removedKey);
+      renderVirtualList();
    } else if (msg.action === 'add') {
       const m = msg.msg as MessageData | undefined;
       if (m && !currentMessages.has(m.key)) {
