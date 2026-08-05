@@ -40,7 +40,15 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		p2p.onNodeConnected = { node, inbound ->
 			val host = node.remoteAddress.address.hostAddress
 			val port = node.remoteAddress.port
-			p2p.onLogEvent?.invoke("network", "info", "Peer Connected", "Connected to peer at $host:$port (${if (inbound) "inbound" else "outbound"})", null, null, "$host:$port")
+			p2p.onLogEvent?.invoke(
+				"network",
+				"info",
+				"Peer Connected",
+				"Connected to peer at $host:$port (${if (inbound) "inbound" else "outbound"})",
+				null,
+				null,
+				"$host:$port"
+			)
 			sendToAll(
 				JSONObject()
 					.put("event", "node_connected")
@@ -52,7 +60,15 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		p2p.onNodeDisconnected = { node ->
 			val host = node.remoteAddress.address.hostAddress
 			val port = node.remoteAddress.port
-			p2p.onLogEvent?.invoke("network", "info", "Peer Disconnected", "Disconnected from peer at $host:$port", null, null, "$host:$port")
+			p2p.onLogEvent?.invoke(
+				"network",
+				"info",
+				"Peer Disconnected",
+				"Disconnected from peer at $host:$port",
+				null,
+				null,
+				"$host:$port"
+			)
 			sendToAll(
 				JSONObject()
 					.put("event", "node_disconnected")
@@ -143,7 +159,6 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 	// ── Pack Viewing API ──────────────────────────────────────────────────────
 	var onOpenPack: ((source: r3.source.Source, fileName: String, password: String?) -> Pair<String, Int>)? = null
 	var onClosePack: ((sessionId: String) -> Unit)? = null
-
 	private fun openPackApi(header: JSONObject, content: Content?): Content {
 		val bodyParams = content?.let {
 			try {
@@ -167,14 +182,15 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 					return err("Failed to retrieve pack content: ${e.message}")
 				}
 			}
+
 			!pathStr.isNullOrEmpty() -> {
 				val file = File(pathStr)
 				if (!file.exists()) return err("File does not exist: ${file.name}")
 				Pair(FileSource(file), file.name)
 			}
+
 			else -> return err("Missing 'path' or 'encKey' parameter")
 		}
-
 		val handler = onOpenPack ?: return err("Pack handler not registered", Status.INTERNAL_ERROR)
 		return try {
 			val (sessionId, port) = handler(source, fileName, password)

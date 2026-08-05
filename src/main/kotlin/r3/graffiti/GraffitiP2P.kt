@@ -206,7 +206,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		loadQuota()
 	}
 
-	val contentHandler = { node: TCPNode, rawHead: ByteArray, file: File? ->
+	val contentHandler: (TCPNode, ByteArray, File?) -> Unit = { node: TCPNode, rawHead: ByteArray, file: File? ->
 		try {
 			val type = StringWritable.read(rawHead.toDataInputStream()).str
 			when (type) {
@@ -231,11 +231,12 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 				// Response to our earlier QueryMessage: a list of EncryptedContentMetaData from the peer.
 				// We save any new meta addressed to us, then request the actual content for those keys.
 				QueryResponseMessage.type -> {
+					val peerLabel = nodePeerMap[node]?.key?.name ?: node.remoteAddress.toString()
 					if (file != null) {
 						val headerList = file.toDataInputStream().use { dis ->
 							ListWritable.read(dis, EncryptedContentHeader::read).list
 						}
-						val myIdentityKeys = listIdentities().map { it.key }.toSet()
+						val myIdentityKeys = (listIdentities().map { it.key } + serverIdentity.key).toSet()
 						val myPeerKeys = listPeers().map { it.key }.toSet()
 						val wantContent = mutableListOf<EncryptedMetaKey>()
 						log("Received QueryResponse from ${node.remoteAddress}: ${headerList.size} header item(s)")
@@ -259,12 +260,14 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 							if (!metaExists) wantContent.add(msgHeader.key)
 						}
 						if (wantContent.isNotEmpty()) {
-							val peerLabel = nodePeerMap[node]?.key?.name ?: node.remoteAddress.toString()
-							onLogEvent?.invoke("download", "in_progress", "Downloading Content", "Requested ${wantContent.size} item(s) from peer $peerLabel", null, null, peerLabel)
+							onLogEvent?.invoke("download", "started", "Download Started", "Requested ${wantContent.size} item(s) from peer $peerLabel", null, null, peerLabel)
 							node.send(ContentRequestMessage(wantContent).serialize())
 						} else {
 							log("No content requests needed from ${node.remoteAddress} after QueryResponse")
 						}
+						onLogEvent?.invoke("sync", "completed", "Sync Completed", "Synced message index with $peerLabel (${headerList.size} header item(s))", null, null, peerLabel)
+					} else {
+						onLogEvent?.invoke("sync", "completed", "Sync Completed", "Synced message index with $peerLabel", null, null, peerLabel)
 					}
 				}
 				// Peer wants the meta file and content file for a list of keys we hold.
@@ -306,9 +309,8 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 							file.delete()
 							log("Ignoring content ${eMeta.key.name} from ${node.remoteAddress}: author and recipient are the same")
 						} else {
-							val peer = listPeers().firstOrNull { it.key == eMeta.author }
-								?: ephemeralIdentities.firstOrNull { it.asPeer().key == eMeta.author }?.asPeer()
-							val identity = listIdentities().firstOrNull { it.key == eMeta.recipient }
+							val peer = getPeerByKey(eMeta.author)
+							val identity = getIdentityByKey(eMeta.recipient)
 							val valid = if (peer != null) {
 								if (identity != null) {
 									// We have both: verify metadata signature AND content hash
@@ -343,7 +345,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 									metaFile.writeBytes(eMeta.serialize())
 									if (metaFile.exists()) {
 										onMessageReceived?.invoke(eMeta.key)
-										val peerName = listPeers().firstOrNull { it.key == eMeta.author }?.key?.name ?: node.remoteAddress.toString()
+										val peerName = getPeerByKey(eMeta.author)?.key?.name ?: node.remoteAddress.toString()
 										onLogEvent?.invoke("download", "completed", "Download Finished", "Received content payload (${fileSize} bytes) from $peerName", eMeta.key.toString(), fileSize, peerName)
 										if (relayEnabled) {
 											pushNewMessage(eMeta.key, excludeNode = node)
@@ -439,7 +441,6 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		}
 		onNodeConnected?.invoke(newNode, false)
 		sendChallenge(newNode)
-		syncNode(newNode)
 		return newNode
 	}
 
@@ -450,13 +451,13 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 
 	private fun syncNode(node: TCPNode) {
 		if (node.isClosed()) return
-		val myIdentityKeys = listIdentities().map { it.key }.toSet()
+		val myIdentityKeys = (listIdentities().map { it.key } + serverIdentity.key).toSet()
 		if (!relayEnabled && myIdentityKeys.isEmpty()) return
 		val recipientFilter = if (relayEnabled) QueryCondition.ALL
 		else QueryCondition(myIdentityKeys, QueryCondition.ConditionType.Include)
 		val peerLabel = nodePeerMap[node]?.key?.name ?: node.remoteAddress.toString()
 		log("Syncing with ${node.remoteAddress} (${if (relayEnabled) "relay/all recipients" else "recipient filter ${myIdentityKeys.joinToString { it.name }}"})")
-		onLogEvent?.invoke("sync", "in_progress", "Syncing Node", "Syncing message index with $peerLabel", null, null, peerLabel)
+		onLogEvent?.invoke("sync", "started", "Sync Started", "Syncing message index with $peerLabel", null, null, peerLabel)
 		node.send(
 			QueryMessage(
 				QueryCondition.ALL,
@@ -612,6 +613,8 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		val metaDest = File(metaDir, eMeta.key.toString()).consistentFile()
 		metaDest.writeBytes(eMeta.serialize())
 
+		onLogEvent?.invoke("send", "started", "Sending Message", "Encrypting and sending payload to peer ${recipientPeer.key.name}", recipientPeer.key.name, null, recipientPeer.key.name)
+
 		metaCache[eMeta.key] = eMeta
 		if (fileSize <= SMALL_CONTENT_THRESHOLD_BYTES && smallContentCache.size < MAX_SMALL_CONTENT_ITEMS) {
 			smallContentCache[eMeta.key] = contentFile.readBytes()
@@ -643,7 +646,6 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 				}
 				onNodeConnected?.invoke(node, true)
 				sendChallenge(node)
-				syncNode(node)
 			}
 		).also {
 			tcpServer = it
@@ -676,10 +678,11 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	}
 
 	fun getIdentityByKey(key: IdentityKey): Identity? =
-		identityCache[key] ?: ephemeralIdentities.firstOrNull { it.key == key }
+		if (serverIdentity.key == key) serverIdentity
+		else identityCache[key] ?: ephemeralIdentities.firstOrNull { it.key == key }
 
 	fun getPeerByKey(key: PeerKey): Peer? =
-		peerCache[key] ?: ephemeralIdentities.firstOrNull { it.asPeer().key == key }?.asPeer()
+		peerCache[key] ?: getIdentityByKey(IdentityKey(key.arr))?.asPeer()
 
 	fun getContent(key: EncryptedMetaKey): Content {
 		val eMeta = metaCache[key] ?: run {

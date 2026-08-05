@@ -83,7 +83,7 @@ function renderLogs(): void {
       : logEntries.filter(e => e.category === activeFilter);
 
    if (summaryEl) {
-      const activeDownloads = logEntries.filter(e => e.category === 'download' && e.status === 'in_progress').length;
+      const activeDownloads = logEntries.filter(e => e.category === 'download' && (e.status === 'in_progress' || e.status === 'started')).length;
       const downloadText = activeDownloads > 0 ? ` (${activeDownloads} active download${activeDownloads > 1 ? 's' : ''})` : '';
       summaryEl.textContent = `${filtered.length} of ${logEntries.length} entries${downloadText}`;
    }
@@ -135,7 +135,7 @@ onWsEvent('log_event', (msg: Record<string, unknown>) => {
    });
 });
 
-document.addEventListener('DOMContentLoaded', () => {
+function initLogControls(): void {
    const filterBtns = document.querySelectorAll<HTMLButtonElement>('.logs-filter-btn');
    filterBtns.forEach(btn => {
       btn.addEventListener('click', () => {
@@ -151,4 +151,11 @@ document.addEventListener('DOMContentLoaded', () => {
       logEntries.length = 0;
       renderLogs();
    });
-});
+}
+
+if (document.readyState === 'loading') {
+   document.addEventListener('DOMContentLoaded', initLogControls);
+} else {
+   initLogControls();
+}
+
