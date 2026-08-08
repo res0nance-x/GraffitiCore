@@ -9,7 +9,6 @@ const sendFileButton = document.getElementById('send-file') as HTMLButtonElement
 const fileInput = document.getElementById('file-input') as HTMLInputElement | null;
 const messagesSection = document.getElementById('section-messages') as HTMLElement | null;
 const statusEl = document.getElementById('send-status') as HTMLElement | null;
-const refreshBtn = document.getElementById('btn-messages-refresh') as HTMLButtonElement | null;
 
 let isSending = false;
 let isRefreshing = false;
@@ -21,8 +20,6 @@ const currentMessages = new Set<string>();
 /** Maps a display-name to its full key string for all known identities + peers. */
 const nameToKey = new Map<string, string>();
 let knownIdentities: IdentityEntry[] = [];
-const activeFilterKeys = new Set<string>();
-const seenIdentityKeys = new Set<string>();
 
 async function refreshNameMaps(): Promise<void> {
    try {
@@ -40,85 +37,6 @@ async function refreshNameMaps(): Promise<void> {
       }
    } catch (e) {
       console.warn('Failed to refresh name maps:', e);
-   }
-}
-
-async function populateIdentityFilters(passedIdentities?: IdentityEntry[]): Promise<void> {
-   const identities = passedIdentities ?? (await graffiti.listIdentities()).identities;
-   const filterList = document.getElementById('identities-filter-list');
-   if (!filterList) return;
-
-   const currentKeys = new Set(identities.map(id => id.key));
-
-   // Sync existing filter keys to ensure we don't keep deleted identities
-   for (const key of activeFilterKeys) {
-      if (!currentKeys.has(key)) {
-         activeFilterKeys.delete(key);
-      }
-   }
-   for (const key of seenIdentityKeys) {
-      if (!currentKeys.has(key)) {
-         seenIdentityKeys.delete(key);
-      }
-   }
-
-   const isFirstLoad = seenIdentityKeys.size === 0 || activeFilterKeys.size === 0;
-
-   filterList.replaceChildren();
-
-   for (const id of identities) {
-      if (isFirstLoad || !seenIdentityKeys.has(id.key)) {
-         activeFilterKeys.add(id.key);
-         seenIdentityKeys.add(id.key);
-      }
-
-      const item = document.createElement('div');
-      item.className = 'filter-item';
-
-      const avatar = document.createElement('img');
-      avatar.className = 'filter-item-avatar';
-      avatar.src = graffiti.avatarUrl(id.key);
-      avatar.alt = id.name;
-
-      const nameSpan = document.createElement('span');
-      nameSpan.className = 'filter-item-name';
-      nameSpan.textContent = id.name;
-
-      if (id.persistent !== undefined) {
-         const badge = document.createElement('span');
-         badge.className = id.persistent ? 'badge-relay' : 'badge-session';
-         badge.style.fontSize = '0.65rem';
-         badge.style.marginLeft = '0.35rem';
-         badge.textContent = id.persistent ? 'Saved' : 'Session';
-         nameSpan.appendChild(badge);
-      }
-
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.className = 'filter-item-checkbox';
-      checkbox.checked = activeFilterKeys.has(id.key);
-
-      checkbox.addEventListener('change', () => {
-         if (checkbox.checked) {
-            activeFilterKeys.add(id.key);
-         } else {
-            activeFilterKeys.delete(id.key);
-         }
-         void refreshMessages();
-      });
-
-      item.appendChild(avatar);
-      item.appendChild(nameSpan);
-      item.appendChild(checkbox);
-
-      item.addEventListener('click', (e) => {
-         if (e.target !== checkbox) {
-            checkbox.checked = !checkbox.checked;
-            checkbox.dispatchEvent(new Event('change'));
-         }
-      });
-
-      filterList.appendChild(item);
    }
 }
 
@@ -315,38 +233,11 @@ async function refreshMessages(): Promise<void> {
    isRefreshing = true;
    try {
       await refreshNameMaps();
-      await populateIdentityFilters(knownIdentities);
       const { messages } = await graffiti.listMessages();
       const container = document.getElementById('messages');
       if (!container) return;
 
-      let filteredMessages = messages;
-      if (knownIdentities.length > 0 && activeFilterKeys.size > 0 && activeFilterKeys.size < knownIdentities.length) {
-         filteredMessages = messages.filter(msg => {
-            const authorKey = msg.authorKey || nameToKey.get(msg.author || '');
-            const recipientKey = msg.recipientKey || nameToKey.get(msg.recipient || '');
-
-            if (recipientKey && activeFilterKeys.has(recipientKey)) {
-               return true;
-            }
-            if (authorKey) {
-               const matchingId = knownIdentities.find(id => id.peerKey === authorKey || id.key === authorKey);
-               if (matchingId && activeFilterKeys.has(matchingId.key)) {
-                  return true;
-               }
-            }
-            for (const id of knownIdentities) {
-               if (activeFilterKeys.has(id.key)) {
-                  if (msg.recipient === id.name || msg.author === id.name) {
-                     return true;
-                  }
-               }
-            }
-            return false;
-         });
-      }
-
-      allFilteredMessages = filteredMessages;
+      allFilteredMessages = messages;
       renderVirtualList();
    } finally {
       isRefreshing = false;
@@ -713,9 +604,7 @@ function updateSameAuthorRecipientWarning(): void {
 fromField?.addEventListener('change', updateSameAuthorRecipientWarning);
 toField?.addEventListener('change', updateSameAuthorRecipientWarning);
 
-refreshBtn?.addEventListener('click', () => {
-   void refreshMessages()
-});
+
 
 fileInput?.addEventListener('change', async () => {
    const file = fileInput?.files?.[0];
@@ -761,56 +650,7 @@ messagesSection?.addEventListener('drop', async (event: DragEvent) => {
    await sendPayload({ type: 'text', text: content.value as string, ...getEnvelope() });
 });
 
-// ── Sidebar / Drawer Logic ───────────────────────────────────────────────────
-const filterToggleBtn = document.getElementById('btn-filter-toggle');
-const sidebarCloseBtn = document.getElementById('btn-sidebar-close');
-const sidebar = document.getElementById('identities-sidebar');
-const backdrop = document.getElementById('sidebar-backdrop');
-const filterAllBtn = document.getElementById('btn-filter-all');
-const filterNoneBtn = document.getElementById('btn-filter-none');
 
-function openSidebar(): void {
-   sidebar?.classList.add('is-open');
-   backdrop?.classList.add('is-visible');
-}
-
-function closeSidebar(): void {
-   sidebar?.classList.remove('is-open');
-   backdrop?.classList.remove('is-visible');
-}
-
-filterToggleBtn?.addEventListener('click', openSidebar);
-sidebarCloseBtn?.addEventListener('click', closeSidebar);
-backdrop?.addEventListener('click', closeSidebar);
-
-filterAllBtn?.addEventListener('click', () => {
-   const checkboxes = document.querySelectorAll<HTMLInputElement>('.filter-item-checkbox');
-   checkboxes.forEach(cb => {
-      cb.checked = true;
-   });
-   for (const id of knownIdentities) {
-      activeFilterKeys.add(id.key);
-   }
-   void refreshMessages();
-});
-
-filterNoneBtn?.addEventListener('click', () => {
-   const checkboxes = document.querySelectorAll<HTMLInputElement>('.filter-item-checkbox');
-   checkboxes.forEach(cb => {
-      cb.checked = false;
-   });
-   activeFilterKeys.clear();
-   void refreshMessages();
-});
-
-refreshBtn?.addEventListener('click', async () => {
-   try {
-      await graffiti.refreshMessages();
-   } catch (e) {
-      console.warn('Backend refresh failed:', e);
-   }
-   await refreshMessages();
-});
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 setStatus('Ready');

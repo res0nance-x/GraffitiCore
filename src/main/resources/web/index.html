@@ -143,75 +143,45 @@ Network
 Messages
 ══════════════════════════════════════════════════════════════════════ -->
 		<section class="app-section" id="section-messages">
-			<div class="messages-layout">
-				<aside class="identities-sidebar" id="identities-sidebar">
-					<div class="sidebar-header">
-						<h2>Filter by Identity</h2>
-						<button id="btn-sidebar-close" class="sidebar-close-btn" title="Close Filters" type="button">
-							<span class="material-symbols-outlined">close</span>
-						</button>
-					</div>
-					<div class="sidebar-actions">
-						<button id="btn-filter-all" type="button">All</button>
-						<button id="btn-filter-none" type="button">None</button>
-					</div>
-					<div class="identities-filter-list" id="identities-filter-list">
-						<!-- Dynamically populated -->
-					</div>
-					<div class="sidebar-footer"
-						style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--button);">
-						<button id="btn-messages-refresh" style="width: 100%; padding: 0.5rem;" type="button">Refresh</button>
-					</div>
-				</aside>
+			<main class="messages-page">
+				<div id="messages"></div>
 
-				<div class="sidebar-backdrop" id="sidebar-backdrop"></div>
-
-				<main class="messages-page">
-					<button id="btn-filter-toggle" class="filter-toggle-btn" type="button"
-						style="margin-bottom: 0.5rem; align-self: start;">
-						<span class="material-symbols-outlined"
-							style="font-size: 1.2rem; vertical-align: middle;">filter_alt</span> Filter
-					</button>
-
-					<div id="messages"></div>
-
-					<section class="composer">
-						<form class="composer-form" id="message-form" novalidate>
-							<div class="field-grid">
-								<label class="field" style="display: flex; flex-direction: row; align-items: center; gap: 0.5rem;">
-									<span style="flex-shrink: 0;">From:</span>
-									<select id="from-field" required
-										style="flex: 1; min-width: 0; padding: 0.45rem 0.6rem;"></select>
-									<span id="from-empty-message" style="display: none; color: #ff5555; font-size: 0.88rem; font-weight: bold; padding: 0.45rem 0.6rem;">No identities available</span>
-								</label>
-								<label class="field" style="display: flex; flex-direction: row; align-items: center; gap: 0.5rem;">
-									<span style="flex-shrink: 0;">To:</span>
-									<select id="to-field" required
-										style="flex: 1; min-width: 0; padding: 0.45rem 0.6rem;"></select>
-									<span id="to-empty-message" style="display: none; color: #ff5555; font-size: 0.88rem; font-weight: bold; padding: 0.45rem 0.6rem;">No peers available</span>
-								</label>
-							</div>
-							<div id="same-author-recipient-warning" style="display: none; color: #ffae00; font-size: 0.88rem; font-weight: bold; margin-bottom: 0.5rem;">
-								Warning: many clients will not accept messages with the same author and recipient.
-							</div>
-
-							<label class="field">
-								<span>Text</span>
-								<textarea id="message-text" placeholder="Type your message" rows="6"></textarea>
+				<section class="composer">
+					<form class="composer-form" id="message-form" novalidate>
+						<div class="field-grid">
+							<label class="field" style="display: flex; flex-direction: row; align-items: center; gap: 0.5rem;">
+								<span style="flex-shrink: 0;">From:</span>
+								<select id="from-field" required
+									style="flex: 1; min-width: 0; padding: 0.45rem 0.6rem;"></select>
+								<span id="from-empty-message" style="display: none; color: #ff5555; font-size: 0.88rem; font-weight: bold; padding: 0.45rem 0.6rem;">No identities available</span>
 							</label>
+							<label class="field" style="display: flex; flex-direction: row; align-items: center; gap: 0.5rem;">
+								<span style="flex-shrink: 0;">To:</span>
+								<select id="to-field" required
+									style="flex: 1; min-width: 0; padding: 0.45rem 0.6rem;"></select>
+								<span id="to-empty-message" style="display: none; color: #ff5555; font-size: 0.88rem; font-weight: bold; padding: 0.45rem 0.6rem;">No peers available</span>
+							</label>
+						</div>
+						<div id="same-author-recipient-warning" style="display: none; color: #ffae00; font-size: 0.88rem; font-weight: bold; margin-bottom: 0.5rem;">
+							Warning: many clients will not accept messages with the same author and recipient.
+						</div>
 
-							<div class="composer-actions">
-								<button id="send-text" type="submit">Send</button>
-								<button id="send-file" type="button">Send File</button>
-								<input hidden id="file-input" type="file">
-							</div>
+						<label class="field">
+							<span>Text</span>
+							<textarea id="message-text" placeholder="Type your message" rows="6"></textarea>
+						</label>
+
+						<div class="composer-actions">
+							<button id="send-text" type="submit">Send</button>
+							<button id="send-file" type="button">Send File</button>
+							<input hidden id="file-input" type="file">
+						</div>
 
 
-							<p aria-live="polite" class="send-status" id="send-status">Ready</p>
-						</form>
-					</section>
-				</main>
-			</div>
+						<p aria-live="polite" class="send-status" id="send-status">Ready</p>
+					</form>
+				</section>
+			</main>
 		</section>
 
 		<!-- ══════════════════════════════════════════════════════════════════════════
