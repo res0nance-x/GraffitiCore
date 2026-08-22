@@ -1,4 +1,4 @@
-import { graffiti, IdentityEntry, openPackFile } from './graffiti-api.js';
+import { graffiti, IdentityEntry, PeerEntry, openPackFile } from './graffiti-api.js';
 import { onSectionShow, onWsEvent, onWsOpen, showSection } from './app.js';
 
 const form = document.getElementById('message-form') as HTMLFormElement | null;
@@ -20,6 +20,34 @@ const currentMessages = new Set<string>();
 /** Maps a display-name to its full key string for all known identities + peers. */
 const nameToKey = new Map<string, string>();
 let knownIdentities: IdentityEntry[] = [];
+let knownPeers: PeerEntry[] = [];
+
+function isSavedIdentity(key: string, identities: IdentityEntry[]): boolean {
+   return identities.some(id => id.key === key && id.persistent === true);
+}
+
+function isSavedRecipient(key: string, identities: IdentityEntry[], peers: PeerEntry[]): boolean {
+   if (peers.some(peer => peer.key === key)) {
+      return true;
+   }
+   return identities.some(id => id.peerKey === key && id.persistent === true);
+}
+
+async function saveOrClearRememberedFields(): Promise<void> {
+   const currentFrom = fromField?.value ?? '';
+   if (currentFrom && isSavedIdentity(currentFrom, knownIdentities)) {
+      await graffiti.setStore('graffiti:last-from-key', currentFrom);
+   } else {
+      await graffiti.setStore('graffiti:last-from-key', '');
+   }
+
+   const currentTo = toField?.value ?? '';
+   if (currentTo && isSavedRecipient(currentTo, knownIdentities, knownPeers)) {
+      await graffiti.setStore('graffiti:last-to-key', currentTo);
+   } else {
+      await graffiti.setStore('graffiti:last-to-key', '');
+   }
+}
 
 async function refreshNameMaps(): Promise<void> {
    try {
@@ -28,6 +56,7 @@ async function refreshNameMaps(): Promise<void> {
          graffiti.listPeers(),
       ]);
       knownIdentities = identities;
+      knownPeers = peers;
       nameToKey.clear();
       for (const id of identities) {
          nameToKey.set(id.name, id.key);
@@ -372,15 +401,45 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
    if (isText(msg.type)) {
       const pre = el.querySelector<HTMLPreElement>('.msg-text-content');
       if (pre) {
+         const renderText = (t: string) => {
+            const isTruncated = (msg.size && msg.size > 512) || t.length > 512;
+            if (isTruncated) {
+               pre.innerHTML = renderMarkdown(t.slice(0, 512) + '…');
+               let viewBtn = el.querySelector<HTMLButtonElement>('.btn-view-text');
+               if (!viewBtn) {
+                  viewBtn = document.createElement('button');
+                  viewBtn.type = 'button';
+                  viewBtn.className = 'btn-view-text btn-view-pack';
+                  viewBtn.style.display = 'inline-flex';
+                  viewBtn.style.alignItems = 'center';
+                  viewBtn.style.gap = '0.25rem';
+                  viewBtn.style.marginTop = '0.5rem';
+                  viewBtn.style.fontSize = '0.85rem';
+                  pre.after(viewBtn);
+               }
+               const sizeStr = msg.size ? ` (${formatSize(msg.size)})` : '';
+               viewBtn.textContent = `▶ View Entire Content${sizeStr}`;
+               viewBtn.onclick = (e: MouseEvent) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openFullContentViewer(msg, t);
+               };
+            } else {
+               pre.innerHTML = renderMarkdown(t);
+               const existingBtn = el.querySelector('.btn-view-text');
+               if (existingBtn) existingBtn.remove();
+            }
+         };
+
          const cached = textContentCache.get(msg.key);
          if (cached !== undefined) {
-            pre.textContent = cached;
+            renderText(cached);
          } else {
             fetch(url)
                .then(r => r.text())
                .then(t => {
                   textContentCache.set(msg.key, t);
-                  pre.textContent = t;
+                  renderText(t);
                })
                .catch((err: Error) => {
                   pre.textContent = `[Error loading content: ${err.message}]`;
@@ -443,6 +502,7 @@ async function populateSelects(): Promise<void> {
       graffiti.nodeInfo(),
    ]);
    knownIdentities = identities;
+   knownPeers = peers;
 
    nameToKey.clear();
    for (const id of identities) {
@@ -454,6 +514,11 @@ async function populateSelects(): Promise<void> {
 
    const prevFrom = fromField?.value ?? '';
    const prevTo = toField?.value ?? '';
+
+   const [savedFromKey, savedToKey] = await Promise.all([
+      graffiti.getStore('graffiti:last-from-key'),
+      graffiti.getStore('graffiti:last-to-key'),
+   ]);
 
    // Populate From: all available identities
    const fromEmptyMsg = document.getElementById('from-empty-message');
@@ -473,6 +538,8 @@ async function populateSelects(): Promise<void> {
          }
          if (prevFrom && identities.some(id => id.key === prevFrom)) {
             fromField.value = prevFrom;
+         } else if (savedFromKey && isSavedIdentity(savedFromKey, identities)) {
+            fromField.value = savedFromKey;
          } else if (identities.some(id => id.key === node.peerKey)) {
             fromField.value = node.peerKey;
          }
@@ -510,10 +577,16 @@ async function populateSelects(): Promise<void> {
             if (exists) {
                toField.value = prevTo;
             }
+         } else if (savedToKey && isSavedRecipient(savedToKey, identities, peers)) {
+            const exists = Array.from(toField.options).some(opt => opt.value === savedToKey);
+            if (exists) {
+               toField.value = savedToKey;
+            }
          }
       }
    }
    updateSameAuthorRecipientWarning();
+   void saveOrClearRememberedFields();
 }
 
 function getEnvelope(): { identityKey: string; peerKey: string } {
@@ -601,8 +674,14 @@ function updateSameAuthorRecipientWarning(): void {
    }
 }
 
-fromField?.addEventListener('change', updateSameAuthorRecipientWarning);
-toField?.addEventListener('change', updateSameAuthorRecipientWarning);
+fromField?.addEventListener('change', () => {
+   updateSameAuthorRecipientWarning();
+   void saveOrClearRememberedFields();
+});
+toField?.addEventListener('change', () => {
+   updateSameAuthorRecipientWarning();
+   void saveOrClearRememberedFields();
+});
 
 
 
@@ -729,5 +808,200 @@ onWsEvent('messages_reload', queueRefreshMessages);
 onWsEvent('peers_update', () => {
    void populateSelects();
    void queueRefreshMessages();
+});
+
+export function openFullContentViewer(msg: MessageData, fullText?: string): void {
+   const url = graffiti.contentUrl(msg.key);
+   const filenameEl = document.getElementById('view-content-filename');
+   const metaEl = document.getElementById('view-content-meta');
+   const downloadBtn = document.getElementById('btn-download-view-content') as HTMLAnchorElement | null;
+   const textPre = document.getElementById('view-content-text');
+
+   const authorLabel = msg.author || 'Unknown';
+   const recipientLabel = msg.recipient || 'Unknown';
+   const sizeStr = msg.size ? ` • ${formatSize(msg.size)}` : '';
+   const timeStr = msg.created ? ` • ${formatTime(msg.created)}` : '';
+
+   if (filenameEl) {
+      filenameEl.textContent = msg.name || 'Text Message';
+   }
+   if (metaEl) {
+      metaEl.textContent = `From ${authorLabel} to ${recipientLabel}${sizeStr}${timeStr}`;
+   }
+   if (downloadBtn) {
+      downloadBtn.href = url;
+      downloadBtn.download = msg.name || 'message.txt';
+   }
+
+   if (textPre) {
+      if (fullText !== undefined && fullText !== '') {
+         textPre.innerHTML = renderMarkdown(fullText);
+      } else {
+         const cached = textContentCache.get(msg.key);
+         if (cached !== undefined) {
+            textPre.innerHTML = renderMarkdown(cached);
+         } else {
+            textPre.textContent = 'Loading full message content…';
+            fetch(url)
+               .then(r => r.text())
+               .then(t => {
+                  textContentCache.set(msg.key, t);
+                  textPre.innerHTML = renderMarkdown(t);
+               })
+               .catch((err: Error) => {
+                  textPre.textContent = `[Error loading content: ${err.message}]`;
+               });
+         }
+      }
+   }
+
+   showSection('section-view-content');
+}
+
+function escHtml(str: string): string {
+   return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+}
+
+function inlineFormat(str: string): string {
+   const urls: string[] = [];
+   let formatted = str.replace(/(https?:\/\/[^\s<]+)/gi, (match) => {
+      let cleanUrl = match;
+      let trailingPunct = '';
+      while (/[.,!?)]$/.test(cleanUrl) && !cleanUrl.endsWith('()')) {
+         trailingPunct = cleanUrl.slice(-1) + trailingPunct;
+         cleanUrl = cleanUrl.slice(0, -1);
+      }
+      const idx = urls.length;
+      urls.push(cleanUrl);
+      return `@@@URL_${idx}@@@${trailingPunct}`;
+   });
+
+   formatted = formatted
+      .replace(/(\*\*\*|___)(.*?)\1/g, '<strong><em>$2</em></strong>')
+      .replace(/(\*\*|__)(.*?)\1/g, '<strong>$2</strong>')
+      .replace(/(^|\s|\()(\*|_)(.*?)\2(?=\s|\)|$|\.|,|\?|!)/g, '$1<em>$3</em>')
+      .replace(/~~(.*?)~~/g, '<del>$1</del>');
+
+   return formatted.replace(/@@@URL_(\d+)@@@/g, (_m, idxStr) => {
+      const idx = Number(idxStr);
+      const rawUrl = urls[idx] || '';
+      const hrefUrl = rawUrl.replace(/&amp;/g, '&');
+      return `<a href="${hrefUrl}" target="_blank" rel="noopener" class="msg-link">${rawUrl}</a>`;
+   });
+}
+
+export function renderMarkdown(raw: string): string {
+   if (!raw) return '';
+
+   let html = escHtml(raw);
+
+   const codeBlocks: string[] = [];
+   html = html.replace(/```([\s\S]*?)```/g, (_match, p1) => {
+      const index = codeBlocks.length;
+      codeBlocks.push(`<pre class="msg-code-block"><code>${p1.trim()}</code></pre>`);
+      return `@@@CODEBLOCK_${index}@@@`;
+   });
+
+   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+   const lines = html.split('\n');
+   const result: string[] = [];
+   let inList = false;
+   let listType: 'ul' | 'ol' | null = null;
+
+   for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      if (line.includes('@@@CODEBLOCK_')) {
+         if (inList) {
+            result.push(listType === 'ul' ? '</ul>' : '</ol>');
+            inList = false;
+            listType = null;
+         }
+         result.push(line);
+         continue;
+      }
+
+      const h3Match = line.match(/^###\s+(.+)$/);
+      const h2Match = line.match(/^##\s+(.+)$/);
+      const h1Match = line.match(/^#\s+(.+)$/);
+      const ulMatch = line.match(/^[\*\-\+]\s+(.+)$/);
+      const olMatch = line.match(/^\d+\.\s+(.+)$/);
+      const bqMatch = line.match(/^&gt;\s+(.+)$/);
+
+      if (ulMatch || olMatch) {
+         const currentType = ulMatch ? 'ul' : 'ol';
+         const itemContent = ulMatch ? ulMatch[1] : olMatch![1];
+
+         if (!inList || listType !== currentType) {
+            if (inList) {
+               result.push(listType === 'ul' ? '</ul>' : '</ol>');
+            }
+            result.push(currentType === 'ul' ? '<ul class="msg-list">' : '<ol class="msg-list">');
+            inList = true;
+            listType = currentType;
+         }
+         result.push(`<li>${inlineFormat(itemContent)}</li>`);
+         continue;
+      } else if (inList) {
+         result.push(listType === 'ul' ? '</ul>' : '</ol>');
+         inList = false;
+         listType = null;
+      }
+
+      if (h3Match) {
+         result.push(`<h3 class="msg-h3">${inlineFormat(h3Match[1])}</h3>`);
+      } else if (h2Match) {
+         result.push(`<h2 class="msg-h2">${inlineFormat(h2Match[1])}</h2>`);
+      } else if (h1Match) {
+         result.push(`<h1 class="msg-h1">${inlineFormat(h1Match[1])}</h1>`);
+      } else if (bqMatch) {
+         result.push(`<blockquote class="msg-blockquote">${inlineFormat(bqMatch[1])}</blockquote>`);
+      } else if (line.trim() === '') {
+         result.push('<div class="msg-spacer"></div>');
+      } else {
+         result.push(`<p class="msg-para">${inlineFormat(line)}</p>`);
+      }
+   }
+
+   if (inList) {
+      result.push(listType === 'ul' ? '</ul>' : '</ol>');
+   }
+
+   let finalHtml = result.join('');
+   finalHtml = finalHtml.replace(/@@@CODEBLOCK_(\d+)@@@/g, (_m, idx) => codeBlocks[Number(idx)] || '');
+   return finalHtml;
+}
+
+document.addEventListener('click', (e: MouseEvent) => {
+   const target = e.target as HTMLElement | null;
+   if (!target) return;
+
+   const viewBtn = target.closest<HTMLButtonElement>('.btn-view-text');
+   if (viewBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const item = viewBtn.closest<HTMLElement>('[data-msg-key]');
+      const key = item?.dataset.msgKey;
+      if (key) {
+         const msg = allFilteredMessages.find(m => m.key === key);
+         if (msg) {
+            openFullContentViewer(msg, textContentCache.get(key));
+         }
+      }
+      return;
+   }
+
+   const closeBtn = target.closest('#btn-close-view-content');
+   if (closeBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      showSection('section-messages');
+      return;
+   }
 });
 

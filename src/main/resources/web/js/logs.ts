@@ -3,8 +3,8 @@ import { onWsEvent } from './app.js';
 export interface LogEntry {
    id: string;
    timestamp: number;
-   category: 'download' | 'send' | 'sync' | 'network' | string;
-   status: 'in_progress' | 'completed' | 'failed' | 'info' | string;
+   category: 'download' | 'send' | 'received' | string;
+   status: 'in_progress' | 'started' | 'completed' | 'failed' | string;
    title: string;
    details: string;
    name?: string;
@@ -13,7 +13,6 @@ export interface LogEntry {
 }
 
 const logEntries: LogEntry[] = [];
-let activeFilter = 'all';
 
 function formatBytes(bytes?: number): string {
    if (bytes === undefined || bytes === null || bytes <= 0) return '';
@@ -28,18 +27,45 @@ function formatTime(timestamp: number): string {
    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
-function getCategoryIcon(category: string): string {
-   switch (category) {
-      case 'download': return 'download';
-      case 'send': return 'send';
-      case 'sync': return 'sync';
-      case 'network': return 'lan';
-      default: return 'info';
+function getTransferDisplayInfo(category: string, status: string): { icon: string; statusLabel: string; statusClass: string } {
+   const isSend = category === 'send';
+   const isInProgress = status === 'started' || status === 'in_progress';
+   const isCompleted = status === 'completed';
+   const isFailed = status === 'failed';
+
+   if (isSend) {
+      if (isInProgress) {
+         return { icon: 'upload', statusLabel: 'Sending…', statusClass: 'log-status-in_progress' };
+      }
+      if (isCompleted) {
+         return { icon: 'task_alt', statusLabel: 'Sent', statusClass: 'log-status-completed' };
+      }
+      if (isFailed) {
+         return { icon: 'error', statusLabel: 'Failed', statusClass: 'log-status-failed' };
+      }
+      return { icon: 'upload', statusLabel: status.replace('_', ' '), statusClass: `log-status-${status}` };
+   } else {
+      if (isInProgress) {
+         return { icon: 'download', statusLabel: 'Receiving…', statusClass: 'log-status-in_progress' };
+      }
+      if (isCompleted) {
+         return { icon: 'download_done', statusLabel: 'Received', statusClass: 'log-status-completed' };
+      }
+      if (isFailed) {
+         return { icon: 'error', statusLabel: 'Failed', statusClass: 'log-status-failed' };
+      }
+      return { icon: 'download', statusLabel: status.replace('_', ' '), statusClass: `log-status-${status}` };
    }
 }
 
 export function addLogEntry(entry: LogEntry): void {
-   // Prevent duplicate entries with identical IDs
+   // Only keep send and download/receive transfer logs
+   const cat = entry.category?.toLowerCase() ?? '';
+   if (cat !== 'send' && cat !== 'download' && cat !== 'received') {
+      return;
+   }
+
+   // Prevent duplicate entries with identical IDs or update existing ones
    const existingIndex = logEntries.findIndex(e => e.id === entry.id);
    if (existingIndex >= 0) {
       logEntries[existingIndex] = entry;
@@ -78,26 +104,21 @@ function renderLogs(): void {
    const summaryEl = document.getElementById('logs-summary-count');
    if (!container) return;
 
-   const filtered = activeFilter === 'all'
-      ? logEntries
-      : logEntries.filter(e => e.category === activeFilter);
-
    if (summaryEl) {
-      const activeDownloads = logEntries.filter(e => e.category === 'download' && (e.status === 'in_progress' || e.status === 'started')).length;
-      const downloadText = activeDownloads > 0 ? ` (${activeDownloads} active download${activeDownloads > 1 ? 's' : ''})` : '';
-      summaryEl.textContent = `${filtered.length} of ${logEntries.length} entries${downloadText}`;
+      const activeTransfers = logEntries.filter(e => e.status === 'in_progress' || e.status === 'started').length;
+      const activeText = activeTransfers > 0 ? ` (${activeTransfers} active)` : '';
+      summaryEl.textContent = `${logEntries.length} transfer${logEntries.length === 1 ? '' : 's'}${activeText}`;
    }
 
-   if (filtered.length === 0) {
-      container.innerHTML = `<div class="empty-row" id="logs-empty">No ${activeFilter === 'all' ? 'activity' : activeFilter} logs recorded.</div>`;
+   if (logEntries.length === 0) {
+      container.innerHTML = '<div class="empty-row" id="logs-empty">No transfer activity recorded yet.</div>';
       return;
    }
 
-   container.innerHTML = filtered.map(entry => {
-      const icon = getCategoryIcon(entry.category);
+   container.innerHTML = logEntries.map(entry => {
+      const { icon, statusLabel, statusClass } = getTransferDisplayInfo(entry.category, entry.status);
       const sizeStr = entry.size ? ` • ${formatBytes(entry.size)}` : '';
       const peerStr = entry.peer ? ` • ${entry.peer}` : '';
-      const statusLabel = entry.status.replace('_', ' ');
 
       return `
          <div class="log-entry-card" data-id="${entry.id}">
@@ -111,7 +132,7 @@ function renderLogs(): void {
                </div>
             </div>
             <div class="log-entry-right">
-               <span class="log-status-pill log-status-${entry.status}">${statusLabel}</span>
+               <span class="log-status-pill ${statusClass}">${statusLabel}</span>
                <span class="log-time">${formatTime(entry.timestamp)}</span>
             </div>
          </div>
@@ -125,9 +146,9 @@ onWsEvent('log_event', (msg: Record<string, unknown>) => {
    addLogEntry({
       id: String(msg.id || `log_${Date.now()}`),
       timestamp: Number(msg.timestamp) || Date.now(),
-      category: String(msg.category || 'network'),
+      category: String(msg.category || ''),
       status: String(msg.status || 'info'),
-      title: String(msg.title || 'System Event'),
+      title: String(msg.title || 'Transfer Event'),
       details: String(msg.details || ''),
       name: msg.name ? String(msg.name) : undefined,
       size: typeof msg.size === 'number' ? msg.size : undefined,
@@ -136,16 +157,6 @@ onWsEvent('log_event', (msg: Record<string, unknown>) => {
 });
 
 function initLogControls(): void {
-   const filterBtns = document.querySelectorAll<HTMLButtonElement>('.logs-filter-btn');
-   filterBtns.forEach(btn => {
-      btn.addEventListener('click', () => {
-         filterBtns.forEach(b => b.classList.remove('is-active'));
-         btn.classList.add('is-active');
-         activeFilter = btn.dataset.filter || 'all';
-         renderLogs();
-      });
-   });
-
    const clearBtn = document.getElementById('btn-logs-clear');
    clearBtn?.addEventListener('click', () => {
       logEntries.length = 0;
@@ -158,4 +169,3 @@ if (document.readyState === 'loading') {
 } else {
    initLogControls();
 }
-

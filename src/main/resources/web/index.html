@@ -233,33 +233,23 @@ Logs
 				<section class="net-card">
 					<div class="net-card-header" style="flex-wrap: wrap; gap: 0.75rem;">
 						<div>
-							<h3 style="font-size: 1.1rem; margin-bottom: 0.25rem;">Activity & Transfer Logs</h3>
+							<h3 style="font-size: 1.1rem; margin-bottom: 0.25rem;">Transfer Logs</h3>
 							<p style="font-size:0.85rem; opacity:0.75; margin:0;">
-								Track file downloads, message transfers, peer syncs, and network activity.
+								Track content being sent and received.
 							</p>
 						</div>
 						<div style="display: flex; gap: 0.5rem; align-items: center;">
+							<div style="font-size: 0.85rem; opacity: 0.8; margin-right: 0.5rem;" id="logs-summary-count">
+								0 entries
+							</div>
 							<button id="btn-logs-clear" type="button" style="display: inline-flex; align-items: center; gap: 0.25rem;">
 								<span class="material-symbols-outlined" style="font-size: 1rem;">delete_sweep</span> Clear Logs
 							</button>
 						</div>
 					</div>
 
-					<div class="logs-toolbar" style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0.75rem; margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--button);">
-						<div class="logs-filter-group" style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
-							<button class="logs-filter-btn is-active" data-filter="all" type="button">All</button>
-							<button class="logs-filter-btn" data-filter="download" type="button">Downloads</button>
-							<button class="logs-filter-btn" data-filter="send" type="button">Sending</button>
-							<button class="logs-filter-btn" data-filter="sync" type="button">Sync</button>
-							<button class="logs-filter-btn" data-filter="network" type="button">Network</button>
-						</div>
-						<div style="font-size: 0.85rem; opacity: 0.8;" id="logs-summary-count">
-							0 entries
-						</div>
-					</div>
-
 					<div id="logs-container" class="logs-feed" style="margin-top: 1rem; display: flex; flex-direction: column; gap: 0.5rem; max-height: 600px; overflow-y: auto;">
-						<div class="empty-row" id="logs-empty">No activity logged yet.</div>
+						<div class="empty-row" id="logs-empty">No transfer activity recorded yet.</div>
 					</div>
 				</section>
 			</main>
@@ -450,6 +440,33 @@ Settings
 							unique fingerprint of each identity key.
 						</li>
 					</ul>
+				</section>
+			</main>
+		</section>
+
+		<!-- ══════════════════════════════════════════════════════════════════════════
+	Full Message Content View Section
+	══════════════════════════════════════════════════════════════════════ -->
+		<section class="app-section" id="section-view-content">
+			<main>
+				<section class="net-card">
+					<div class="net-card-header" style="flex-wrap: wrap; gap: 0.75rem; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
+						<div>
+							<h3 id="view-content-filename" style="font-size: 1.2rem; margin-bottom: 0.25rem;">Full Message Content</h3>
+							<p id="view-content-meta" style="font-size: 0.85rem; opacity: 0.75; margin: 0;">Full text message payload</p>
+						</div>
+						<div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+							<a id="btn-download-view-content" class="btn" style="display: inline-flex; align-items: center; gap: 0.25rem; text-decoration: none;" download href="#">
+								<span class="material-symbols-outlined" style="font-size: 1.1rem;">download</span> Download File
+							</a>
+							<button id="btn-close-view-content" type="button" style="display: inline-flex; align-items: center; gap: 0.25rem;">
+								<span class="material-symbols-outlined" style="font-size: 1.1rem;">arrow_back</span> Back to Messages
+							</button>
+						</div>
+					</div>
+					<div class="view-content-body" style="margin-top: 1rem;">
+						<pre id="view-content-text" class="msg-text-content" style="white-space: pre-wrap; word-break: break-word; font-family: var(--message-font-family, inherit); padding: 1.25rem; border-radius: 8px; background: rgba(0,0,0,0.18); max-height: 70vh; overflow-y: auto; line-height: 1.5; font-size: 0.95rem; margin: 0;"></pre>
+					</div>
 				</section>
 			</main>
 		</section>

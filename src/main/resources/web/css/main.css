@@ -19,15 +19,17 @@ body {
     color: var(--primary);
 }
 
-button {
+button, .btn {
     background: var(--background);
     padding: .15rem 0.3rem;
     color: var(--button);
     border: 1px solid var(--button);
     transition: background 0.15s ease;
+    cursor: pointer;
+    text-decoration: none;
 }
 
-button:hover {
+button:hover, .btn:hover {
     background: var(--background-hover);
 }
 
@@ -354,6 +356,12 @@ h6 {
     color: var(--button);
     word-break: break-all;
     font-size: 0.9rem;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.msg-download-link:hover {
+    filter: brightness(1.2);
 }
 
 .message-actions {
@@ -803,6 +811,74 @@ input {
     background: rgba(158, 158, 158, 0.2);
     color: #e0e0e0;
     border: 1px solid rgba(158, 158, 158, 0.4);
+}
+
+/* ── Markdown message formatting ────────────────────────────────────────── */
+.msg-text-content .msg-h1,
+.msg-h1 {
+    font-size: 1.25rem;
+    margin: 0.4rem 0 0.2rem 0;
+    font-weight: bold;
+}
+.msg-text-content .msg-h2,
+.msg-h2 {
+    font-size: 1.1rem;
+    margin: 0.35rem 0 0.15rem 0;
+    font-weight: bold;
+}
+.msg-text-content .msg-h3,
+.msg-h3 {
+    font-size: 1rem;
+    margin: 0.3rem 0 0.1rem 0;
+    font-weight: bold;
+}
+.msg-text-content .msg-para,
+.msg-para {
+    margin: 0.15rem 0;
+    line-height: 1.45;
+}
+.msg-text-content .msg-spacer,
+.msg-spacer {
+    height: 0.4rem;
+}
+.msg-text-content .msg-list,
+.msg-list {
+    margin: 0.25rem 0 0.25rem 1.25rem;
+    padding: 0;
+}
+.msg-text-content .msg-list li,
+.msg-list li {
+    margin-bottom: 0.15rem;
+    line-height: 1.4;
+}
+.msg-text-content .msg-blockquote,
+.msg-blockquote {
+    border-left: 3px solid var(--button);
+    padding-left: 0.6rem;
+    margin: 0.3rem 0;
+    opacity: 0.85;
+    font-style: italic;
+}
+.msg-text-content code,
+code {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    font-family: monospace;
+    font-size: 0.88em;
+}
+.msg-text-content .msg-code-block,
+.msg-code-block {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 0.5rem;
+    border-radius: 4px;
+    overflow-x: auto;
+    margin: 0.3rem 0;
+}
+.msg-text-content .msg-link,
+.msg-link {
+    color: var(--button);
+    text-decoration: underline;
 }
 
 @keyframes log-pulse {
