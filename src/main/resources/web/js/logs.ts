@@ -1,4 +1,5 @@
 import { onWsEvent } from './app.js';
+import { graffiti } from './graffiti-api.js';
 
 export interface LogEntry {
    id: string;
@@ -35,7 +36,7 @@ function getTransferDisplayInfo(category: string, status: string): { icon: strin
 
    if (isSend) {
       if (isInProgress) {
-         return { icon: 'upload', statusLabel: 'Sending…', statusClass: 'log-status-in_progress' };
+         return { icon: 'upload', statusLabel: 'Sending', statusClass: 'log-status-in_progress' };
       }
       if (isCompleted) {
          return { icon: 'task_alt', statusLabel: 'Sent', statusClass: 'log-status-completed' };
@@ -46,7 +47,7 @@ function getTransferDisplayInfo(category: string, status: string): { icon: strin
       return { icon: 'upload', statusLabel: status.replace('_', ' '), statusClass: `log-status-${status}` };
    } else {
       if (isInProgress) {
-         return { icon: 'download', statusLabel: 'Receiving…', statusClass: 'log-status-in_progress' };
+         return { icon: 'download', statusLabel: 'Receiving', statusClass: 'log-status-in_progress' };
       }
       if (isCompleted) {
          return { icon: 'download_done', statusLabel: 'Received', statusClass: 'log-status-completed' };
@@ -102,13 +103,37 @@ export function logActivity(
 function renderLogs(): void {
    const container = document.getElementById('logs-container');
    const summaryEl = document.getElementById('logs-summary-count');
-   if (!container) return;
+   const navBadge = document.getElementById('nav-transfer-badge');
+
+   const activeIn = logEntries.filter(e => (e.category === 'download' || e.category === 'received') && (e.status === 'in_progress' || e.status === 'started')).length;
+   const activeOut = logEntries.filter(e => (e.category === 'send') && (e.status === 'in_progress' || e.status === 'started')).length;
+   const activeTransfers = activeIn + activeOut;
 
    if (summaryEl) {
-      const activeTransfers = logEntries.filter(e => e.status === 'in_progress' || e.status === 'started').length;
-      const activeText = activeTransfers > 0 ? ` (${activeTransfers} active)` : '';
+      let activeText = '';
+      if (activeTransfers > 0) {
+         const parts = [];
+         if (activeOut > 0) parts.push(`${activeOut} outgoing`);
+         if (activeIn > 0) parts.push(`${activeIn} incoming`);
+         activeText = ` (${parts.join(', ')} active)`;
+      }
       summaryEl.textContent = `${logEntries.length} transfer${logEntries.length === 1 ? '' : 's'}${activeText}`;
    }
+
+   if (navBadge) {
+      if (activeTransfers > 0) {
+         const parts = [];
+         if (activeOut > 0) parts.push(`↑${activeOut}`);
+         if (activeIn > 0) parts.push(`↓${activeIn}`);
+         navBadge.textContent = parts.join(' ');
+         navBadge.hidden = false;
+         navBadge.title = `Active Transfer in progress: ${activeOut} outgoing, ${activeIn} incoming`;
+      } else {
+         navBadge.hidden = true;
+      }
+   }
+
+   if (!container) return;
 
    if (logEntries.length === 0) {
       container.innerHTML = '<div class="empty-row" id="logs-empty">No transfer activity recorded yet.</div>';
@@ -142,6 +167,31 @@ function renderLogs(): void {
 
 // ── Event Handlers & Subscriptions ───────────────────────────────────────────
 
+export async function fetchLogs(): Promise<void> {
+   try {
+      const res = await graffiti.getLogs();
+      if (res.ok && Array.isArray(res.logs)) {
+         logEntries.length = 0;
+         res.logs.forEach((msg: any) => {
+            logEntries.push({
+               id: String(msg.id || `log_${Date.now()}`),
+               timestamp: Number(msg.timestamp) || Date.now(),
+               category: String(msg.category || ''),
+               status: String(msg.status || 'info'),
+               title: String(msg.title || 'Transfer Event'),
+               details: String(msg.details || ''),
+               name: msg.name ? String(msg.name) : undefined,
+               size: typeof msg.size === 'number' ? msg.size : undefined,
+               peer: msg.peer ? String(msg.peer) : undefined
+            });
+         });
+         renderLogs();
+      }
+   } catch (err) {
+      console.error('[logs] Failed to fetch server logs:', err);
+   }
+}
+
 onWsEvent('log_event', (msg: Record<string, unknown>) => {
    addLogEntry({
       id: String(msg.id || `log_${Date.now()}`),
@@ -156,12 +206,21 @@ onWsEvent('log_event', (msg: Record<string, unknown>) => {
    });
 });
 
+onWsEvent('logs_cleared', () => {
+   logEntries.length = 0;
+   renderLogs();
+});
+
 function initLogControls(): void {
    const clearBtn = document.getElementById('btn-logs-clear');
-   clearBtn?.addEventListener('click', () => {
+   clearBtn?.addEventListener('click', async () => {
+      try {
+         await graffiti.clearLogs();
+      } catch (_) {}
       logEntries.length = 0;
       renderLogs();
    });
+   fetchLogs();
 }
 
 if (document.readyState === 'loading') {

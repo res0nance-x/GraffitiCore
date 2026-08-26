@@ -786,7 +786,6 @@ input {
     background: rgba(33, 150, 243, 0.2);
     color: #64b5f6;
     border: 1px solid rgba(33, 150, 243, 0.4);
-    animation: log-pulse 1.5s infinite;
 }
 
 .log-status-started {
@@ -881,8 +880,16 @@ code {
     text-decoration: underline;
 }
 
-@keyframes log-pulse {
-    0% { opacity: 1; }
-    50% { opacity: 0.6; }
-    100% { opacity: 1; }
+.nav-transfer-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(33, 150, 243, 0.9);
+    color: #fff;
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 0.1rem 0.4rem;
+    border-radius: 999px;
+    margin-left: 0.35rem;
+    vertical-align: middle;
 }

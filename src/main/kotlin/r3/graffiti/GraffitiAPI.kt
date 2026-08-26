@@ -20,22 +20,32 @@ import java.net.NetworkInterface
 import java.net.URLDecoder
 
 class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : ContentHandler {
+	val transferLogs = java.util.concurrent.CopyOnWriteArrayList<JSONObject>()
+
 	init {
 		// Wire up p2p event callbacks — p2p is always ready at construction.
 		p2p.onLogEvent = { category, status, title, details, name, size, peer ->
-			sendToAll(
-				JSONObject()
-					.put("event", "log_event")
-					.put("id", "log_${System.currentTimeMillis()}_${(1000..9999).random()}")
-					.put("timestamp", System.currentTimeMillis())
-					.put("category", category)
-					.put("status", status)
-					.put("title", title)
-					.put("details", details)
-					.put("name", name ?: "")
-					.put("size", size ?: 0L)
-					.put("peer", peer ?: "")
-			)
+			val logObj = JSONObject()
+				.put("event", "log_event")
+				.put("id", "log_${System.currentTimeMillis()}_${(1000..9999).random()}")
+				.put("timestamp", System.currentTimeMillis())
+				.put("category", category)
+				.put("status", status)
+				.put("title", title)
+				.put("details", details)
+				.put("name", name ?: "")
+				.put("size", size ?: 0L)
+				.put("peer", peer ?: "")
+
+			val cat = category.lowercase()
+			if (cat == "download" || cat == "send" || cat == "received") {
+				transferLogs.add(0, logObj)
+				while (transferLogs.size > 200) {
+					transferLogs.removeAt(transferLogs.size - 1)
+				}
+			}
+
+			sendToAll(logObj)
 		}
 		p2p.onNodeConnected = { node, inbound ->
 			val host = node.remoteAddress.address.hostAddress
@@ -150,6 +160,8 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/connections" -> connections()
 			"/api/discover" -> if (header.optBoolean("scan")) discover(true) else discover(false)
 			"/api/store" -> handleStore(header, content)
+			"/api/logs" -> listLogs()
+			"/api/logs/clear" -> clearLogs()
 			"/api/pack/open" -> openPackApi(header, content)
 			"/api/pack/close" -> closePackApi(header)
 			else -> null
@@ -212,6 +224,19 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 	private fun closePackApi(header: JSONObject): Content {
 		val sessionId = header.optString("sessionId", null) ?: return err("Missing 'sessionId' parameter")
 		onClosePack?.invoke(sessionId)
+		return ok()
+	}
+
+	// ── Transfer Logs ─────────────────────────────────────────────────────────
+	private fun listLogs(): Content {
+		val arr = JSONArray()
+		transferLogs.forEach { arr.put(it) }
+		return ok { put("logs", arr) }
+	}
+
+	private fun clearLogs(): Content {
+		transferLogs.clear()
+		sendToAll(JSONObject().put("event", "logs_cleared"))
 		return ok()
 	}
 

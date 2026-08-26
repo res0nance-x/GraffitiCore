@@ -274,7 +274,11 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 				// We serve each key's EncryptedMetaMessage and EncryptedContentMessage in turn.
 				ContentRequestMessage.type -> {
 					val req = ContentRequestMessage.read(rawHead.toDataInputStream())
+					val peerLabel = nodePeerMap[node]?.key?.name ?: node.remoteAddress.toString()
 					log("Received ContentRequest from ${node.remoteAddress}: ${req.keys.joinToString { it.name }}")
+					onLogEvent?.invoke("send", "started", "Content Requested", "Peer $peerLabel requested ${req.keys.size} item(s)", null, null, peerLabel)
+					var totalSentBytes = 0L
+					var sentCount = 0
 					req.keys.forEach { key ->
 						if (deletedCache.contains(key)) return@forEach
 						val eMeta = metaCache[key] ?: run {
@@ -287,13 +291,20 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 						if (eMeta != null) {
 							if (smallBytes != null) {
 								node.send(EncryptedContentMessage(eMeta).serialize(), smallBytes)
+								totalSentBytes += smallBytes.size
+								sentCount++
 							} else {
 								val contentFile = File(contentDir, "$key")
 								if (contentFile.exists()) {
 									node.send(EncryptedContentMessage(eMeta).serialize(), contentFile)
+									totalSentBytes += contentFile.length()
+									sentCount++
 								}
 							}
 						}
+					}
+					if (sentCount > 0) {
+						onLogEvent?.invoke("send", "completed", "Content Sent", "Sent $sentCount item(s) ($totalSentBytes bytes) to $peerLabel", null, totalSentBytes, peerLabel)
 					}
 					log("ContentRequest from ${node.remoteAddress}: served ${req.keys.size} keys")
 				}

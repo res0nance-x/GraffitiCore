@@ -606,7 +606,7 @@ async function sendPayload(payload: Payload): Promise<void> {
       return;
    }
    isSending = true;
-   setStatus(`Sending ${payload.type}…`);
+   setStatus(`Sending ${payload.type}`);
    try {
       const { identityKey, peerKey } = payload;
       if (!identityKey || !peerKey) throw new Error('Select a sender and recipient first.');
