@@ -24,25 +24,16 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 
 	init {
 		// Wire up p2p event callbacks — p2p is always ready at construction.
-		p2p.onLogEvent = { category, status, title, details, name, size, peer ->
+		p2p.onLogEvent = { details ->
 			val logObj = JSONObject()
 				.put("event", "log_event")
 				.put("id", "log_${System.currentTimeMillis()}_${(1000..9999).random()}")
 				.put("timestamp", System.currentTimeMillis())
-				.put("category", category)
-				.put("status", status)
-				.put("title", title)
 				.put("details", details)
-				.put("name", name ?: "")
-				.put("size", size ?: 0L)
-				.put("peer", peer ?: "")
 
-			val cat = category.lowercase()
-			if (cat == "download" || cat == "send" || cat == "received") {
-				transferLogs.add(0, logObj)
-				while (transferLogs.size > 200) {
-					transferLogs.removeAt(transferLogs.size - 1)
-				}
+			transferLogs.add(0, logObj)
+			while (transferLogs.size > 200) {
+				transferLogs.removeAt(transferLogs.size - 1)
 			}
 
 			sendToAll(logObj)
@@ -51,13 +42,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			val host = node.remoteAddress.address.hostAddress
 			val port = node.remoteAddress.port
 			p2p.onLogEvent?.invoke(
-				"network",
-				"info",
-				"Peer Connected",
-				"Connected to peer at $host:$port (${if (inbound) "inbound" else "outbound"})",
-				null,
-				null,
-				"$host:$port"
+				"Connected to peer at $host:$port (${if (inbound) "inbound" else "outbound"})"
 			)
 			sendToAll(
 				JSONObject()
@@ -71,13 +56,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			val host = node.remoteAddress.address.hostAddress
 			val port = node.remoteAddress.port
 			p2p.onLogEvent?.invoke(
-				"network",
-				"info",
-				"Peer Disconnected",
-				"Disconnected from peer at $host:$port",
-				null,
-				null,
-				"$host:$port"
+				"Disconnected from peer at $host:$port"
 			)
 			sendToAll(
 				JSONObject()
@@ -96,12 +75,10 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 					.put("peerName", peer.key.name)
 					.put("relay", p2p.isNodeRelay(node))
 			)
-			p2p.syncAllConnectedNodes()
 		}
 		p2p.onMessageReceived = { encKey ->
 			val metaFile = File(p2p.metaDir, "$encKey")
-			val contentFile = File(p2p.contentDir, "$encKey")
-			if (metaFile.exists() && contentFile.exists()) {
+			if (metaFile.exists() && p2p.hasContent(encKey)) {
 				try {
 					val eMeta = DataInputStream(metaFile.inputStream()).use { EncryptedContentMetaData.read(it) }
 					val iden = p2p.getIdentityByKey(eMeta.recipient) ?: error("No identity found for ${eMeta.recipient}")
@@ -361,8 +338,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		p2p.metaDir.listFiles { f -> f.isFile }.orEmpty().forEach { metaFile ->
 			try {
 				val eMeta = DataInputStream(metaFile.inputStream()).use { EncryptedContentMetaData.read(it) }
-				val contentFile = File(p2p.contentDir, eMeta.key.toString())
-				if (!contentFile.exists()) return@forEach
+				if (!p2p.hasContent(eMeta.key)) return@forEach
 				val iden = identities[eMeta.recipient] ?: return@forEach
 				val (meta, _) = eMeta.decrypt(iden)
 				val fileTime = metaFile.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis()

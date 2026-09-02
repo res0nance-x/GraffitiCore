@@ -672,27 +672,6 @@ input {
 
 /* ── Activity & Transfer Logs ────────────────────────────────────────────── */
 
-.logs-filter-btn {
-    border-radius: 4px;
-    padding: 0.25rem 0.6rem;
-    font-size: 0.82rem;
-    cursor: pointer;
-    background: var(--background);
-    color: var(--button);
-    border: 1px solid var(--button);
-    transition: all 0.15s ease;
-}
-
-.logs-filter-btn:hover {
-    background: var(--background-hover);
-}
-
-.logs-filter-btn.is-active {
-    background: var(--button);
-    color: var(--background);
-    font-weight: 600;
-}
-
 .log-entry-card {
     border: 1px solid var(--button);
     border-radius: 6px;
@@ -718,27 +697,6 @@ input {
     min-width: 0;
 }
 
-.log-icon {
-    font-size: 1.25rem;
-    flex-shrink: 0;
-}
-
-.log-icon-download {
-    color: #2196f3;
-}
-
-.log-icon-send {
-    color: #9c27b0;
-}
-
-.log-icon-sync {
-    color: #ff9800;
-}
-
-.log-icon-network {
-    color: #4caf50;
-}
-
 .log-details {
     display: flex;
     flex-direction: column;
@@ -751,11 +709,6 @@ input {
     align-items: center;
     gap: 0.5rem;
     flex-wrap: wrap;
-}
-
-.log-title {
-    font-weight: 600;
-    white-space: nowrap;
 }
 
 .log-message {
@@ -778,46 +731,7 @@ input {
     white-space: nowrap;
 }
 
-.log-status-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    font-size: 0.72rem;
-    font-weight: 600;
-    padding: 0.15rem 0.45rem;
-    border-radius: 4px;
-    text-transform: capitalize;
-}
 
-.log-status-in_progress {
-    background: rgba(33, 150, 243, 0.2);
-    color: #64b5f6;
-    border: 1px solid rgba(33, 150, 243, 0.4);
-}
-
-.log-status-started {
-    background: rgba(33, 150, 243, 0.2);
-    color: #64b5f6;
-    border: 1px solid rgba(33, 150, 243, 0.4);
-}
-
-.log-status-completed {
-    background: rgba(76, 175, 80, 0.2);
-    color: #81c784;
-    border: 1px solid rgba(76, 175, 80, 0.4);
-}
-
-.log-status-failed {
-    background: rgba(244, 67, 54, 0.2);
-    color: #e57373;
-    border: 1px solid rgba(244, 67, 54, 0.4);
-}
-
-.log-status-info {
-    background: rgba(158, 158, 158, 0.2);
-    color: #e0e0e0;
-    border: 1px solid rgba(158, 158, 158, 0.4);
-}
 
 /* ── Markdown message formatting ────────────────────────────────────────── */
 .msg-text-content .msg-h1,
@@ -887,19 +801,7 @@ code {
     text-decoration: underline;
 }
 
-.nav-transfer-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(33, 150, 243, 0.9);
-    color: #fff;
-    font-size: 0.7rem;
-    font-weight: 700;
-    padding: 0.1rem 0.4rem;
-    border-radius: 999px;
-    margin-left: 0.35rem;
-    vertical-align: middle;
-}
+
 
 #nav-network-icon {
     transition: color 0.2s ease;
