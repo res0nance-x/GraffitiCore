@@ -40,10 +40,20 @@ export function onWsEvent(event: string, fn: WsEventHandler): void {
    wsEventHandlers.get(event)!.push(fn);
 }
 
+let currentActiveSectionId = '';
+const sectionScrollPositions = new Map<string, number>();
+
 /**
- * Show the section with the given id and hide all others.
+ * Show the section with the given id and hide all others, while preserving
+ * scroll position across section switches.
  */
 export function showSection(id: string): void {
+   // 1. Save scroll position of currently leaving section
+   if (currentActiveSectionId) {
+      sectionScrollPositions.set(currentActiveSectionId, window.scrollY);
+   }
+
+   // 2. Toggle active classes
    for (const section of document.querySelectorAll<HTMLElement>('.app-section')) {
       section.classList.toggle('is-active', section.id === id);
    }
@@ -52,7 +62,20 @@ export function showSection(id: string): void {
       link.classList.toggle('is-active', active);
       link.setAttribute('aria-current', active ? 'page' : 'false');
    }
+
+   currentActiveSectionId = id;
+
+   // 3. Restore scroll position for entering section
+   const savedScrollY = sectionScrollPositions.get(id) ?? 0;
+   window.scrollTo(0, savedScrollY);
+
+   // 4. Run section handlers
    for (const fn of (sectionHandlers.get(id) ?? [])) fn();
+
+   // 5. Re-apply scroll position after layout updates
+   requestAnimationFrame(() => {
+      window.scrollTo(0, savedScrollY);
+   });
 }
 
 /**
@@ -70,11 +93,22 @@ export function initNav(defaultSection = 'section-network'): void {
 
 // ── WebSocket client ──────────────────────────────────────────────────────────
 
-function initWebSocketClient(): void {
+let activeSocket: WebSocket | null = null;
+let reconnectTimer: number | null = null;
+
+export function initWebSocketClient(): void {
+   if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+   }
+   if (activeSocket && (activeSocket.readyState === WebSocket.OPEN || activeSocket.readyState === WebSocket.CONNECTING)) {
+      return;
+   }
    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
    const socket = new WebSocket(`${proto}//${location.host}/api/notify`);
+   activeSocket = socket;
 
-    socket.addEventListener('open', () => {
+   socket.addEventListener('open', () => {
       console.log('WebSocket connection opened');
       isWsOpen = true;
       for (const handler of wsOpenHandlers) {
@@ -107,8 +141,35 @@ function initWebSocketClient(): void {
    socket.addEventListener('close', () => {
       console.warn('WebSocket closed — reconnecting in 3 s');
       isWsOpen = false;
-      setTimeout(initWebSocketClient, 3000);
+      if (activeSocket === socket) activeSocket = null;
+      if (reconnectTimer === null) {
+         reconnectTimer = window.setTimeout(() => {
+            reconnectTimer = null;
+            initWebSocketClient();
+         }, 3000);
+      }
    });
 }
+
+function checkWebSocketOnForeground(): void {
+   if (!activeSocket || activeSocket.readyState === WebSocket.CLOSED || activeSocket.readyState === WebSocket.CLOSING) {
+      console.log('Foreground event: reconnecting WebSocket');
+      initWebSocketClient();
+   }
+}
+
+document.addEventListener('visibilitychange', () => {
+   if (document.visibilityState === 'visible') {
+      checkWebSocketOnForeground();
+   }
+});
+
+window.addEventListener('focus', () => {
+   checkWebSocketOnForeground();
+});
+
+window.addEventListener('pageshow', () => {
+   checkWebSocketOnForeground();
+});
 
 initWebSocketClient();

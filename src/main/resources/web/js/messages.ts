@@ -402,9 +402,9 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
       const pre = el.querySelector<HTMLPreElement>('.msg-text-content');
       if (pre) {
          const renderText = (t: string) => {
-            const isTruncated = (msg.size && msg.size > 512) || t.length > 512;
+            const isTruncated = (msg.size && msg.size > 1024 + 100) || t.length > (1024 + 100);
             if (isTruncated) {
-               pre.innerHTML = renderMarkdown(t.slice(0, 512) + '…');
+               pre.innerHTML = renderMarkdown(t.slice(0, 1024) + '…');
                let viewBtn = el.querySelector<HTMLButtonElement>('.btn-view-text');
                if (!viewBtn) {
                   viewBtn = document.createElement('button');
@@ -654,6 +654,12 @@ form?.addEventListener('submit', async (event: SubmitEvent) => {
 });
 
 messageText?.addEventListener('input', () => autoResizeTextarea(messageText));
+messageText?.addEventListener('keydown', (event: KeyboardEvent) => {
+   if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      form?.requestSubmit();
+   }
+});
 
 sendFileButton?.addEventListener('click', () => fileInput?.click());
 
@@ -729,19 +735,54 @@ messagesSection?.addEventListener('drop', async (event: DragEvent) => {
    await sendPayload({ type: 'text', text: content.value as string, ...getEnvelope() });
 });
 
+// ── Clipboard paste (files / screenshots) ────────────────────────────────────
+messagesSection?.addEventListener('paste', async (event: ClipboardEvent) => {
+   const files = event.clipboardData?.files;
+   if (files && files.length > 0) {
+      event.preventDefault();
+      const file = files[0];
+      await sendPayload({ type: 'file', fileName: file.name, file, ...getEnvelope() });
+   }
+});
 
 
-// ── Bootstrap ─────────────────────────────────────────────────────────────────
+
+// ── Bootstrap & Foreground Lifecycle ──────────────────────────────────────────
 setStatus('Ready');
 autoResizeTextarea(messageText);
 onSectionShow('section-messages', () => {
    void populateSelects();
+   scheduleVListRender();
    void queueRefreshMessages();
 });
 
 onWsOpen(() => {
    void populateSelects();
    void queueRefreshMessages();
+});
+
+async function handleForegroundRefresh(): Promise<void> {
+   try {
+      await graffiti.refreshMessages();
+   } catch (e) {
+      console.warn('Foreground refreshMessages error:', e);
+   }
+   await populateSelects();
+   await refreshMessages();
+}
+
+document.addEventListener('visibilitychange', () => {
+   if (document.visibilityState === 'visible') {
+      void handleForegroundRefresh();
+   }
+});
+
+window.addEventListener('focus', () => {
+   void handleForegroundRefresh();
+});
+
+window.addEventListener('pageshow', () => {
+   void handleForegroundRefresh();
 });
 
 queueRefreshMessages();

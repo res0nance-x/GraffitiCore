@@ -241,7 +241,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 						val wantContent = mutableListOf<EncryptedMetaKey>()
 						log("Received QueryResponse from ${node.remoteAddress}: ${headerList.size} header item(s)")
 						headerList.forEach { msgHeader ->
-							if (deletedCache.contains(msgHeader.key)) return@forEach
+							if (isMessageDeleted(msgHeader.key)) return@forEach
 							if (msgHeader.author.arr.contentEquals(msgHeader.recipient.arr)) {
 								log("Ignoring header ${msgHeader.key.name} from ${node.remoteAddress}: author and recipient are the same")
 								return@forEach
@@ -280,7 +280,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 					var totalSentBytes = 0L
 					var sentCount = 0
 					req.keys.forEach { key ->
-						if (deletedCache.contains(key)) return@forEach
+						if (isMessageDeleted(key)) return@forEach
 						val eMeta = metaCache[key] ?: run {
 							val metaFile = File(metaDir, "$key")
 							if (metaFile.exists()) {
@@ -313,7 +313,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 					val contentMessage = EncryptedContentMessage.read(rawHead.toDataInputStream())
 					val eMeta = contentMessage.eMeta
 					if (file != null) {
-						if (deletedCache.contains(eMeta.key)) {
+						if (isMessageDeleted(eMeta.key)) {
 							file.delete()
 							log("Ignoring content ${eMeta.key.name} from ${node.remoteAddress}: key is deleted")
 						} else if (eMeta.author.arr.contentEquals(eMeta.recipient.arr)) {
@@ -722,13 +722,14 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		return EncryptContent(pass, contentSource, meta)
 	}
 
-	fun isMessageDeleted(key: EncryptedMetaKey): Boolean = deletedCache.contains(key)
+	fun isMessageDeleted(key: EncryptedMetaKey): Boolean =
+		deletedCache.contains(key) || File(deletedDir, "$key").exists()
 
 	@Synchronized
 	fun deleteMessage(key: EncryptedMetaKey): Boolean {
+		val hadMeta = metaCache.containsKey(key) || isMessageDeleted(key) || File(metaDir, "$key").exists()
 		metaCache.remove(key)
 		smallContentCache.remove(key)
-		val hadMeta = metaCache.containsKey(key) || deletedCache.contains(key) || File(metaDir, "$key").exists() || File(deletedDir, "$key").exists()
 		deletedCache.add(key)
 		val metaFile = File(metaDir, "$key")
 		val deletedMetaFile = File(deletedDir, "$key")
@@ -741,6 +742,10 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 					log("Failed to move meta ${key.name} to deleted directory: ${it.message}")
 					return false
 				}
+			}
+		} else if (!deletedMetaFile.exists()) {
+			runCatching {
+				deletedMetaFile.createNewFile()
 			}
 		}
 		val contentFile = File(contentDir, "$key")

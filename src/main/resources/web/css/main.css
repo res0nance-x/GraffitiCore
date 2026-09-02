@@ -45,6 +45,13 @@ th {
     vertical-align: middle;
 }
 
+.container > header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: var(--background);
+}
+
 /* Reset default list styling */
 nav ul {
     list-style: none;
@@ -892,4 +899,16 @@ code {
     border-radius: 999px;
     margin-left: 0.35rem;
     vertical-align: middle;
+}
+
+#nav-network-icon {
+    transition: color 0.2s ease;
+}
+
+#nav-network-icon.nav-icon-connected {
+    color: #4caf50;
+}
+
+#nav-network-icon.nav-icon-disconnected {
+    color: #f44336;
 }

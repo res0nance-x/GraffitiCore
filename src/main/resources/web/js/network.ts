@@ -103,17 +103,27 @@ async function loadRelayMode(): Promise<void> {
 const connBody = () => document.getElementById('tbl-connections-body') as HTMLElement;
 const connEmpty = () => document.getElementById('connections-empty') as HTMLElement;
 
+function updateNetworkNavIcon(): void {
+   const icon = document.getElementById('nav-network-icon');
+   if (!icon) return;
+   const isConnected = connections.size > 0;
+   icon.classList.toggle('nav-icon-connected', isConnected);
+   icon.classList.toggle('nav-icon-disconnected', !isConnected);
+}
+
 function renderConnections(): void {
    const tbody = connBody();
    [...tbody.querySelectorAll<HTMLElement>('.net-item-card[data-node-key]')].forEach(r => r.remove());
    if (connections.size === 0) {
       connEmpty().hidden = false;
+      updateNetworkNavIcon();
       return;
    }
    connEmpty().hidden = true;
    for (const [key, c] of connections) {
       tbody.appendChild(buildConnectionCard(key, c));
    }
+   updateNetworkNavIcon();
 }
 
 function buildConnectionCard(key: string, c: ConnectionData): HTMLDivElement {
@@ -281,6 +291,7 @@ async function loadConnections(): Promise<void> {
       renderConnections();
    } catch (e) {
       console.error('[network] loadConnections error:', e);
+      updateNetworkNavIcon();
    }
 }
 
@@ -291,6 +302,7 @@ onWsEvent('node_connected', (msg: Record<string, unknown>) => {
    connections.set(key, {host: msg.host as string, port: msg.port as number, inbound: msg.inbound as boolean});
    upsertConnectionRow(key);
    refreshDiscoverConnectedState();
+   updateNetworkNavIcon();
 });
 
 onWsEvent('node_disconnected', (msg: Record<string, unknown>) => {
@@ -298,6 +310,7 @@ onWsEvent('node_disconnected', (msg: Record<string, unknown>) => {
    connections.delete(key);
    removeConnectionRow(key);
    refreshDiscoverConnectedState();
+   updateNetworkNavIcon();
 });
 
 onWsEvent('node_identified', (msg: Record<string, unknown>) => {
@@ -498,5 +511,27 @@ onWsOpen(() => {
       void triggerDiscovery(false);
    }
    void loadConnections();
+});
+
+// Initial icon status and connection fetch on module load
+updateNetworkNavIcon();
+void loadConnections();
+
+async function handleForegroundNetwork(): Promise<void> {
+   await Promise.all([loadConnections(), loadServerStatus(), loadRelayMode()]);
+}
+
+document.addEventListener('visibilitychange', () => {
+   if (document.visibilityState === 'visible') {
+      void handleForegroundNetwork();
+   }
+});
+
+window.addEventListener('focus', () => {
+   void handleForegroundNetwork();
+});
+
+window.addEventListener('pageshow', () => {
+   void handleForegroundNetwork();
 });
 
