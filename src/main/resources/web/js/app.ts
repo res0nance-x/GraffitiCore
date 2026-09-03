@@ -44,12 +44,13 @@ let currentActiveSectionId = '';
 const sectionScrollPositions = new Map<string, number>();
 
 /**
- * Show the section with the given id and hide all others, while preserving
- * scroll position across section switches.
+ * Show the section with the given id and hide all others.
+ * Scroll positions are preserved across section switches, except for
+ * section-messages which defaults to scrolled to the bottom.
  */
 export function showSection(id: string): void {
-   // 1. Save scroll position of currently leaving section
-   if (currentActiveSectionId) {
+   // 1. Save scroll position of currently leaving section (except messages view)
+   if (currentActiveSectionId && currentActiveSectionId !== 'section-messages') {
       sectionScrollPositions.set(currentActiveSectionId, window.scrollY);
    }
 
@@ -65,16 +66,28 @@ export function showSection(id: string): void {
 
    currentActiveSectionId = id;
 
-   // 3. Restore scroll position for entering section
-   const savedScrollY = sectionScrollPositions.get(id) ?? 0;
-   window.scrollTo(0, savedScrollY);
+   // 3. Restore scroll position for entering section (or scroll to bottom for messages)
+   if (id === 'section-messages') {
+      window.scrollTo(0, Math.max(document.documentElement.scrollHeight, document.body.scrollHeight));
+   } else {
+      const savedScrollY = sectionScrollPositions.get(id) ?? 0;
+      window.scrollTo(0, savedScrollY);
+   }
 
    // 4. Run section handlers
    for (const fn of (sectionHandlers.get(id) ?? [])) fn();
 
    // 5. Re-apply scroll position after layout updates
    requestAnimationFrame(() => {
-      window.scrollTo(0, savedScrollY);
+      if (id === 'section-messages') {
+         window.scrollTo(0, Math.max(document.documentElement.scrollHeight, document.body.scrollHeight));
+         requestAnimationFrame(() => {
+            window.scrollTo(0, Math.max(document.documentElement.scrollHeight, document.body.scrollHeight));
+         });
+      } else {
+         const savedScrollY = sectionScrollPositions.get(id) ?? 0;
+         window.scrollTo(0, savedScrollY);
+      }
    });
 }
 

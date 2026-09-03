@@ -152,33 +152,31 @@ Messages
 							<label class="field" style="display: flex; flex-direction: row; align-items: center; gap: 0.5rem;">
 								<span style="flex-shrink: 0;">From:</span>
 								<select id="from-field" required
-									style="flex: 1; min-width: 0; padding: 0.45rem 0.6rem;"></select>
-								<span id="from-empty-message" style="display: none; color: #ff5555; font-size: 0.88rem; font-weight: bold; padding: 0.45rem 0.6rem;">No identities available</span>
+									style="flex: 1; min-width: 0; padding: 0.3rem 0.5rem;"></select>
+								<span id="from-empty-message" style="display: none; color: #ff5555; font-size: 0.88rem; font-weight: bold; padding: 0.3rem 0.5rem;">No identities available</span>
 							</label>
 							<label class="field" style="display: flex; flex-direction: row; align-items: center; gap: 0.5rem;">
 								<span style="flex-shrink: 0;">To:</span>
 								<select id="to-field" required
-									style="flex: 1; min-width: 0; padding: 0.45rem 0.6rem;"></select>
-								<span id="to-empty-message" style="display: none; color: #ff5555; font-size: 0.88rem; font-weight: bold; padding: 0.45rem 0.6rem;">No peers available</span>
+									style="flex: 1; min-width: 0; padding: 0.3rem 0.5rem;"></select>
+								<span id="to-empty-message" style="display: none; color: #ff5555; font-size: 0.88rem; font-weight: bold; padding: 0.3rem 0.5rem;">No peers available</span>
 							</label>
 						</div>
-						<div id="same-author-recipient-warning" style="display: none; color: #ffae00; font-size: 0.88rem; font-weight: bold; margin-bottom: 0.5rem;">
+						<div id="same-author-recipient-warning" style="display: none; color: #ffae00; font-size: 0.88rem; font-weight: bold; margin-bottom: 0.25rem;">
 							Warning: many clients will not accept messages with the same author and recipient.
 						</div>
 
 						<label class="field">
 							<span>Text</span>
-							<textarea id="message-text" placeholder="Type your message" rows="6"></textarea>
+							<textarea id="message-text" placeholder="Type your message" rows="4"></textarea>
 						</label>
 
 						<div class="composer-actions">
 							<button id="send-text" type="submit">Send</button>
 							<button id="send-file" type="button">Send File</button>
 							<input hidden id="file-input" type="file">
+							<span aria-live="polite" class="send-status" id="send-status">Ready</span>
 						</div>
-
-
-						<p aria-live="polite" class="send-status" id="send-status">Ready</p>
 					</form>
 				</section>
 			</main>

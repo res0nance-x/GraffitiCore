@@ -257,6 +257,29 @@ function renderVirtualList(): void {
 window.addEventListener('scroll', scheduleVListRender, { passive: true });
 window.addEventListener('resize', scheduleVListRender, { passive: true });
 
+let shouldScrollToBottomOnLoad = true;
+let shouldScrollToBottomOnSend = false;
+
+function isNearBottom(threshold = 150): boolean {
+   const scrollBottom = window.scrollY + window.innerHeight;
+   const docHeight = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
+   return docHeight - scrollBottom <= threshold;
+}
+
+export function scrollToBottom(): void {
+   const section = document.getElementById('section-messages');
+   if (!section || !section.classList.contains('is-active')) return;
+
+   const doScroll = () => {
+      window.scrollTo(0, Math.max(document.documentElement.scrollHeight, document.body.scrollHeight));
+   };
+   doScroll();
+   requestAnimationFrame(() => {
+      doScroll();
+      requestAnimationFrame(doScroll);
+   });
+}
+
 async function refreshMessages(): Promise<void> {
    if (isRefreshing) return;
    isRefreshing = true;
@@ -266,8 +289,14 @@ async function refreshMessages(): Promise<void> {
       const container = document.getElementById('messages');
       if (!container) return;
 
+      const wasAtBottom = isNearBottom();
       allFilteredMessages = messages;
       renderVirtualList();
+      if (shouldScrollToBottomOnLoad || shouldScrollToBottomOnSend || wasAtBottom) {
+         shouldScrollToBottomOnLoad = false;
+         shouldScrollToBottomOnSend = false;
+         scrollToBottom();
+      }
    } finally {
       isRefreshing = false;
    }
@@ -616,6 +645,9 @@ async function sendPayload(payload: Payload): Promise<void> {
          await graffiti.sendFile(identityKey, peerKey, payload.file);
       }
       setStatus(`${payload.type} sent.`);
+      shouldScrollToBottomOnSend = true;
+      await refreshMessages();
+      scrollToBottom();
    } catch (err) {
       setStatus(`Failed: ${(err as Error).message}`);
    } finally {
@@ -650,6 +682,7 @@ form?.addEventListener('submit', async (event: SubmitEvent) => {
    if (!isSending && messageText) {
       messageText.value = '';
       autoResizeTextarea(messageText);
+      scrollToBottom();
    }
 });
 
@@ -696,6 +729,7 @@ fileInput?.addEventListener('change', async () => {
    if (!file) return;
    await sendPayload({ type: 'file', fileName: file.name, file, ...getEnvelope() });
    if (fileInput) fileInput.value = '';
+   scrollToBottom();
 });
 
 // ── Drag-and-drop ─────────────────────────────────────────────────────────────
@@ -750,9 +784,30 @@ messagesSection?.addEventListener('paste', async (event: ClipboardEvent) => {
 // ── Bootstrap & Foreground Lifecycle ──────────────────────────────────────────
 setStatus('Ready');
 autoResizeTextarea(messageText);
+
+const composerElement = document.querySelector('.composer') as HTMLElement | null;
+function updateComposerHeight(): void {
+   if (!composerElement) return;
+   const height = composerElement.offsetHeight;
+   if (height > 0) {
+      document.documentElement.style.setProperty('--composer-height', `${height}px`);
+   }
+}
+
+if (composerElement && typeof ResizeObserver !== 'undefined') {
+   new ResizeObserver(() => {
+      updateComposerHeight();
+      scheduleVListRender();
+   }).observe(composerElement);
+   updateComposerHeight();
+}
+
 onSectionShow('section-messages', () => {
+   updateComposerHeight();
+   shouldScrollToBottomOnLoad = true;
    void populateSelects();
    scheduleVListRender();
+   scrollToBottom();
    void queueRefreshMessages();
 });
 
