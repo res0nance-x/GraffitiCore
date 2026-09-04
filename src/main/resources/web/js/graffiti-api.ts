@@ -83,10 +83,6 @@ export interface ListConnectionsResponse extends ApiOk {
    connections: ConnectionEntry[];
 }
 
-export interface ListLogsResponse extends ApiOk {
-   logs: any[];
-}
-
 export interface CreateIdentityResponse extends ApiOk {
    name: string;
    key: string;
@@ -329,14 +325,6 @@ export const graffiti = {
 
    setQuota(quotaBytes: number): Promise<ApiOk> {
       return get('/api/storage/quota', {quota: String(quotaBytes)});
-   },
-
-   getLogs(): Promise<ListLogsResponse> {
-      return get('/api/logs');
-   },
-
-   clearLogs(): Promise<ApiOk> {
-      return get('/api/logs/clear');
    },
 
 

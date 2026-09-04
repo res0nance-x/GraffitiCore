@@ -18,7 +18,6 @@
 	 "dialog.ts",
 	 "graffiti-api.ts",
 	 "identity.ts",
-	 "logs.ts",
 	 "main.ts",
 	 "messages.ts",
 	 "network.ts",
