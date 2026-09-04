@@ -234,7 +234,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 						val headerList = file.toDataInputStream().use { dis ->
 							ListWritable.read(dis, EncryptedContentHeader::read).list
 						}
-						val myIdentityKeys = (listIdentities().map { it.key } + serverIdentity.key).toSet()
+						val myIdentityKeys = listIdentities().map { it.key }.toSet()
 						val myPeerKeys = listPeers().map { it.key }.toSet()
 						val wantContent = mutableListOf<EncryptedMetaKey>()
 						log("Received QueryResponse from ${node.remoteAddress}: ${headerList.size} header item(s)")
@@ -459,7 +459,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 
 	private fun syncNode(node: TCPNode) {
 		if (node.isClosed()) return
-		val myIdentityKeys = (listIdentities().map { it.key } + serverIdentity.key).toSet()
+		val myIdentityKeys = listIdentities().map { it.key }.toSet()
 		if (!relayEnabled && myIdentityKeys.isEmpty()) return
 		val recipientFilter = if (relayEnabled) QueryCondition.ALL
 		else QueryCondition(myIdentityKeys, QueryCondition.ConditionType.Include)
