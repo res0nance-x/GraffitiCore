@@ -4,15 +4,15 @@ plugins {
 	kotlin("jvm") version "2.4.0"
 }
 
-group = "org.example"
-version = "1.0-SNAPSHOT"
+group = "R3"
+version = "1.0"
 
 repositories {
 	mavenCentral()
 }
 
 dependencies {
-	implementation("org.example:R3:1.0-SNAPSHOT")
+	implementation("R3:R3:1.0")
 	testImplementation(kotlin("test"))
 }
 
@@ -26,7 +26,7 @@ tasks.test {
 	useJUnitPlatform()
 }
 val compileTypescript = tasks.register<Exec>("compileTypescript") {
-	workingDir = file("src/main/resources/web/js")
+	workingDir = file("src/main/resources/web")
 	commandLine(if (System.getProperty("os.name").lowercase().contains("windows")) "npx.cmd" else "npx", "tsc")
 }
 

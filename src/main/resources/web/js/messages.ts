@@ -79,8 +79,8 @@ function queueRefreshMessages(): void {
 }
 
 // ── Virtual List Controller State ─────────────────────────────────────────────
-const DEFAULT_ITEM_HEIGHT = 120;
-const ITEM_GAP = 12; // 0.75rem flex gap in #messages
+const DEFAULT_ITEM_HEIGHT = 76;
+const ITEM_GAP = 8; // 0.5rem flex gap in #messages
 const BUFFER_ITEMS = 8;
 
 const itemHeights = new Map<string, number>();
