@@ -466,12 +466,31 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		return ok()
 	}
 
+	private fun resolveSendKeys(header: JSONObject): Pair<IdentityKey, PeerKey>? {
+		var idKeyStr = header.optString("identityKey").takeIf { it.isNotEmpty() }
+		if (idKeyStr == null) {
+			idKeyStr = loadSetting("graffiti:last-from-key").takeIf { it.isNotEmpty() }
+				?: p2p.listIdentities().firstOrNull()?.key?.toString()
+		}
+		if (idKeyStr.isNullOrEmpty()) return null
+
+		var peerKeyStr = header.optString("peerKey").takeIf { it.isNotEmpty() }
+		if (peerKeyStr == null) {
+			peerKeyStr = loadSetting("graffiti:last-to-key").takeIf { it.isNotEmpty() }
+				?: p2p.listPeers().firstOrNull()?.key?.toString()
+				?: p2p.listIdentities().firstOrNull()?.asPeer()?.key?.toString()
+		}
+		if (peerKeyStr.isNullOrEmpty()) return null
+
+		return Pair(IdentityKey(idKeyStr), PeerKey(peerKeyStr))
+	}
+
 	private fun sendTextMessage(header: JSONObject, content: Content): Content {
-		val identityKey = header.getString("identityKey")
-		val peerKey = header.getString("peerKey")
+		val keys = resolveSendKeys(header) ?: return err("Select a sender and recipient first")
+		val (idenKey, peerKey) = keys
 		val text = content.readString()
-		val iden = p2p.getIdentityByKey(IdentityKey(identityKey)) ?: error("No Identity found for $identityKey")
-		val peer = p2p.getPeerByKey(PeerKey(peerKey)) ?: error("No peer found for $peerKey")
+		val iden = p2p.getIdentityByKey(idenKey) ?: return err("No identity found for $idenKey")
+		val peer = p2p.getPeerByKey(peerKey) ?: return err("No peer found for $peerKey")
 		val encKey = p2p.pkeEncrypt(TextContent(text), iden, peer)
 		p2p.pushNewMessage(encKey)
 		val metaFile = File(p2p.metaDir, "$encKey")
@@ -488,17 +507,18 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		return ok { put("key", encKey.toString()) }
 	}
 
-	private fun sendFileMessage(header: JSONObject, content: Content): Content {
-		val identityKey = header.getString("identityKey") ?: return err("Missing 'identityKey'")
-		val peerKey = header.getString("peerKey") ?: return err("Missing 'peerKey'")
+	private fun sendFileMessage(header: JSONObject, content: Content?): Content {
+		if (content == null) return err("No file content provided")
+		val keys = resolveSendKeys(header) ?: return err("Select a sender and recipient first")
+		val (idenKey, peerKey) = keys
 		val fileParam = header.optString("file").takeIf { it.isNotEmpty() } ?: "file"
 		val originalName = try {
 			URLDecoder.decode(fileParam, "UTF-8")
 		} catch (_: Exception) {
 			fileParam
 		}
-		val iden = p2p.getIdentityByKey(IdentityKey(identityKey)) ?: error("No identity found for $identityKey")
-		val peer = p2p.getPeerByKey(PeerKey(peerKey)) ?: error("No peer found for $peerKey")
+		val iden = p2p.getIdentityByKey(idenKey) ?: return err("No identity found for $idenKey")
+		val peer = p2p.getPeerByKey(peerKey) ?: return err("No peer found for $peerKey")
 		val wrappedContent = MutableMetaDataContent(content).apply {
 			path = originalName
 			ext = originalName.substringAfterLast('.', "").lowercase()
