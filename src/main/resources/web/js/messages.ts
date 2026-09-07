@@ -8,6 +8,8 @@ const messageText = document.getElementById('message-text') as HTMLTextAreaEleme
 const sendFileButton = document.getElementById('send-file') as HTMLButtonElement | null;
 const fileInput = document.getElementById('file-input') as HTMLInputElement | null;
 const messagesSection = document.getElementById('section-messages') as HTMLElement | null;
+const messagesContainer = document.getElementById('messages') as HTMLElement | null;
+const msgContextMenu = document.getElementById('msg-context-menu') as HTMLElement | null;
 const statusEl = document.getElementById('send-status') as HTMLElement | null;
 
 let isSending = false;
@@ -412,18 +414,164 @@ function fillHeader(item: HTMLElement, msg: MessageData): void {
    }
 }
 
-function wireActions(item: HTMLElement, msg: MessageData): void {
-   item.querySelector<HTMLButtonElement>('.msg-btn-delete')?.addEventListener('click', () => {
-      graffiti.removeMessage(msg.key)
-         .then(() => {
-            currentMessages.delete(msg.key);
-            itemHeights.delete(msg.key);
-            textContentCache.delete(msg.key);
-            allFilteredMessages = allFilteredMessages.filter(m => m.key !== msg.key);
-            renderVirtualList();
-         })
-         .catch((err: Error) => setStatus(`Delete failed: ${err.message}`));
-   });
+// ── Message context menu & Reply ──────────────────────────────────────────────
+let activeContextMsg: MessageData | null = null;
+
+function openContextMenu(x: number, y: number, msg: MessageData): void {
+   if (!msgContextMenu) return;
+   activeContextMsg = msg;
+
+   const copyBtn = msgContextMenu.querySelector<HTMLButtonElement>('[data-action="copy"]');
+   if (copyBtn) {
+      copyBtn.hidden = !isText(msg.type);
+   }
+
+   msgContextMenu.hidden = false;
+
+   // Collision-aware viewport positioning
+   const padding = 8;
+   const menuWidth = msgContextMenu.offsetWidth || 140;
+   const menuHeight = msgContextMenu.offsetHeight || 120;
+
+   let left = x;
+   let top = y;
+
+   if (left + menuWidth > window.innerWidth - padding) {
+      left = Math.max(padding, window.innerWidth - menuWidth - padding);
+   }
+   if (top + menuHeight > window.innerHeight - padding) {
+      top = Math.max(padding, window.innerHeight - menuHeight - padding);
+   }
+
+   msgContextMenu.style.left = `${left}px`;
+   msgContextMenu.style.top = `${top}px`;
+}
+
+function closeContextMenu(): void {
+   if (msgContextMenu && !msgContextMenu.hidden) {
+      msgContextMenu.hidden = true;
+      activeContextMsg = null;
+   }
+}
+
+async function handleCopy(msg: MessageData): Promise<void> {
+   let text = '';
+   const cached = textContentCache.get(msg.key);
+   if (cached !== undefined) {
+      text = cached;
+   } else {
+      try {
+         const url = graffiti.contentUrl(msg.key);
+         const res = await fetch(url);
+         text = await res.text();
+         textContentCache.set(msg.key, text);
+      } catch (err: any) {
+         setStatus(`Failed to load text for copying: ${err?.message || err}`);
+         return;
+      }
+   }
+
+   try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+         await navigator.clipboard.writeText(text);
+      } else {
+         const ta = document.createElement('textarea');
+         ta.value = text;
+         ta.style.position = 'fixed';
+         ta.style.opacity = '0';
+         document.body.appendChild(ta);
+         ta.select();
+         document.execCommand('copy');
+         document.body.removeChild(ta);
+      }
+      setStatus('Message copied to clipboard.');
+   } catch (err: any) {
+      setStatus(`Copy failed: ${err?.message || err}`);
+   }
+}
+
+function handleDownload(msg: MessageData): void {
+   const url = graffiti.contentUrl(msg.key);
+   const filename = msg.name || (isText(msg.type) ? 'message.txt' : `content-${msg.key.slice(0, 8)}.${msg.type || 'bin'}`);
+
+   if ((window as any).Android && (window as any).Android.download) {
+      const fullUrl = new URL(url, window.location.origin).toString();
+      (window as any).Android.download(fullUrl);
+      return;
+   }
+
+   const a = document.createElement('a');
+   a.href = url;
+   a.download = filename;
+   document.body.appendChild(a);
+   a.click();
+   document.body.removeChild(a);
+}
+
+async function handleReply(msg: MessageData): Promise<void> {
+   let contentToQuote = '';
+   if (isText(msg.type)) {
+      const cached = textContentCache.get(msg.key);
+      if (cached !== undefined) {
+         contentToQuote = cached;
+      } else {
+         try {
+            const url = graffiti.contentUrl(msg.key);
+            const res = await fetch(url);
+            contentToQuote = await res.text();
+            textContentCache.set(msg.key, contentToQuote);
+         } catch {
+            contentToQuote = '';
+         }
+      }
+   }
+
+   const authorName = msg.author || 'Unknown';
+   let quoteBlock = '';
+
+   if (isText(msg.type)) {
+      const lines = contentToQuote ? contentToQuote.split('\n') : [''];
+      const quoteLines = [
+         `> **${authorName} wrote:**`,
+         ...lines.map(line => `> ${line}`)
+      ];
+      quoteBlock = quoteLines.join('\n') + '\n\n';
+   } else {
+      const fileName = msg.name || `${msg.type} attachment`;
+      quoteBlock = `> **${authorName} wrote:** [${fileName}]\n\n`;
+   }
+
+   // Match and select author in toField if available
+   if (toField) {
+      const authorKey = msg.authorKey || (msg.author ? nameToKey.get(msg.author) : null);
+      let matchedOpt: HTMLOptionElement | null = null;
+      for (let i = 0; i < toField.options.length; i++) {
+         const opt = toField.options[i];
+         if (authorKey && opt.value === authorKey) {
+            matchedOpt = opt;
+            break;
+         }
+         if (msg.author && opt.textContent?.trim() === msg.author.trim()) {
+            matchedOpt = opt;
+            break;
+         }
+      }
+      if (matchedOpt) {
+         toField.value = matchedOpt.value;
+         toField.dispatchEvent(new Event('change'));
+      }
+   }
+
+   if (messageText) {
+      if (messageText.value && messageText.value.trim().length > 0) {
+         messageText.value = messageText.value.trimEnd() + '\n\n' + quoteBlock;
+      } else {
+         messageText.value = quoteBlock;
+      }
+      messageText.focus();
+      messageText.setSelectionRange(messageText.value.length, messageText.value.length);
+      messageText.scrollIntoView({ behavior: 'smooth', block: 'center' });
+   }
 }
 
 function createMessageElement(msg: MessageData): HTMLElement | null {
@@ -435,7 +583,6 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
    const el = item.firstElementChild as HTMLElement;
    el.dataset.msgKey = msg.key;
    fillHeader(el, msg);
-   wireActions(el, msg);
 
    if (isText(msg.type)) {
       const pre = el.querySelector<HTMLPreElement>('.msg-text-content');
@@ -448,7 +595,7 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
                if (!viewBtn) {
                   viewBtn = document.createElement('button');
                   viewBtn.type = 'button';
-                  viewBtn.className = 'btn-view-text btn-view-pack';
+                  viewBtn.className = 'btn-view-text';
                   viewBtn.style.display = 'inline-flex';
                   viewBtn.style.alignItems = 'center';
                   viewBtn.style.gap = '0.25rem';
@@ -515,7 +662,6 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
       if (msg.name && (msg.name.toLowerCase().endsWith('.pack') || msg.name.toLowerCase().endsWith('.epack'))) {
          const viewBtn = document.createElement('button');
          viewBtn.type = 'button';
-         viewBtn.className = 'btn-view-pack';
          viewBtn.textContent = '▶ View Pack';
          viewBtn.style.marginLeft = '8px';
          viewBtn.addEventListener('click', (e) => {
@@ -1018,6 +1164,16 @@ export function renderMarkdown(raw: string): string {
    const result: string[] = [];
    let inList = false;
    let listType: 'ul' | 'ol' | null = null;
+   let inBlockquote = false;
+   let blockquoteLines: string[] = [];
+
+   const flushBlockquote = () => {
+      if (inBlockquote) {
+         result.push(`<blockquote class="msg-blockquote">${blockquoteLines.map(l => inlineFormat(l)).join('<br>')}</blockquote>`);
+         inBlockquote = false;
+         blockquoteLines = [];
+      }
+   };
 
    for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -1028,6 +1184,7 @@ export function renderMarkdown(raw: string): string {
             inList = false;
             listType = null;
          }
+         flushBlockquote();
          result.push(line);
          continue;
       }
@@ -1037,7 +1194,20 @@ export function renderMarkdown(raw: string): string {
       const h1Match = line.match(/^#\s+(.+)$/);
       const ulMatch = line.match(/^[\*\-\+]\s+(.+)$/);
       const olMatch = line.match(/^\d+\.\s+(.+)$/);
-      const bqMatch = line.match(/^&gt;\s+(.+)$/);
+      const bqMatch = line.match(/^&gt;\s?(.*)$/);
+
+      if (bqMatch) {
+         if (inList) {
+            result.push(listType === 'ul' ? '</ul>' : '</ol>');
+            inList = false;
+            listType = null;
+         }
+         inBlockquote = true;
+         blockquoteLines.push(bqMatch[1]);
+         continue;
+      } else {
+         flushBlockquote();
+      }
 
       if (ulMatch || olMatch) {
          const currentType = ulMatch ? 'ul' : 'ol';
@@ -1065,8 +1235,6 @@ export function renderMarkdown(raw: string): string {
          result.push(`<h2 class="msg-h2">${inlineFormat(h2Match[1])}</h2>`);
       } else if (h1Match) {
          result.push(`<h1 class="msg-h1">${inlineFormat(h1Match[1])}</h1>`);
-      } else if (bqMatch) {
-         result.push(`<blockquote class="msg-blockquote">${inlineFormat(bqMatch[1])}</blockquote>`);
       } else if (line.trim() === '') {
          result.push('<div class="msg-spacer"></div>');
       } else {
@@ -1077,6 +1245,7 @@ export function renderMarkdown(raw: string): string {
    if (inList) {
       result.push(listType === 'ul' ? '</ul>' : '</ol>');
    }
+   flushBlockquote();
 
    let finalHtml = result.join('');
    finalHtml = finalHtml.replace(/@@@CODEBLOCK_(\d+)@@@/g, (_m, idx) => codeBlocks[Number(idx)] || '');
@@ -1110,4 +1279,144 @@ document.addEventListener('click', (e: MouseEvent) => {
       return;
    }
 });
+
+// ── Context Menu Actions & Event Listeners ────────────────────────────────────
+msgContextMenu?.addEventListener('click', async (e: MouseEvent) => {
+   const target = e.target as HTMLElement | null;
+   const btn = target?.closest<HTMLButtonElement>('.msg-context-item');
+   if (!btn || !activeContextMsg) return;
+
+   const action = btn.dataset.action;
+   const msg = activeContextMsg;
+   closeContextMenu();
+
+   if (action === 'delete') {
+      try {
+         await graffiti.removeMessage(msg.key);
+         currentMessages.delete(msg.key);
+         itemHeights.delete(msg.key);
+         textContentCache.delete(msg.key);
+         allFilteredMessages = allFilteredMessages.filter(m => m.key !== msg.key);
+         renderVirtualList();
+      } catch (err: any) {
+         setStatus(`Delete failed: ${err?.message || err}`);
+      }
+   } else if (action === 'reply') {
+      await handleReply(msg);
+   } else if (action === 'copy') {
+      await handleCopy(msg);
+   } else if (action === 'download') {
+      handleDownload(msg);
+   }
+});
+
+document.addEventListener('click', (e: MouseEvent) => {
+   if (msgContextMenu && !msgContextMenu.hidden && !msgContextMenu.contains(e.target as Node)) {
+      closeContextMenu();
+   }
+});
+
+document.addEventListener('keydown', (e: KeyboardEvent) => {
+   if (e.key === 'Escape') {
+      closeContextMenu();
+   }
+});
+
+window.addEventListener('scroll', () => {
+   if (msgContextMenu && !msgContextMenu.hidden) {
+      closeContextMenu();
+   }
+}, { passive: true });
+
+window.addEventListener('resize', () => {
+   if (msgContextMenu && !msgContextMenu.hidden) {
+      closeContextMenu();
+   }
+}, { passive: true });
+
+// Right-click on desktop
+messagesContainer?.addEventListener('contextmenu', (e: MouseEvent) => {
+   const target = e.target as HTMLElement | null;
+   const item = target?.closest<HTMLElement>('.message-item[data-msg-key]');
+   if (!item) return;
+
+   e.preventDefault();
+   const key = item.dataset.msgKey;
+   const msg = allFilteredMessages.find(m => m.key === key);
+   if (msg) {
+      openContextMenu(e.clientX, e.clientY, msg);
+   }
+});
+
+// Long-press on mobile touch devices
+let touchTimer: number | null = null;
+let touchStartX = 0;
+let touchStartY = 0;
+let isLongPressActive = false;
+
+messagesContainer?.addEventListener('touchstart', (e: TouchEvent) => {
+   if (e.touches.length !== 1) {
+      if (touchTimer !== null) clearTimeout(touchTimer);
+      touchTimer = null;
+      return;
+   }
+   const touch = e.touches[0];
+   const target = e.target as HTMLElement | null;
+   const item = target?.closest<HTMLElement>('.message-item[data-msg-key]');
+   if (!item) return;
+
+   touchStartX = touch.clientX;
+   touchStartY = touch.clientY;
+   isLongPressActive = false;
+
+   if (touchTimer !== null) clearTimeout(touchTimer);
+   touchTimer = window.setTimeout(() => {
+      isLongPressActive = true;
+      const key = item.dataset.msgKey;
+      const msg = allFilteredMessages.find(m => m.key === key);
+      if (msg) {
+         if ('vibrate' in navigator) {
+            try { navigator.vibrate(35); } catch {}
+         }
+         openContextMenu(touchStartX, touchStartY, msg);
+      }
+   }, 450);
+}, { passive: true });
+
+messagesContainer?.addEventListener('touchmove', (e: TouchEvent) => {
+   if (touchTimer === null) return;
+   const touch = e.touches[0];
+   if (!touch) return;
+   const dx = Math.abs(touch.clientX - touchStartX);
+   const dy = Math.abs(touch.clientY - touchStartY);
+   if (dx > 10 || dy > 10) {
+      clearTimeout(touchTimer);
+      touchTimer = null;
+   }
+}, { passive: true });
+
+messagesContainer?.addEventListener('touchend', (e: TouchEvent) => {
+   if (touchTimer !== null) {
+      clearTimeout(touchTimer);
+      touchTimer = null;
+   }
+   if (isLongPressActive) {
+      e.preventDefault();
+   }
+});
+
+messagesContainer?.addEventListener('touchcancel', () => {
+   if (touchTimer !== null) {
+      clearTimeout(touchTimer);
+      touchTimer = null;
+   }
+});
+
+messagesContainer?.addEventListener('click', (e: MouseEvent) => {
+   if (isLongPressActive) {
+      e.preventDefault();
+      e.stopPropagation();
+      isLongPressActive = false;
+   }
+}, true);
 

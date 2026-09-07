@@ -17,10 +17,25 @@ if (closeHelpBtn) {
    });
 }
 
-// ── Message Appearance Settings ───────────────────────────────────────────────
+// ── Appearance Settings ───────────────────────────────────────────────────────
+const themeSel = document.getElementById('settings-theme') as HTMLSelectElement | null;
 const fontSizeSel = document.getElementById('settings-font-size') as HTMLSelectElement | null;
 const fontFamilySel = document.getElementById('settings-font-family') as HTMLSelectElement | null;
 const messagesEl = document.getElementById('messages') as HTMLElement | null;
+
+function applyTheme(theme: string): void {
+   if (!theme) theme = 'dark-sage';
+   if (theme === 'dark') theme = 'dark-sage';
+   if (theme === 'light') theme = 'light-purple';
+
+   document.documentElement.setAttribute('data-theme', theme);
+   if (themeSel) themeSel.value = theme;
+
+   const metaTheme = document.querySelector('meta[name="theme-color"]');
+   if (metaTheme) {
+      metaTheme.setAttribute('content', theme.startsWith('light') ? '#ffffff' : '#000000');
+   }
+}
 
 function applyMessageAppearance(size: string, family: string): void {
    document.documentElement.style.setProperty('--app-font-size', size);
@@ -31,28 +46,56 @@ function applyMessageAppearance(size: string, family: string): void {
    if (fontFamilySel) fontFamilySel.value = family;
 }
 
-async function loadMessageAppearance(): Promise<void> {
+async function loadAppearanceSettings(): Promise<void> {
+   let theme = 'dark-sage';
+   try {
+      theme = localStorage.getItem('graffiti:theme') || 'dark-sage';
+   } catch {}
+   applyTheme(theme);
+
+   try {
+      const storedTheme = await graffiti.getStore('graffiti:theme');
+      if (storedTheme) {
+         theme = storedTheme;
+         applyTheme(theme);
+         try { localStorage.setItem('graffiti:theme', theme); } catch {}
+      }
+   } catch {}
+
    const size = await graffiti.getStore('graffiti:message-font-size') || '100%';
    const family = await graffiti.getStore('graffiti:message-font-family') || 'inherit';
    applyMessageAppearance(size, family);
 }
 
+if (themeSel) {
+   themeSel.addEventListener('change', async () => {
+      const selectedTheme = themeSel.value;
+      applyTheme(selectedTheme);
+      try {
+         localStorage.setItem('graffiti:theme', selectedTheme);
+      } catch {}
+      await graffiti.setStore('graffiti:theme', selectedTheme);
+   });
+}
+
 if (fontSizeSel) {
    fontSizeSel.addEventListener('change', async () => {
       await graffiti.setStore('graffiti:message-font-size', fontSizeSel.value);
-      await loadMessageAppearance();
+      const family = fontFamilySel?.value || 'inherit';
+      applyMessageAppearance(fontSizeSel.value, family);
    });
 }
 
 if (fontFamilySel) {
    fontFamilySel.addEventListener('change', async () => {
       await graffiti.setStore('graffiti:message-font-family', fontFamilySel.value);
-      await loadMessageAppearance();
+      const size = fontSizeSel?.value || '100%';
+      applyMessageAppearance(size, fontFamilySel.value);
    });
 }
 
 // Apply settings initially
-void loadMessageAppearance();
+void loadAppearanceSettings();
 
 // ── Storage Management ────────────────────────────────────────────────────────
 function formatSize(bytes: number | null | undefined): string {

@@ -1,20 +1,28 @@
 <!DOCTYPE html>
-<html data-theme="dark" lang="en">
+<html data-theme="dark-sage" lang="en">
 
 <head>
 	<meta charset="UTF-8" />
 	<meta content="width=device-width, initial-scale=1.0" name="viewport" />
 	<title>Graffiti</title>
+	<script>
+		try {
+			var savedTheme = localStorage.getItem('graffiti:theme');
+			if (savedTheme) {
+				document.documentElement.setAttribute('data-theme', savedTheme);
+			}
+		} catch (e) {}
+	</script>
 	<link href="css/theme.css" rel="stylesheet" />
 	<link href="css/main.css" rel="stylesheet" />
 	<link href="manifest.json" rel="manifest" />
-	<meta content="#2d2dff" name="theme-color" />
+	<meta content="#000000" name="theme-color" />
 </head>
 
 <body>
 	<div class="container">
 		<header>
-			<nav class="app-nav">
+			<nav>
 				<ul>
 					<li><a class="app-nav-link" data-section="section-network" href="#"
 							title="Network Connections & Discovery"><span class="material-symbols-outlined nav-icon-disconnected" id="nav-network-icon">public</span>
@@ -188,7 +196,7 @@ Identity
 				<div class="toolbar">
 					<button id="create-identity">Create</button>
 				</div>
-				<table class="data-table" id="identities">
+				<table id="identities">
 					<thead>
 						<tr>
 							<th>User</th>
@@ -209,7 +217,7 @@ Peers
 				<div class="toolbar">
 					<button id="import-peer">Import</button>
 				</div>
-				<table class="data-table" id="peers">
+				<table id="peers">
 					<thead>
 						<tr>
 							<th>User</th>
@@ -231,9 +239,30 @@ Settings
 				<section class="net-card">
 					<h3>Appearance</h3>
 					<p style="font-size:0.88rem; opacity:0.7; margin:0 0 0.75rem">
-						Customize the typography.
+						Customize theme and typography.
 					</p>
 					<div style="display:flex; flex-wrap:wrap; gap:1.5rem;">
+						<label style="display:flex; flex-direction:column; gap:0.35rem; font-size:0.88rem; font-weight:600;">
+							Theme
+							<select id="settings-theme"
+								style="padding:0.4rem 0.6rem; border-radius:4px; background:var(--background); color:var(--primary); border:1px solid var(--button);">
+								<optgroup label="Dark Themes (OLED)">
+									<option selected value="dark-sage">Dark Sage (Mint)</option>
+									<option value="dark-lavender">Dark Lavender</option>
+									<option value="dark-sky">Dark Sky (Cyan)</option>
+									<option value="dark-amber">Dark Amber</option>
+									<option value="dark-rose">Dark Rose</option>
+									<option value="dark-mono">Dark Monochrome</option>
+								</optgroup>
+								<optgroup label="Light Themes">
+									<option value="light-purple">Light Purple</option>
+									<option value="light-sage">Light Sage</option>
+									<option value="light-ocean">Light Ocean</option>
+									<option value="light-amber">Light Amber</option>
+									<option value="light-rose">Light Rose</option>
+								</optgroup>
+							</select>
+						</label>
 						<label style="display:flex; flex-direction:column; gap:0.35rem; font-size:0.88rem; font-weight:600;">
 							Font Size
 							<select id="settings-font-size"
@@ -431,7 +460,7 @@ Settings
 							</button>
 						</div>
 					</div>
-					<div class="view-content-body" style="margin-top: 1rem;">
+					<div style="margin-top: 1rem;">
 						<pre id="view-content-text" class="msg-text-content" style="white-space: pre-wrap; word-break: break-word; font-family: var(--message-font-family, inherit); padding: 1.25rem; border-radius: 8px; background: rgba(0,0,0,0.18); max-height: 70vh; overflow-y: auto; line-height: 1.5; font-size: 0.95rem; margin: 0;"></pre>
 					</div>
 				</section>
@@ -444,7 +473,7 @@ Settings
  ══════════════════════════════════════════════════════════════════════ -->
 
 	<template id="tpl-text-message">
-		<article class="message-item msg-type-text">
+		<article class="message-item">
 			<header class="message-header">
 				<figure class="msg-author">
 					<img alt="" class="msg-author-avatar msg-avatar">
@@ -456,8 +485,6 @@ Settings
 					<figcaption class="msg-recipient-name msg-name"></figcaption>
 				</figure>
 				<time class="msg-time"></time>
-				<button class="msg-btn-special msg-btn-delete" title="Delete" type="button"><span
-						class="material-symbols-outlined" style="font-size: 1.15rem;">delete</span></button>
 			</header>
 			<div class="message-body">
 				<pre class="msg-text-content"></pre>
@@ -466,7 +493,7 @@ Settings
 	</template>
 
 	<template id="tpl-image-message">
-		<article class="message-item msg-type-image">
+		<article class="message-item">
 			<header class="message-header">
 				<figure class="msg-author">
 					<img alt="" class="msg-author-avatar msg-avatar">
@@ -478,11 +505,9 @@ Settings
 					<figcaption class="msg-recipient-name msg-name"></figcaption>
 				</figure>
 				<time class="msg-time"></time>
-				<button class="msg-btn-special msg-btn-delete" title="Delete" type="button"><span
-						class="material-symbols-outlined" style="font-size: 1.15rem;">delete</span></button>
 			</header>
 			<div class="message-body">
-				<img alt="" class="msg-media msg-image">
+				<img alt="" class="msg-media">
 			</div>
 		</article>
 	</template>
@@ -500,8 +525,6 @@ Settings
 					<figcaption class="msg-recipient-name msg-name"></figcaption>
 				</figure>
 				<time class="msg-time"></time>
-				<button class="msg-btn-special msg-btn-delete" title="Delete" type="button"><span
-						class="material-symbols-outlined" style="font-size: 1.15rem;">delete</span></button>
 			</header>
 			<div class="message-body">
 				<span class="msg-file-name"></span>
@@ -523,8 +546,6 @@ Settings
 					<figcaption class="msg-recipient-name msg-name"></figcaption>
 				</figure>
 				<time class="msg-time"></time>
-				<button class="msg-btn-special msg-btn-delete" title="Delete" type="button"><span
-						class="material-symbols-outlined" style="font-size: 1.15rem;">delete</span></button>
 			</header>
 			<div class="message-body">
 				<span class="msg-file-name"></span>
@@ -534,7 +555,7 @@ Settings
 	</template>
 
 	<template id="tpl-binary-message">
-		<article class="message-item msg-type-binary">
+		<article class="message-item">
 			<header class="message-header">
 				<figure class="msg-author">
 					<img alt="" class="msg-author-avatar msg-avatar">
@@ -546,8 +567,6 @@ Settings
 					<figcaption class="msg-recipient-name msg-name"></figcaption>
 				</figure>
 				<time class="msg-time"></time>
-				<button class="msg-btn-special msg-btn-delete" title="Delete" type="button"><span
-						class="material-symbols-outlined" style="font-size: 1.15rem;">delete</span></button>
 			</header>
 			<div class="message-body">
 				<span aria-hidden="true" class="material-symbols-outlined msg-file-icon"
@@ -587,6 +606,26 @@ Settings
 	<!-- Hidden file input for peer import -->
 	<input id="import-peer-file" style="display:none" type="file">
 
+
+	<!-- Message Context Menu -->
+	<div id="msg-context-menu" class="msg-context-menu" hidden>
+		<button type="button" class="msg-context-item" data-action="reply">
+			<span class="material-symbols-outlined" style="font-size: 1.15rem;">reply</span>
+			<span>Reply</span>
+		</button>
+		<button type="button" class="msg-context-item" data-action="copy">
+			<span class="material-symbols-outlined" style="font-size: 1.15rem;">content_copy</span>
+			<span>Copy</span>
+		</button>
+		<button type="button" class="msg-context-item" data-action="download">
+			<span class="material-symbols-outlined" style="font-size: 1.15rem;">download</span>
+			<span>Download</span>
+		</button>
+		<button type="button" class="msg-context-item danger" data-action="delete">
+			<span class="material-symbols-outlined" style="font-size: 1.15rem;">delete</span>
+			<span>Delete</span>
+		</button>
+	</div>
 
 	<!-- Single module entry point -->
 	<script src="js/main.js" type="module"></script>

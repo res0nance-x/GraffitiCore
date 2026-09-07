@@ -1,16 +1,177 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   Graffiti Themes (Dark & Light)
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Dark Themes (Pure OLED Black Background) ───────────────────────────── */
+
+/* Default / Dark Sage (Mint) */
 :root,
-[data-theme="dark"] {
+[data-theme="dark"],
+[data-theme="dark-sage"] {
     --background: black;
-    --background-hover: #111;
-    --primary: #ccc;
-    --button: rgb(150, 150, 150);
+    --background-hover: #1c1f1d;
+    --primary: #ddd;
+    --accent: #6ee7b7;
+    --accent-hover: #a7f3d0;
+    --button: #10b981;
+    --button-hover: #059669;
+    --button-hover-bg: rgba(16, 185, 129, 0.15);
+    --button-hover-text: #ffffff;
+    --quote-bg: rgba(110, 231, 183, 0.08);
+    --code-bg: rgba(255, 255, 255, 0.06);
 }
 
-[data-theme="light"] {
+/* Dark Lavender (Purple) */
+[data-theme="dark-lavender"] {
+    --background: black;
+    --background-hover: #181524;
+    --primary: #eae5f5;
+    --accent: #c499f3;
+    --accent-hover: #d8b4fe;
+    --button: #9d72e6;
+    --button-hover: #b388ff;
+    --button-hover-bg: rgba(196, 153, 243, 0.15);
+    --button-hover-text: #ffffff;
+    --quote-bg: rgba(196, 153, 243, 0.08);
+    --code-bg: rgba(255, 255, 255, 0.06);
+}
+
+/* Dark Sky (Cyan) */
+[data-theme="dark-sky"] {
+    --background: black;
+    --background-hover: #111d27;
+    --primary: #e0f2fe;
+    --accent: #38bdf8;
+    --accent-hover: #7dd3fc;
+    --button: #0284c7;
+    --button-hover: #0369a1;
+    --button-hover-bg: rgba(56, 189, 248, 0.15);
+    --button-hover-text: #ffffff;
+    --quote-bg: rgba(56, 189, 248, 0.08);
+    --code-bg: rgba(255, 255, 255, 0.06);
+}
+
+/* Dark Amber (Gold) */
+[data-theme="dark-amber"] {
+    --background: black;
+    --background-hover: #211c13;
+    --primary: #fef3c7;
+    --accent: #fbbf24;
+    --accent-hover: #fde68a;
+    --button: #d97706;
+    --button-hover: #b45309;
+    --button-hover-bg: rgba(251, 191, 36, 0.15);
+    --button-hover-text: #ffffff;
+    --quote-bg: rgba(251, 191, 36, 0.08);
+    --code-bg: rgba(255, 255, 255, 0.06);
+}
+
+/* Dark Rose (Coral) */
+[data-theme="dark-rose"] {
+    --background: black;
+    --background-hover: #221419;
+    --primary: #ffe4e6;
+    --accent: #fb7185;
+    --accent-hover: #fda4af;
+    --button: #e11d48;
+    --button-hover: #be123c;
+    --button-hover-bg: rgba(251, 113, 133, 0.15);
+    --button-hover-text: #ffffff;
+    --quote-bg: rgba(251, 113, 133, 0.08);
+    --code-bg: rgba(255, 255, 255, 0.06);
+}
+
+/* Dark Monochrome (Slate / Silver) */
+[data-theme="dark-mono"] {
+    --background: black;
+    --background-hover: #1c1c1f;
+    --primary: #f4f4f5;
+    --accent: #e4e4e7;
+    --accent-hover: #ffffff;
+    --button: #71717a;
+    --button-hover: #a1a1aa;
+    --button-hover-bg: rgba(228, 228, 231, 0.15);
+    --button-hover-text: #ffffff;
+    --quote-bg: rgba(255, 255, 255, 0.07);
+    --code-bg: rgba(255, 255, 255, 0.06);
+}
+
+/* ── Light Themes ────────────────────────────────────────────────────────── */
+
+/* Light Purple (Lilac) */
+[data-theme="light"],
+[data-theme="light-purple"] {
     --background: white;
-    --background-hover: #eee;
-    --primary: #6750A4;
-    --button: rgb(45, 45, 255);
+    --background-hover: #f5f0fb;
+    --primary: #211c27;
+    --accent: #6750A4;
+    --accent-hover: #7c62be;
+    --button: #6750A4;
+    --button-hover: #503c85;
+    --button-hover-bg: #6750A4;
+    --button-hover-text: #ffffff;
+    --quote-bg: rgba(103, 80, 164, 0.08);
+    --code-bg: rgba(0, 0, 0, 0.05);
+}
+
+/* Light Sage (Fresh Green) */
+[data-theme="light-sage"] {
+    --background: white;
+    --background-hover: #f0fdf4;
+    --primary: #132a1e;
+    --accent: #059669;
+    --accent-hover: #047857;
+    --button: #059669;
+    --button-hover: #047857;
+    --button-hover-bg: #059669;
+    --button-hover-text: #ffffff;
+    --quote-bg: rgba(5, 150, 105, 0.08);
+    --code-bg: rgba(0, 0, 0, 0.05);
+}
+
+/* Light Ocean (Sky Blue) */
+[data-theme="light-ocean"] {
+    --background: white;
+    --background-hover: #f0f9ff;
+    --primary: #0e2b44;
+    --accent: #0284c7;
+    --accent-hover: #0369a1;
+    --button: #0284c7;
+    --button-hover: #0369a1;
+    --button-hover-bg: #0284c7;
+    --button-hover-text: #ffffff;
+    --quote-bg: rgba(2, 132, 199, 0.08);
+    --code-bg: rgba(0, 0, 0, 0.05);
+}
+
+/* Light Amber (Warm Sand) */
+[data-theme="light-amber"] {
+    --background: white;
+    --background-hover: #fefce8;
+    --primary: #382504;
+    --accent: #b45309;
+    --accent-hover: #92400e;
+    --button: #d97706;
+    --button-hover: #b45309;
+    --button-hover-bg: #d97706;
+    --button-hover-text: #ffffff;
+    --quote-bg: rgba(217, 119, 6, 0.08);
+    --code-bg: rgba(0, 0, 0, 0.05);
+}
+
+/* Light Rose (Blush Coral) */
+[data-theme="light-rose"] {
+    --background: white;
+    --background-hover: #fff1f2;
+    --primary: #3a111a;
+    --accent: #e11d48;
+    --accent-hover: #be123c;
+    --button: #e11d48;
+    --button-hover: #be123c;
+    --button-hover-bg: #e11d48;
+    --button-hover-text: #ffffff;
+    --quote-bg: rgba(225, 29, 72, 0.08);
+    --code-bg: rgba(0, 0, 0, 0.05);
 }
 
 /* fallback */

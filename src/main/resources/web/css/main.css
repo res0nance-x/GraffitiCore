@@ -1,5 +1,8 @@
 :root {
     font-size: var(--app-font-size, 100%);
+    --radius-box: 0.5rem;
+    --radius-control: 0.4rem;
+    --radius-badge: 0.25rem;
 }
 
 /* ── SPA section visibility ───────────────────────────────────────────────── */
@@ -21,16 +24,20 @@ body {
 
 button, .btn {
     background: var(--background);
-    padding: .15rem 0.3rem;
-    color: var(--button);
+    padding: .2rem 0.45rem;
+    color: var(--accent);
     border: 1px solid var(--button);
-    transition: background 0.15s ease;
+    border-radius: var(--radius-control, 0.4rem);
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
     cursor: pointer;
     text-decoration: none;
+    font-family: inherit;
 }
 
 button:hover, .btn:hover {
-    background: var(--background-hover);
+    background: var(--button-hover-bg);
+    border-color: var(--accent-hover);
+    color: var(--button-hover-text, #ffffff);
 }
 
 table {
@@ -71,27 +78,29 @@ nav a {
     justify-content: center;
     gap: 0.25rem;
     padding: 0.4rem 0.25rem;
-    color: var(--button);
+    color: var(--accent);
     text-decoration: none;
     font-family: system-ui, sans-serif;
+    transition: color 0.15s ease, background 0.15s ease;
 }
 
 nav a:visited {
-    color: var(--button);
+    color: var(--accent);
     text-decoration: none;
 }
 
 nav a:hover {
     background: var(--background-hover);
+    color: var(--accent-hover);
 }
 
 nav a.is-active {
-    color: var(--primary);
-    border-bottom: 2px solid var(--button);
+    color: var(--accent);
+    border-bottom: 2px solid var(--primary);
 }
 
 nav a.is-active:visited {
-    color: var(--primary);
+    color: var(--accent);
 }
 
 .toolbar {
@@ -106,18 +115,21 @@ nav a.is-active:visited {
 .toolbar button {
     padding: 4px 8px;
     background: none;
+    color: var(--accent);
     border: 1px solid var(--button);
-    border-radius: 4px;
-    transition: background 0.15s ease;
+    border-radius: var(--radius-control, 0.4rem);
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .toolbar button:hover {
-    background: var(--background-hover);
+    background: var(--button-hover-bg);
+    border-color: var(--accent-hover);
+    color: var(--button-hover-text, #ffffff);
 }
 
 h1 {
     font-size: 1.6rem;
-    color: var(--primary);
+    color: var(--accent);
 }
 
 h2 {
@@ -146,37 +158,7 @@ h6 {
     padding-bottom: calc(var(--composer-height, 145px) + 0.5rem);
 }
 
-.messages-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-}
 
-.messages-header h1 {
-    margin: 0;
-}
-
-.notice-banner[hidden] {
-    display: none;
-}
-
-.notice-banner {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.75rem 1rem;
-    margin-bottom: 1rem;
-    border-radius: 0.5rem;
-    background: color-mix(in srgb, var(--accent, #f0a500) 15%, var(--background));
-    border: 1px solid color-mix(in srgb, var(--accent, #f0a500) 40%, transparent);
-    font-size: 0.9rem;
-}
-
-.notice-banner a {
-    margin-left: auto;
-    white-space: nowrap;
-}
 
 .composer {
     position: fixed;
@@ -190,7 +172,7 @@ h6 {
     border-bottom: none;
     border-radius: 0;
     padding: 0.35rem 0.5rem;
-    background: var(--background-hover);
+    background: var(--background);
     box-sizing: border-box;
 }
 
@@ -218,6 +200,8 @@ h6 {
 .field span {
     font-size: 0.82rem;
     font-weight: 600;
+    color: var(--accent);
+    letter-spacing: 0.02em;
 }
 
 .field select,
@@ -225,10 +209,18 @@ h6 {
     box-sizing: border-box;
     padding: 0.35rem 0.5rem;
     border: 1px solid var(--button);
-    border-radius: 0.4rem;
+    border-radius: var(--radius-control, 0.4rem);
     background: var(--background);
     color: var(--primary);
     font: inherit;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.field select:focus,
+.field textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
 }
 
 .field textarea {
@@ -244,6 +236,23 @@ h6 {
     flex-wrap: wrap;
 }
 
+.composer-actions button {
+    padding: 0.35rem 0.75rem;
+    border-radius: var(--radius-control, 0.4rem);
+    font-size: 0.88rem;
+    font-weight: 400;
+    color: var(--accent);
+    border: 1px solid var(--button);
+    background: var(--background);
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.composer-actions button:hover {
+    background: var(--button-hover-bg);
+    border-color: var(--accent-hover);
+    color: var(--button-hover-text, #ffffff);
+}
+
 /* Subtle outline shown only while a drag is in progress over the messages section */
 #section-messages.is-dragover {
     outline: 2px dashed var(--button);
@@ -253,7 +262,9 @@ h6 {
 .send-status {
     margin: 0;
     font-size: 0.85rem;
-    opacity: 0.85;
+    color: var(--accent);
+    opacity: 0.95;
+    font-weight: 500;
 }
 
 
@@ -287,9 +298,10 @@ h6 {
 
 .message-item {
     border: 1px solid var(--button);
-    border-radius: 0.5rem;
+    border-radius: var(--radius-box, 0.5rem);
     overflow: hidden;
-    background: var(--background-hover);
+    background: var(--background);
+    -webkit-touch-callout: none;
 }
 
 .message-header {
@@ -336,7 +348,8 @@ h6 {
 }
 
 .msg-arrow {
-    opacity: 0.5;
+    color: var(--accent);
+    opacity: 0.8;
     font-size: 0.8em;
     line-height: 1;
     flex-shrink: 0;
@@ -351,13 +364,81 @@ h6 {
     flex-shrink: 0;
 }
 
-.msg-btn-delete {
-    display: inline-flex;
+/* ══════════════════════════════════════════════════════════════════════════
+   Message Context Menu
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.msg-context-menu {
+    position: fixed;
+    z-index: 1200;
+    min-width: 140px;
+    background: var(--background, #1b1e2b);
+    border: 1px solid var(--button, #383f58);
+    border-radius: var(--radius-box, 0.5rem);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
+    padding: 0.3rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    animation: msg-menu-fade-in 0.12s ease-out;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.msg-context-menu[hidden],
+.msg-context-item[hidden] {
+    display: none !important;
+}
+
+@keyframes msg-menu-fade-in {
+    from {
+        opacity: 0;
+        transform: scale(0.95);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+.msg-context-item {
+    display: flex;
     align-items: center;
-    justify-content: center;
-    padding: 0.1rem 0.25rem;
-    line-height: 1;
-    flex-shrink: 0;
+    gap: 0.55rem;
+    width: 100%;
+    padding: 0.45rem 0.7rem;
+    border: none;
+    border-radius: var(--radius-control, 0.4rem);
+    background: transparent;
+    color: var(--accent);
+    font-family: inherit;
+    font-size: 0.86rem;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.12s ease, color 0.12s ease;
+    min-height: 34px;
+}
+
+.msg-context-item:hover,
+.msg-context-item:focus-visible {
+    background: var(--button-hover-bg);
+    color: var(--button-hover-text, #ffffff);
+    outline: none;
+}
+
+.msg-context-item.danger:hover,
+.msg-context-item.danger:focus-visible {
+    background: rgba(239, 68, 68, 0.2);
+    color: #ff6b6b;
+}
+
+.msg-context-item .material-symbols-outlined {
+    font-size: 1.15rem;
+    opacity: 0.85;
+}
+
+.msg-context-item.danger .material-symbols-outlined {
+    color: inherit;
 }
 
 .message-body {
@@ -376,7 +457,7 @@ h6 {
 .msg-media {
     max-width: 100%;
     display: block;
-    border-radius: 0.4rem;
+    border-radius: var(--radius-control, 0.4rem);
 }
 
 .msg-type-audio .msg-media {
@@ -416,32 +497,7 @@ h6 {
     filter: brightness(1.2);
 }
 
-.message-actions {
-    display: flex;
-    gap: 0.5rem;
-    padding: 0.35rem 0.75rem;
-    border-top: 1px solid var(--button);
-    background: var(--background);
-}
 
-.message-actions button {
-    font-size: 0.78rem;
-    padding: 0.15rem 0.45rem;
-    border-radius: 0.3rem;
-}
-
-
-.msg-btn-special {
-    color: var(--primary);
-    border: none;
-    padding: 0.15rem 0.45rem;
-    font-size: 1rem;
-    border-radius: 0.3rem;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-}
 
 /* ── Modal dialog ─────────────────────────────────────────────────────────── */
 
@@ -449,7 +505,7 @@ h6 {
     background: var(--background);
     color: var(--primary);
     border: 1px solid var(--button);
-    border-radius: 0.5rem;
+    border-radius: var(--radius-box, 0.5rem);
     padding: 1.5rem;
     min-width: 320px;
     max-width: 480px;
@@ -485,6 +541,7 @@ h6 {
 .dialog-field label {
     font-size: 0.88rem;
     font-weight: 600;
+    color: var(--accent);
 }
 
 input {
@@ -499,10 +556,19 @@ input {
     width: 100%;
     padding: 0.45rem 0.6rem;
     border: 1px solid var(--button);
-    border-radius: 0.35rem;
+    border-radius: var(--radius-control, 0.4rem);
     background: var(--background);
     color: var(--primary);
     font: inherit;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.dialog-field input:focus,
+.dialog-field textarea:focus,
+.dialog-field select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
 }
 
 .dialog-field small {
@@ -524,7 +590,7 @@ input {
     font-size: 0.7rem;
     font-weight: 600;
     padding: 0.1rem 0.4rem;
-    border-radius: 0.25rem;
+    border-radius: var(--radius-badge, 0.25rem);
     background: var(--button);
     color: var(--background);
     vertical-align: middle;
@@ -540,7 +606,7 @@ input {
     font-size: 0.7rem;
     font-weight: 600;
     padding: 0.1rem 0.4rem;
-    border-radius: 0.25rem;
+    border-radius: var(--radius-badge, 0.25rem);
     background: #4caf50;
     color: #ffffff;
     vertical-align: middle;
@@ -573,7 +639,7 @@ input {
 
 .net-card {
     border: 1px solid #666666;
-    border-radius: 6px;
+    border-radius: var(--radius-box, 0.5rem);
     padding: 1rem 1.25rem;
     margin-bottom: 1.25rem;
 }
@@ -605,17 +671,7 @@ input {
     padding: 1rem;
 }
 
-.cell-avatar img {
-    display: block;
-}
 
-.cell-actions {
-    white-space: nowrap;
-}
-
-.cell-actions button+button {
-    margin-left: 0.3rem;
-}
 
 .node-id-display {
     display: flex;
@@ -646,7 +702,7 @@ input {
 
 .net-item-card {
     border: 1px solid var(--button);
-    border-radius: 6px;
+    border-radius: var(--radius-box, 0.5rem);
     padding: 0.88rem;
     display: flex;
     flex-direction: column;
@@ -697,21 +753,19 @@ input {
 }
 
 .net-item-actions button {
-    border-radius: 4px;
+    border-radius: var(--radius-control, 0.4rem);
     padding: 0.3rem 0.60rem;
     font-size: 0.85rem;
+    color: var(--accent);
 }
 
-.alias-editable {
-    cursor: pointer;
-    text-decoration: underline dotted;
-    color: var(--button);
-    transition: color 0.15s ease;
+.net-item-actions button:hover {
+    background: var(--button-hover-bg);
+    border-color: var(--accent-hover);
+    color: var(--button-hover-text, #ffffff);
 }
 
-.alias-editable:hover {
-    color: var(--primary);
-}
+
 
 
 /* ── Markdown message formatting ────────────────────────────────────────── */
@@ -754,15 +808,17 @@ input {
 }
 .msg-text-content .msg-blockquote,
 .msg-blockquote {
-    border-left: 3px solid var(--button);
-    padding-left: 0.6rem;
-    margin: 0.3rem 0;
-    opacity: 0.85;
+    border-left: 3px solid var(--accent);
+    padding: 0.2rem 0.6rem;
+    margin: 0.35rem 0;
+    opacity: 0.92;
     font-style: italic;
+    background: var(--quote-bg, rgba(128, 128, 128, 0.08));
+    border-radius: 0 4px 4px 0;
 }
 .msg-text-content code,
 code {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--code-bg, rgba(128, 128, 128, 0.12));
     padding: 0.1rem 0.3rem;
     border-radius: 3px;
     font-family: monospace;
@@ -770,7 +826,7 @@ code {
 }
 .msg-text-content .msg-code-block,
 .msg-code-block {
-    background: rgba(0, 0, 0, 0.3);
+    background: var(--code-bg, rgba(0, 0, 0, 0.3));
     padding: 0.5rem;
     border-radius: 4px;
     overflow-x: auto;
