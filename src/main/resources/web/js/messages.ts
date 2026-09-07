@@ -317,10 +317,17 @@ function setStatus(text: string): void {
    if (statusEl) statusEl.textContent = text;
 }
 
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 function formatTime(created: number | string | null | undefined): string {
    if (created == null) return '';
    const d = new Date(Number(created));
-   return isNaN(d.getTime()) ? String(created) : d.toLocaleString();
+   if (isNaN(d.getTime())) return String(created);
+   const month = MONTH_NAMES[d.getMonth()];
+   const day = String(d.getDate()).padStart(2, '0');
+   const hours = String(d.getHours()).padStart(2, '0');
+   const minutes = String(d.getMinutes()).padStart(2, '0');
+   return `${month} ${day} ${hours}:${minutes}`;
 }
 
 function formatSize(bytes: number | null | undefined): string {
@@ -398,7 +405,10 @@ function fillHeader(item: HTMLElement, msg: MessageData): void {
    if (timeEl) {
       timeEl.textContent = formatTime(msg.created);
       const iso = new Date(Number(msg.created)).toISOString();
-      if (iso !== 'Invalid Date') timeEl.dateTime = iso;
+      if (iso !== 'Invalid Date') {
+         timeEl.dateTime = iso;
+         timeEl.title = new Date(Number(msg.created)).toLocaleString();
+      }
    }
 }
 
