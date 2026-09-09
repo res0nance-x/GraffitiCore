@@ -497,10 +497,7 @@ h6 {
     filter: brightness(1.2);
 }
 
-
-
 /* ── Modal dialog ─────────────────────────────────────────────────────────── */
-
 .app-dialog {
     background: var(--background);
     color: var(--primary);
@@ -765,9 +762,6 @@ input {
     color: var(--button-hover-text, #ffffff);
 }
 
-
-
-
 /* ── Markdown message formatting ────────────────────────────────────────── */
 .msg-text-content .msg-h1,
 .msg-h1 {
@@ -837,8 +831,6 @@ code {
     color: var(--button);
     text-decoration: underline;
 }
-
-
 
 #nav-network-icon {
     transition: color 0.2s ease;
