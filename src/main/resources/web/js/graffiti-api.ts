@@ -357,11 +357,28 @@ export const graffiti = {
       }
    },
 
+   async getAllStore(): Promise<Record<string, string>> {
+      try {
+         const res = await get<{ ok: boolean; settings?: Record<string, string> }>('/api/store');
+         return res.settings || {};
+      } catch (_) {
+         return {};
+      }
+   },
+
    async setStore(key: string, value: string): Promise<ApiOk> {
       const url = new URL(`/api/store?key=${encodeURIComponent(key)}`, window.location.origin);
       const res = await fetch(url.toString(), {
          method: 'PUT',
          body: value
+      });
+      return parseJson<ApiOk>(res);
+   },
+
+   async deleteStore(key: string): Promise<ApiOk> {
+      const url = new URL(`/api/store?key=${encodeURIComponent(key)}`, window.location.origin);
+      const res = await fetch(url.toString(), {
+         method: 'DELETE'
       });
       return parseJson<ApiOk>(res);
    },

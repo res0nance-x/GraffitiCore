@@ -6,12 +6,21 @@
 	<meta content="width=device-width, initial-scale=1.0" name="viewport" />
 	<title>Graffiti</title>
 	<script>
-		try {
-			var savedTheme = localStorage.getItem('graffiti:theme');
-			if (savedTheme) {
-				document.documentElement.setAttribute('data-theme', savedTheme);
-			}
-		} catch (e) {}
+		fetch('/api/store?key=graffiti:theme')
+			.then(function(r) { return r.json(); })
+			.then(function(d) {
+				if (d && d.value) {
+					var theme = d.value;
+					if (theme === 'dark') theme = 'dark-sage';
+					if (theme === 'light') theme = 'light-purple';
+					document.documentElement.setAttribute('data-theme', theme);
+					var metaTheme = document.querySelector('meta[name="theme-color"]');
+					if (metaTheme) {
+						metaTheme.setAttribute('content', theme.startsWith('light') ? '#ffffff' : '#000000');
+					}
+				}
+			})
+			.catch(function() {});
 	</script>
 	<link href="css/theme.css" rel="stylesheet" />
 	<link href="css/main.css" rel="stylesheet" />
@@ -448,20 +457,86 @@ Settings
 				<section class="net-card">
 					<div class="net-card-header" style="flex-wrap: wrap; gap: 0.75rem; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
 						<div>
-							<h3 id="view-content-filename" style="font-size: 1.2rem; margin-bottom: 0.25rem;">Full Message Content</h3>
-							<p id="view-content-meta" style="font-size: 0.85rem; opacity: 0.75; margin: 0;">Full text message payload</p>
+							<h3 id="view-content-filename" style="font-size: 1.2rem; margin-bottom: 0.25rem;">Content Viewer</h3>
+							<p id="view-content-meta" style="font-size: 0.85rem; opacity: 0.75; margin: 0;">Message payload</p>
 						</div>
 						<div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
-							<a id="btn-download-view-content" class="btn" style="display: inline-flex; align-items: center; gap: 0.25rem; text-decoration: none;" download href="#">
-								<span class="material-symbols-outlined" style="font-size: 1.1rem;">download</span> Download File
-							</a>
+							<button id="btn-download-view-content" class="btn" style="display: inline-flex; align-items: center; gap: 0.25rem;" type="button">
+								<span class="material-symbols-outlined" style="font-size: 1.1rem;">download</span> Download
+							</button>
 							<button id="btn-close-view-content" type="button" style="display: inline-flex; align-items: center; gap: 0.25rem;">
 								<span class="material-symbols-outlined" style="font-size: 1.1rem;">arrow_back</span> Back to Messages
 							</button>
 						</div>
 					</div>
-					<div style="margin-top: 1rem;">
+
+					<!-- Image Viewport Container -->
+					<div id="view-content-image-container" class="media-view-container" style="display: none;">
+						<div class="image-zoom-toolbar">
+							<button id="btn-img-zoom-out" type="button" title="Zoom Out" class="btn" style="display: inline-flex; align-items: center; justify-content: center;">
+								<span class="material-symbols-outlined" style="font-size: 1.2rem;">zoom_out</span>
+							</button>
+							<span id="img-zoom-level" class="zoom-level-badge">100%</span>
+							<button id="btn-img-zoom-in" type="button" title="Zoom In" class="btn" style="display: inline-flex; align-items: center; justify-content: center;">
+								<span class="material-symbols-outlined" style="font-size: 1.2rem;">zoom_in</span>
+							</button>
+							<button id="btn-img-zoom-reset" type="button" title="Fit to Screen" class="btn" style="display: inline-flex; align-items: center; gap: 0.25rem;">
+								<span class="material-symbols-outlined" style="font-size: 1.1rem;">fit_screen</span> Fit
+							</button>
+						</div>
+						<div id="view-content-image-viewport" class="image-zoom-viewport">
+							<img id="view-content-image" alt="Full Image" class="image-zoom-target" />
+						</div>
+					</div>
+
+					<!-- Text / Markdown Container -->
+					<div id="view-content-text-container" class="media-view-container" style="display: none;">
+						<div class="text-view-toolbar" style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem;">
+							<button id="btn-text-font-dec" type="button" class="btn" title="Decrease font size" style="display: inline-flex; align-items: center; gap: 0.25rem;">
+								<span class="material-symbols-outlined" style="font-size: 1.1rem;">text_decrease</span> A-
+							</button>
+							<button id="btn-text-font-inc" type="button" class="btn" title="Increase font size" style="display: inline-flex; align-items: center; gap: 0.25rem;">
+								<span class="material-symbols-outlined" style="font-size: 1.1rem;">text_increase</span> A+
+							</button>
+							<button id="btn-text-toggle-raw" type="button" class="btn" title="Toggle Raw / Formatted" style="display: inline-flex; align-items: center; gap: 0.25rem;">
+								<span class="material-symbols-outlined" style="font-size: 1.1rem;">code</span> Raw
+							</button>
+						</div>
 						<pre id="view-content-text" class="msg-text-content" style="white-space: pre-wrap; word-break: break-word; font-family: var(--message-font-family, inherit); padding: 1.25rem; border-radius: 8px; background: rgba(0,0,0,0.18); max-height: 70vh; overflow-y: auto; line-height: 1.5; font-size: 0.95rem; margin: 0;"></pre>
+					</div>
+
+					<!-- Video Container -->
+					<div id="view-content-video-container" class="media-view-container" style="display: none; text-align: center;">
+						<video id="view-content-video" controls style="max-width: 100%; max-height: 75vh; border-radius: 8px; background: #000;"></video>
+					</div>
+
+					<!-- Audio Container -->
+					<div id="view-content-audio-container" class="media-view-container" style="display: none; padding: 2rem 1rem; text-align: center;">
+						<div style="font-size: 3rem; margin-bottom: 1rem;">🎵</div>
+						<h4 id="view-content-audio-title" style="margin: 0 0 1rem;">Audio Track</h4>
+						<audio id="view-content-audio" controls style="width: 100%; max-width: 500px; margin: 0 auto; display: block;"></audio>
+					</div>
+
+					<!-- HTML Container -->
+					<div id="view-content-html-container" class="media-view-container" style="display: none;">
+						<iframe id="view-content-iframe" style="width: 100%; height: 75vh; border: 1px solid var(--button); border-radius: 8px; background: white;" sandbox="allow-scripts allow-same-origin"></iframe>
+					</div>
+
+					<!-- Pack Container -->
+					<div id="view-content-pack-container" class="media-view-container" style="display: none; padding: 1.5rem; text-align: center;">
+						<div style="font-size: 3rem; margin-bottom: 0.75rem;">📦</div>
+						<h4 id="view-content-pack-title" style="margin: 0 0 0.5rem;">Web Pack Archive</h4>
+						<p id="view-content-pack-desc" style="font-size: 0.9rem; opacity: 0.8; margin-bottom: 1.25rem;">This message contains a standalone web application or content pack.</p>
+						<button id="btn-view-pack-open" class="btn" type="button" style="display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.5rem 1rem; font-size: 1rem;">
+							<span class="material-symbols-outlined" style="font-size: 1.2rem;">open_in_new</span> Launch in Pack Viewer
+						</button>
+					</div>
+
+					<!-- Generic File Container -->
+					<div id="view-content-generic-container" class="media-view-container" style="display: none; padding: 2rem 1rem; text-align: center;">
+						<div style="font-size: 3rem; margin-bottom: 0.75rem;">📁</div>
+						<h4 id="view-content-generic-name" style="margin: 0 0 0.5rem;">File Attachment</h4>
+						<p id="view-content-generic-meta" style="font-size: 0.88rem; opacity: 0.8; margin-bottom: 1.25rem;">Binary file attachment</p>
 					</div>
 				</section>
 			</main>
@@ -609,6 +684,10 @@ Settings
 
 	<!-- Message Context Menu -->
 	<div id="msg-context-menu" class="msg-context-menu" hidden>
+		<button type="button" class="msg-context-item" data-action="view">
+			<span class="material-symbols-outlined" style="font-size: 1.15rem;">visibility</span>
+			<span>View in Full Viewer</span>
+		</button>
 		<button type="button" class="msg-context-item" data-action="reply">
 			<span class="material-symbols-outlined" style="font-size: 1.15rem;">reply</span>
 			<span>Reply</span>

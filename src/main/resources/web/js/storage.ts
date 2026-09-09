@@ -47,20 +47,12 @@ function applyMessageAppearance(size: string, family: string): void {
 }
 
 async function loadAppearanceSettings(): Promise<void> {
-   let theme = 'dark-sage';
-   try {
-      theme = localStorage.getItem('graffiti:theme') || 'dark-sage';
-   } catch {}
-   applyTheme(theme);
-
    try {
       const storedTheme = await graffiti.getStore('graffiti:theme');
-      if (storedTheme) {
-         theme = storedTheme;
-         applyTheme(theme);
-         try { localStorage.setItem('graffiti:theme', theme); } catch {}
-      }
-   } catch {}
+      applyTheme(storedTheme || 'dark-sage');
+   } catch {
+      applyTheme('dark-sage');
+   }
 
    const size = await graffiti.getStore('graffiti:message-font-size') || '100%';
    const family = await graffiti.getStore('graffiti:message-font-family') || 'inherit';
@@ -71,9 +63,6 @@ if (themeSel) {
    themeSel.addEventListener('change', async () => {
       const selectedTheme = themeSel.value;
       applyTheme(selectedTheme);
-      try {
-         localStorage.setItem('graffiti:theme', selectedTheme);
-      } catch {}
       await graffiti.setStore('graffiti:theme', selectedTheme);
    });
 }

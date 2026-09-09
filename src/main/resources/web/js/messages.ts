@@ -341,14 +341,16 @@ function formatSize(bytes: number | null | undefined): string {
 
 // ── Media type classification ──────────────────────────────────────────────────
 const imageExtensions = new Set(['png', 'jpg', 'jpeg', 'avif', 'gif', 'bmp', 'webp', 'svg']);
-const textExtensions = new Set(['txt']);
+const textExtensions = new Set(['txt', 'text', 'md', 'markdown', 'log', 'json', 'xml', 'csv']);
 const audioExtensions = new Set(['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a']);
 const videoExtensions = new Set(['mp4', 'webm', 'mkv', 'avi', 'mov']);
+const htmlExtensions = new Set(['html', 'htm']);
 
 const isImage = (t: string) => imageExtensions.has(t);
 const isText = (t: string) => textExtensions.has(t);
 const isAudio = (t: string) => audioExtensions.has(t);
 const isVideo = (t: string) => videoExtensions.has(t);
+const isHtml = (t: string) => htmlExtensions.has(t);
 
 function pickTemplateId(type: string): string {
    if (isText(type)) return 'tpl-text-message';
@@ -637,17 +639,60 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
       if (imgEl) {
          imgEl.src = url;
          imgEl.alt = msg.name || 'Image';
+         imgEl.classList.add('is-clickable');
+         imgEl.title = 'Click to open in dedicated viewer';
+         imgEl.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            openFullContentViewer(msg);
+         });
       }
    } else if (isAudio(msg.type)) {
       const fileNameEl = el.querySelector<HTMLElement>('.msg-file-name');
       if (fileNameEl) fileNameEl.textContent = msg.name || '';
       const audio = el.querySelector<HTMLAudioElement>('.msg-media');
       if (audio) audio.src = url;
+      let viewBtn = el.querySelector<HTMLButtonElement>('.btn-view-media');
+      if (!viewBtn) {
+         viewBtn = document.createElement('button');
+         viewBtn.type = 'button';
+         viewBtn.className = 'btn-view-media';
+         viewBtn.style.display = 'inline-flex';
+         viewBtn.style.alignItems = 'center';
+         viewBtn.style.gap = '0.25rem';
+         viewBtn.style.marginTop = '0.4rem';
+         viewBtn.style.fontSize = '0.82rem';
+         viewBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size: 1rem;">visibility</span> Full Viewer';
+         viewBtn.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            openFullContentViewer(msg);
+         };
+         audio?.after(viewBtn);
+      }
    } else if (isVideo(msg.type)) {
       const fileNameEl = el.querySelector<HTMLElement>('.msg-file-name');
       if (fileNameEl) fileNameEl.textContent = msg.name || '';
       const video = el.querySelector<HTMLVideoElement>('.msg-media');
       if (video) video.src = url;
+      let viewBtn = el.querySelector<HTMLButtonElement>('.btn-view-media');
+      if (!viewBtn) {
+         viewBtn = document.createElement('button');
+         viewBtn.type = 'button';
+         viewBtn.className = 'btn-view-media';
+         viewBtn.style.display = 'inline-flex';
+         viewBtn.style.alignItems = 'center';
+         viewBtn.style.gap = '0.25rem';
+         viewBtn.style.marginTop = '0.4rem';
+         viewBtn.style.fontSize = '0.82rem';
+         viewBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size: 1rem;">visibility</span> Full Viewer';
+         viewBtn.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            openFullContentViewer(msg);
+         };
+         video?.after(viewBtn);
+      }
    } else {
       const fileNameEl = el.querySelector<HTMLElement>('.msg-file-name');
       if (fileNameEl) fileNameEl.textContent = msg.name || 'File';
@@ -659,15 +704,24 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
          link.textContent = `⬇ Download ${msg.name || 'file'}${sizeStr}`;
       }
 
-      if (msg.name && (msg.name.toLowerCase().endsWith('.pack') || msg.name.toLowerCase().endsWith('.epack'))) {
-         const viewBtn = document.createElement('button');
+      const isPackFile = msg.name && (msg.name.toLowerCase().endsWith('.pack') || msg.name.toLowerCase().endsWith('.epack'));
+      const isHtmlFile = isHtml(msg.type) || (msg.name && (msg.name.toLowerCase().endsWith('.html') || msg.name.toLowerCase().endsWith('.htm')));
+
+      let viewBtn = el.querySelector<HTMLButtonElement>('.btn-view-media');
+      if (!viewBtn && (isPackFile || isHtmlFile)) {
+         viewBtn = document.createElement('button');
          viewBtn.type = 'button';
-         viewBtn.textContent = '▶ View Pack';
+         viewBtn.className = 'btn-view-media';
          viewBtn.style.marginLeft = '8px';
-         viewBtn.addEventListener('click', (e) => {
+         viewBtn.style.display = 'inline-flex';
+         viewBtn.style.alignItems = 'center';
+         viewBtn.style.gap = '0.25rem';
+         viewBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size: 1rem;">visibility</span> View';
+         viewBtn.onclick = (e) => {
             e.preventDefault();
-            void openPackFile({ encKey: msg.key, name: msg.name });
-         });
+            e.stopPropagation();
+            openFullContentViewer(msg);
+         };
          link?.parentElement?.appendChild(viewBtn);
       }
    }
@@ -1062,12 +1116,242 @@ onWsEvent('peers_update', () => {
    void queueRefreshMessages();
 });
 
+// ── Unified Media Content Viewer & Zoom Controller ────────────────────────────
+
+let currentViewerMsg: MessageData | null = null;
+let currentRawText: string = '';
+let isRawTextView: boolean = false;
+let currentTextFontSizePercent: number = 100;
+
+// Image zoom & pan state
+let imgScale = 1.0;
+let imgTranslateX = 0;
+let imgTranslateY = 0;
+let isImgDragging = false;
+let imgDragStartX = 0;
+let imgDragStartY = 0;
+let imgInitialPinchDist = 0;
+let imgInitialScale = 1.0;
+let imgLastTapTime = 0;
+
+function applyImageTransform(animate = false): void {
+   const img = document.getElementById('view-content-image') as HTMLImageElement | null;
+   const badge = document.getElementById('img-zoom-level');
+   if (!img) return;
+   img.style.transition = animate ? 'transform 0.18s ease-out' : 'none';
+   img.style.transform = `translate(${imgTranslateX}px, ${imgTranslateY}px) scale(${imgScale})`;
+   if (badge) {
+      badge.textContent = `${Math.round(imgScale * 100)}%`;
+   }
+}
+
+function resetImageZoom(): void {
+   imgScale = 1.0;
+   imgTranslateX = 0;
+   imgTranslateY = 0;
+   isImgDragging = false;
+   applyImageTransform(true);
+}
+
+function zoomImageIn(): void {
+   imgScale = Math.min(10.0, +(imgScale + 0.25).toFixed(2));
+   applyImageTransform(true);
+}
+
+function zoomImageOut(): void {
+   imgScale = Math.max(0.25, +(imgScale - 0.25).toFixed(2));
+   if (imgScale <= 1.0) {
+      imgTranslateX = 0;
+      imgTranslateY = 0;
+   }
+   applyImageTransform(true);
+}
+
+export function cleanupViewerMedia(): void {
+   const video = document.getElementById('view-content-video') as HTMLVideoElement | null;
+   if (video) {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+   }
+   const audio = document.getElementById('view-content-audio') as HTMLAudioElement | null;
+   if (audio) {
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+   }
+   const iframe = document.getElementById('view-content-iframe') as HTMLIFrameElement | null;
+   if (iframe) {
+      iframe.src = 'about:blank';
+   }
+   resetImageZoom();
+}
+
+function initImageZoomController(): void {
+   const viewport = document.getElementById('view-content-image-viewport');
+   const zoomInBtn = document.getElementById('btn-img-zoom-in');
+   const zoomOutBtn = document.getElementById('btn-img-zoom-out');
+   const zoomResetBtn = document.getElementById('btn-img-zoom-reset');
+
+   zoomInBtn?.addEventListener('click', (e) => {
+      e.preventDefault();
+      zoomImageIn();
+   });
+   zoomOutBtn?.addEventListener('click', (e) => {
+      e.preventDefault();
+      zoomImageOut();
+   });
+   zoomResetBtn?.addEventListener('click', (e) => {
+      e.preventDefault();
+      resetImageZoom();
+   });
+
+   if (!viewport) return;
+
+   // Touch gestures: pinch-to-zoom, pan, double-tap
+   viewport.addEventListener('touchstart', (e: TouchEvent) => {
+      if (e.touches.length === 1) {
+         const touch = e.touches[0];
+         const now = Date.now();
+         if (now - imgLastTapTime < 320) {
+            // Double-tap: toggle 1.0x <-> 2.5x
+            if (imgScale > 1.2) {
+               resetImageZoom();
+            } else {
+               imgScale = 2.5;
+               const rect = viewport.getBoundingClientRect();
+               const centerX = rect.left + rect.width / 2;
+               const centerY = rect.top + rect.height / 2;
+               imgTranslateX = (centerX - touch.clientX) * 0.75;
+               imgTranslateY = (centerY - touch.clientY) * 0.75;
+               applyImageTransform(true);
+            }
+            imgLastTapTime = 0;
+            return;
+         }
+         imgLastTapTime = now;
+
+         if (imgScale > 1.0) {
+            isImgDragging = true;
+            imgDragStartX = touch.clientX - imgTranslateX;
+            imgDragStartY = touch.clientY - imgTranslateY;
+         }
+      } else if (e.touches.length === 2) {
+         isImgDragging = false;
+         const t1 = e.touches[0];
+         const t2 = e.touches[1];
+         imgInitialPinchDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+         imgInitialScale = imgScale;
+      }
+   }, { passive: false });
+
+   viewport.addEventListener('touchmove', (e: TouchEvent) => {
+      if (e.touches.length === 2 && imgInitialPinchDist > 0) {
+         e.preventDefault();
+         const t1 = e.touches[0];
+         const t2 = e.touches[1];
+         const currentDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+         const newScale = Math.min(10.0, Math.max(0.5, +(imgInitialScale * (currentDist / imgInitialPinchDist)).toFixed(2)));
+         imgScale = newScale;
+         applyImageTransform(false);
+      } else if (e.touches.length === 1 && isImgDragging && imgScale > 1.0) {
+         e.preventDefault();
+         const touch = e.touches[0];
+         imgTranslateX = touch.clientX - imgDragStartX;
+         imgTranslateY = touch.clientY - imgDragStartY;
+         applyImageTransform(false);
+      }
+   }, { passive: false });
+
+   viewport.addEventListener('touchend', (e: TouchEvent) => {
+      if (e.touches.length === 0) {
+         isImgDragging = false;
+         imgInitialPinchDist = 0;
+         if (imgScale <= 1.0) {
+            imgTranslateX = 0;
+            imgTranslateY = 0;
+            applyImageTransform(true);
+         }
+      } else if (e.touches.length === 1 && imgScale > 1.0) {
+         const touch = e.touches[0];
+         isImgDragging = true;
+         imgDragStartX = touch.clientX - imgTranslateX;
+         imgDragStartY = touch.clientY - imgTranslateY;
+      }
+   });
+
+   // Mouse events: drag to pan when zoomed, mouse wheel to zoom
+   viewport.addEventListener('mousedown', (e: MouseEvent) => {
+      if (e.button === 0 && imgScale > 1.0) {
+         isImgDragging = true;
+         imgDragStartX = e.clientX - imgTranslateX;
+         imgDragStartY = e.clientY - imgTranslateY;
+         viewport.classList.add('is-dragging');
+      }
+   });
+
+   window.addEventListener('mousemove', (e: MouseEvent) => {
+      if (isImgDragging) {
+         imgTranslateX = e.clientX - imgDragStartX;
+         imgTranslateY = e.clientY - imgDragStartY;
+         applyImageTransform(false);
+      }
+   });
+
+   window.addEventListener('mouseup', () => {
+      if (isImgDragging) {
+         isImgDragging = false;
+         viewport.classList.remove('is-dragging');
+      }
+   });
+
+   viewport.addEventListener('wheel', (e: WheelEvent) => {
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? 0.25 : -0.25;
+      imgScale = Math.min(10.0, Math.max(0.25, +(imgScale + delta).toFixed(2)));
+      if (imgScale <= 1.0) {
+         imgTranslateX = 0;
+         imgTranslateY = 0;
+      }
+      applyImageTransform(false);
+   }, { passive: false });
+}
+
+function initTextViewerControls(): void {
+   const decBtn = document.getElementById('btn-text-font-dec');
+   const incBtn = document.getElementById('btn-text-font-inc');
+   const rawBtn = document.getElementById('btn-text-toggle-raw');
+   const textPre = document.getElementById('view-content-text');
+
+   decBtn?.addEventListener('click', () => {
+      currentTextFontSizePercent = Math.max(50, currentTextFontSizePercent - 10);
+      if (textPre) textPre.style.fontSize = `${currentTextFontSizePercent}%`;
+   });
+
+   incBtn?.addEventListener('click', () => {
+      currentTextFontSizePercent = Math.min(250, currentTextFontSizePercent + 10);
+      if (textPre) textPre.style.fontSize = `${currentTextFontSizePercent}%`;
+   });
+
+   rawBtn?.addEventListener('click', () => {
+      isRawTextView = !isRawTextView;
+      rawBtn.classList.toggle('is-active', isRawTextView);
+      if (textPre) {
+         if (isRawTextView) {
+            textPre.textContent = currentRawText;
+         } else {
+            textPre.innerHTML = renderMarkdown(currentRawText);
+         }
+      }
+   });
+}
+
 export function openFullContentViewer(msg: MessageData, fullText?: string): void {
+   currentViewerMsg = msg;
    const url = graffiti.contentUrl(msg.key);
+
    const filenameEl = document.getElementById('view-content-filename');
    const metaEl = document.getElementById('view-content-meta');
-   const downloadBtn = document.getElementById('btn-download-view-content') as HTMLAnchorElement | null;
-   const textPre = document.getElementById('view-content-text');
 
    const authorLabel = msg.author || 'Unknown';
    const recipientLabel = msg.recipient || 'Unknown';
@@ -1075,36 +1359,114 @@ export function openFullContentViewer(msg: MessageData, fullText?: string): void
    const timeStr = msg.created ? ` • ${formatTime(msg.created)}` : '';
 
    if (filenameEl) {
-      filenameEl.textContent = msg.name || 'Text Message';
+      filenameEl.textContent = msg.name || (isText(msg.type) ? 'Text Message' : `${msg.type.toUpperCase()} Media`);
    }
    if (metaEl) {
       metaEl.textContent = `From ${authorLabel} to ${recipientLabel}${sizeStr}${timeStr}`;
    }
-   if (downloadBtn) {
-      downloadBtn.href = url;
-      downloadBtn.download = msg.name || 'message.txt';
-   }
 
-   if (textPre) {
-      if (fullText !== undefined && fullText !== '') {
-         textPre.innerHTML = renderMarkdown(fullText);
-      } else {
-         const cached = textContentCache.get(msg.key);
-         if (cached !== undefined) {
-            textPre.innerHTML = renderMarkdown(cached);
+   // Cleanup any currently playing media
+   cleanupViewerMedia();
+
+   // Containers
+   const imgContainer = document.getElementById('view-content-image-container');
+   const textContainer = document.getElementById('view-content-text-container');
+   const videoContainer = document.getElementById('view-content-video-container');
+   const audioContainer = document.getElementById('view-content-audio-container');
+   const htmlContainer = document.getElementById('view-content-html-container');
+   const packContainer = document.getElementById('view-content-pack-container');
+   const genericContainer = document.getElementById('view-content-generic-container');
+
+   if (imgContainer) imgContainer.style.display = 'none';
+   if (textContainer) textContainer.style.display = 'none';
+   if (videoContainer) videoContainer.style.display = 'none';
+   if (audioContainer) audioContainer.style.display = 'none';
+   if (htmlContainer) htmlContainer.style.display = 'none';
+   if (packContainer) packContainer.style.display = 'none';
+   if (genericContainer) genericContainer.style.display = 'none';
+
+   const isHtmlFile = isHtml(msg.type) || (msg.name && (msg.name.toLowerCase().endsWith('.html') || msg.name.toLowerCase().endsWith('.htm')));
+   const isPackFile = msg.name && (msg.name.toLowerCase().endsWith('.pack') || msg.name.toLowerCase().endsWith('.epack'));
+
+   if (isImage(msg.type)) {
+      if (imgContainer) imgContainer.style.display = '';
+      const img = document.getElementById('view-content-image') as HTMLImageElement | null;
+      if (img) {
+         img.src = url;
+         img.alt = msg.name || 'Image';
+      }
+      resetImageZoom();
+   } else if (isVideo(msg.type)) {
+      if (videoContainer) videoContainer.style.display = '';
+      const video = document.getElementById('view-content-video') as HTMLVideoElement | null;
+      if (video) {
+         video.src = url;
+         video.load();
+      }
+   } else if (isAudio(msg.type)) {
+      if (audioContainer) audioContainer.style.display = '';
+      const audio = document.getElementById('view-content-audio') as HTMLAudioElement | null;
+      const audioTitle = document.getElementById('view-content-audio-title');
+      if (audioTitle) audioTitle.textContent = msg.name || 'Audio Track';
+      if (audio) {
+         audio.src = url;
+         audio.load();
+      }
+   } else if (isHtmlFile) {
+      if (htmlContainer) htmlContainer.style.display = '';
+      const iframe = document.getElementById('view-content-iframe') as HTMLIFrameElement | null;
+      if (iframe) {
+         iframe.src = url;
+      }
+   } else if (isPackFile) {
+      if (packContainer) packContainer.style.display = '';
+      const packTitle = document.getElementById('view-content-pack-title');
+      const openBtn = document.getElementById('btn-view-pack-open') as HTMLButtonElement | null;
+      if (packTitle) packTitle.textContent = msg.name || 'Web Pack Archive';
+      if (openBtn) {
+         openBtn.onclick = () => {
+            void openPackFile({ encKey: msg.key, name: msg.name });
+         };
+      }
+   } else if (isText(msg.type)) {
+      if (textContainer) textContainer.style.display = '';
+      const textPre = document.getElementById('view-content-text');
+      isRawTextView = false;
+      const rawBtn = document.getElementById('btn-text-toggle-raw');
+      if (rawBtn) rawBtn.classList.remove('is-active');
+      if (textPre) {
+         textPre.style.fontSize = `${currentTextFontSizePercent}%`;
+         const render = (t: string) => {
+            currentRawText = t;
+            textPre.innerHTML = renderMarkdown(t);
+         };
+
+         if (fullText !== undefined && fullText !== '') {
+            render(fullText);
          } else {
-            textPre.textContent = 'Loading full message content…';
-            fetch(url)
-               .then(r => r.text())
-               .then(t => {
-                  textContentCache.set(msg.key, t);
-                  textPre.innerHTML = renderMarkdown(t);
-               })
-               .catch((err: Error) => {
-                  textPre.textContent = `[Error loading content: ${err.message}]`;
-               });
+            const cached = textContentCache.get(msg.key);
+            if (cached !== undefined) {
+               render(cached);
+            } else {
+               textPre.textContent = 'Loading content…';
+               fetch(url)
+                  .then(r => r.text())
+                  .then(t => {
+                     textContentCache.set(msg.key, t);
+                     render(t);
+                  })
+                  .catch((err: Error) => {
+                     textPre.textContent = `[Error loading content: ${err.message}]`;
+                  });
+            }
          }
       }
+   } else {
+      if (genericContainer) genericContainer.style.display = '';
+      const genericName = document.getElementById('view-content-generic-name');
+      const genericMeta = document.getElementById('view-content-generic-meta');
+      if (genericName) genericName.textContent = msg.name || 'File Attachment';
+      if (genericMeta) genericMeta.textContent = `${msg.type ? `Type: ${msg.type.toUpperCase()}` : ''}${sizeStr}`;
    }
 
    showSection('section-view-content');
@@ -1256,7 +1618,7 @@ document.addEventListener('click', (e: MouseEvent) => {
    const target = e.target as HTMLElement | null;
    if (!target) return;
 
-   const viewBtn = target.closest<HTMLButtonElement>('.btn-view-text');
+   const viewBtn = target.closest<HTMLButtonElement>('.btn-view-text, .btn-view-media');
    if (viewBtn) {
       e.preventDefault();
       e.stopPropagation();
@@ -1271,10 +1633,21 @@ document.addEventListener('click', (e: MouseEvent) => {
       return;
    }
 
+   const downloadBtn = target.closest('#btn-download-view-content');
+   if (downloadBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (currentViewerMsg) {
+         handleDownload(currentViewerMsg);
+      }
+      return;
+   }
+
    const closeBtn = target.closest('#btn-close-view-content');
    if (closeBtn) {
       e.preventDefault();
       e.stopPropagation();
+      cleanupViewerMedia();
       showSection('section-messages');
       return;
    }
@@ -1290,7 +1663,9 @@ msgContextMenu?.addEventListener('click', async (e: MouseEvent) => {
    const msg = activeContextMsg;
    closeContextMenu();
 
-   if (action === 'delete') {
+   if (action === 'view') {
+      openFullContentViewer(msg, textContentCache.get(msg.key));
+   } else if (action === 'delete') {
       try {
          await graffiti.removeMessage(msg.key);
          currentMessages.delete(msg.key);
@@ -1348,6 +1723,14 @@ messagesContainer?.addEventListener('contextmenu', (e: MouseEvent) => {
    }
 });
 
+// Prevent mobile / touch text selection highlighting on message boxes
+messagesContainer?.addEventListener('selectstart', (e: Event) => {
+   const isTouchDevice = 'ontouchstart' in window || (navigator.maxTouchPoints != null && navigator.maxTouchPoints > 0);
+   if (isTouchDevice && (e.target as HTMLElement | null)?.closest('.message-item')) {
+      e.preventDefault();
+   }
+});
+
 // Long-press on mobile touch devices
 let touchTimer: number | null = null;
 let touchStartX = 0;
@@ -1372,6 +1755,9 @@ messagesContainer?.addEventListener('touchstart', (e: TouchEvent) => {
    if (touchTimer !== null) clearTimeout(touchTimer);
    touchTimer = window.setTimeout(() => {
       isLongPressActive = true;
+      try {
+         window.getSelection()?.removeAllRanges();
+      } catch {}
       const key = item.dataset.msgKey;
       const msg = allFilteredMessages.find(m => m.key === key);
       if (msg) {
@@ -1419,4 +1805,17 @@ messagesContainer?.addEventListener('click', (e: MouseEvent) => {
       isLongPressActive = false;
    }
 }, true);
+
+// Initialize viewer controllers
+initImageZoomController();
+initTextViewerControls();
+
+// Cleanup media playback when switching tabs
+onSectionShow('section-messages', cleanupViewerMedia);
+onSectionShow('section-network', cleanupViewerMedia);
+onSectionShow('section-identity', cleanupViewerMedia);
+onSectionShow('section-peers', cleanupViewerMedia);
+onSectionShow('section-settings', cleanupViewerMedia);
+onSectionShow('section-help', cleanupViewerMedia);
+
 

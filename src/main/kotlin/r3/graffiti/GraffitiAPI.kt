@@ -671,19 +671,58 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		}
 	}
 
+	private fun loadAllSettings(): JSONObject {
+		return synchronized(settingsFile) {
+			if (!settingsFile.exists()) JSONObject()
+			else {
+				try {
+					JSONObject(settingsFile.readText())
+				} catch (e: Exception) {
+					JSONObject()
+				}
+			}
+		}
+	}
+
+	private fun deleteSetting(key: String) {
+		synchronized(settingsFile) {
+			if (settingsFile.exists()) {
+				try {
+					val obj = JSONObject(settingsFile.readText())
+					if (obj.has(key)) {
+						obj.remove(key)
+						settingsFile.writeText(obj.toString(2))
+					}
+				} catch (_: Exception) {
+				}
+			}
+		}
+	}
+
 	private fun handleStore(header: JSONObject, content: Content?): Content {
 		val method = header.optString("method", "GET")
 		val key = header.optString("key", "")
-		if (key.isEmpty()) {
-			return err("Missing 'key' parameter")
-		}
-		return if (method == "PUT") {
-			val value = content?.readString() ?: ""
-			saveSetting(key, value)
-			ok()
-		} else {
-			val value = loadSetting(key)
-			ok { put("value", value) }
+		return when (method) {
+			"PUT" -> {
+				if (key.isEmpty()) return err("Missing 'key' parameter")
+				val value = content?.readString() ?: ""
+				saveSetting(key, value)
+				ok()
+			}
+			"DELETE" -> {
+				if (key.isEmpty()) return err("Missing 'key' parameter")
+				deleteSetting(key)
+				ok()
+			}
+			else -> { // GET
+				if (key.isEmpty()) {
+					val all = loadAllSettings()
+					ok { put("settings", all) }
+				} else {
+					val value = loadSetting(key)
+					ok { put("value", value) }
+				}
+			}
 		}
 	}
 
