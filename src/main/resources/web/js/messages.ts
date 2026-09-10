@@ -416,7 +416,7 @@ function fillHeader(item: HTMLElement, msg: MessageData): void {
    }
 }
 
-// ── Message context menu & Reply ──────────────────────────────────────────────
+// ── Message context menu & Quote ──────────────────────────────────────────────
 let activeContextMsg: MessageData | null = null;
 
 function openContextMenu(x: number, y: number, msg: MessageData): void {
@@ -510,7 +510,7 @@ function handleDownload(msg: MessageData): void {
    document.body.removeChild(a);
 }
 
-async function handleReply(msg: MessageData): Promise<void> {
+async function handleQuote(msg: MessageData): Promise<void> {
    let contentToQuote = '';
    if (isText(msg.type)) {
       const cached = textContentCache.get(msg.key);
@@ -543,26 +543,7 @@ async function handleReply(msg: MessageData): Promise<void> {
       quoteBlock = `> **${authorName} wrote:** [${fileName}]\n\n`;
    }
 
-   // Match and select author in toField if available
-   if (toField) {
-      const authorKey = msg.authorKey || (msg.author ? nameToKey.get(msg.author) : null);
-      let matchedOpt: HTMLOptionElement | null = null;
-      for (let i = 0; i < toField.options.length; i++) {
-         const opt = toField.options[i];
-         if (authorKey && opt.value === authorKey) {
-            matchedOpt = opt;
-            break;
-         }
-         if (msg.author && opt.textContent?.trim() === msg.author.trim()) {
-            matchedOpt = opt;
-            break;
-         }
-      }
-      if (matchedOpt) {
-         toField.value = matchedOpt.value;
-         toField.dispatchEvent(new Event('change'));
-      }
-   }
+   // Note: 'to' destination in toField is left unchanged as whatever it was.
 
    if (messageText) {
       if (messageText.value && messageText.value.trim().length > 0) {
@@ -575,6 +556,7 @@ async function handleReply(msg: MessageData): Promise<void> {
       messageText.scrollIntoView({ behavior: 'smooth', block: 'center' });
    }
 }
+const handleReply = handleQuote;
 
 function createMessageElement(msg: MessageData): HTMLElement | null {
    const url = graffiti.contentUrl(msg.key);
@@ -1676,8 +1658,8 @@ msgContextMenu?.addEventListener('click', async (e: MouseEvent) => {
       } catch (err: any) {
          setStatus(`Delete failed: ${err?.message || err}`);
       }
-   } else if (action === 'reply') {
-      await handleReply(msg);
+   } else if (action === 'quote' || action === 'reply') {
+      await handleQuote(msg);
    } else if (action === 'copy') {
       await handleCopy(msg);
    } else if (action === 'download') {
