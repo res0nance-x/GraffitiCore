@@ -86,6 +86,38 @@ if (fontFamilySel) {
 // Apply settings initially
 void loadAppearanceSettings();
 
+// ── Notification Settings ───────────────────────────────────────────────────
+const bellSoundSel = document.getElementById('settings-bell-sound') as HTMLSelectElement | null;
+const previewBellBtn = document.getElementById('btn-preview-bell') as HTMLButtonElement | null;
+
+async function loadNotificationSettings(): Promise<void> {
+   if (bellSoundSel) {
+      try {
+         const stored = await graffiti.getStore('graffiti:bell-sound');
+         bellSoundSel.value = stored || 'chime';
+      } catch {
+         bellSoundSel.value = 'chime';
+      }
+   }
+}
+
+if (bellSoundSel) {
+   bellSoundSel.addEventListener('change', async () => {
+      await graffiti.setStore('graffiti:bell-sound', bellSoundSel.value);
+   });
+}
+
+if (previewBellBtn && bellSoundSel) {
+   previewBellBtn.addEventListener('click', () => {
+      const sound = bellSoundSel.value;
+      if (sound === 'mute') return;
+      const audio = new Audio(`/sounds/${sound}.wav`);
+      audio.play().catch(e => console.warn('Preview sound playback error:', e));
+   });
+}
+
+void loadNotificationSettings();
+
 // ── Storage Management ────────────────────────────────────────────────────────
 function formatSize(bytes: number | null | undefined): string {
    if (bytes == null) return '';

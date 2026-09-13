@@ -269,6 +269,14 @@ export const graffiti = {
       return parseJson<SendMessageResponse>(res);
    },
 
+   async sendBell(identityKey: string, peerKey: string): Promise<SendMessageResponse> {
+      const url = new URL(`/api/message/send/bell?identityKey=${encodeURIComponent(identityKey)}&peerKey=${encodeURIComponent(peerKey)}`, window.location.origin);
+      const res = await fetch(url.toString(), {
+         method: 'PUT'
+      });
+      return parseJson<SendMessageResponse>(res);
+   },
+
    refresh(): Promise<ApiOk> {
       return get('/api/messages/refresh');
    },

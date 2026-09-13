@@ -20,6 +20,9 @@ import java.net.NetworkInterface
 import java.net.URLDecoder
 
 class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : ContentHandler {
+	var onBellReceived: ((author: Key256, sound: String) -> Unit)? = null
+	private var lastBellPlayedTime: Long = 0L
+
 	init {
 		// Wire up p2p event callbacks — p2p is always ready at construction.
 		p2p.onNodeConnected = { node, inbound ->
@@ -61,6 +64,17 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 					val eMeta = DataInputStream(metaFile.inputStream()).use { EncryptedContentMetaData.read(it) }
 					val iden = p2p.getIdentityByKey(eMeta.recipient) ?: error("No identity found for ${eMeta.recipient}")
 					val (meta, _) = eMeta.decrypt(iden)
+					if (meta.type.equals("bell", ignoreCase = true)) {
+						val ageMs = System.currentTimeMillis() - meta.created
+						val now = System.currentTimeMillis()
+						if (ageMs < 90_000 && (now - lastBellPlayedTime) > 5_000) {
+							lastBellPlayedTime = now
+							val soundSetting = loadSetting("graffiti:bell-sound").takeIf { it.isNotEmpty() } ?: "chime"
+							if (soundSetting != "mute") {
+								onBellReceived?.invoke(eMeta.author, soundSetting)
+							}
+						}
+					}
 					sendToAll(
 						JSONObject().put("event", "messages_update").put("action", "add")
 							.put("msg", buildMsgJson(eMeta, meta))
@@ -101,6 +115,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/message/remove" -> removeMessage(header)
 			"/api/message/send/text" -> content?.let { sendTextMessage(header, it) }
 			"/api/message/send/file" -> content?.let { sendFileMessage(header, it) }
+			"/api/message/send/bell" -> sendBellMessage(header)
 			"/api/content" -> getContent(header)
 			"/api/storage" -> getStorageInfo()
 			"/api/storage/purge" -> purgeStorage(header)
@@ -522,6 +537,31 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		val wrappedContent = MutableMetaDataContent(content).apply {
 			path = originalName
 			ext = originalName.substringAfterLast('.', "").lowercase()
+		}
+		val encKey = p2p.pkeEncrypt(wrappedContent, iden, peer)
+		p2p.pushNewMessage(encKey)
+		val metaFile = File(p2p.metaDir, "$encKey")
+		try {
+			val eMeta = DataInputStream(metaFile.inputStream()).use { EncryptedContentMetaData.read(it) }
+			val (meta, _) = eMeta.decrypt(iden)
+			sendToAll(
+				JSONObject().put("event", "messages_update").put("action", "add")
+					.put("msg", buildMsgJson(eMeta, meta))
+			)
+		} catch (_: Exception) {
+			sendToAll(JSONObject().put("event", "messages_update").put("action", "add"))
+		}
+		return ok { put("key", encKey.toString()) }
+	}
+
+	private fun sendBellMessage(header: JSONObject): Content {
+		val keys = resolveSendKeys(header) ?: return err("Select a sender and recipient first")
+		val (idenKey, peerKey) = keys
+		val iden = p2p.getIdentityByKey(idenKey) ?: return err("No identity found for $idenKey")
+		val peer = p2p.getPeerByKey(peerKey) ?: return err("No peer found for $peerKey")
+		val wrappedContent = MutableMetaDataContent(BinaryContent(ByteArray(0), "bell", "bell")).apply {
+			path = "bell"
+			ext = "bell"
 		}
 		val encKey = p2p.pkeEncrypt(wrappedContent, iden, peer)
 		p2p.pushNewMessage(encKey)

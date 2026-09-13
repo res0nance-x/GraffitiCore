@@ -6,6 +6,7 @@ const fromField = document.getElementById('from-field') as HTMLSelectElement | n
 const toField = document.getElementById('to-field') as HTMLSelectElement | null;
 const messageText = document.getElementById('message-text') as HTMLTextAreaElement | null;
 const sendFileButton = document.getElementById('send-file') as HTMLButtonElement | null;
+const sendBellButton = document.getElementById('send-bell') as HTMLButtonElement | null;
 const fileInput = document.getElementById('file-input') as HTMLInputElement | null;
 const messagesSection = document.getElementById('section-messages') as HTMLElement | null;
 const messagesContainer = document.getElementById('messages') as HTMLElement | null;
@@ -353,6 +354,7 @@ const isVideo = (t: string) => videoExtensions.has(t);
 const isHtml = (t: string) => htmlExtensions.has(t);
 
 function pickTemplateId(type: string): string {
+   if (type === 'bell') return 'tpl-bell-message';
    if (isText(type)) return 'tpl-text-message';
    if (isImage(type)) return 'tpl-image-message';
    if (isAudio(type)) return 'tpl-audio-message';
@@ -888,6 +890,49 @@ messageText?.addEventListener('keydown', (event: KeyboardEvent) => {
 
 sendFileButton?.addEventListener('click', () => fileInput?.click());
 
+let bellCooldownTimer: number | null = null;
+sendBellButton?.addEventListener('click', async () => {
+   const fromKey = fromField?.value;
+   const toKey = toField?.value;
+   if (!fromKey || !toKey) {
+      setStatus('Select a sender and recipient first');
+      return;
+   }
+
+   if (bellCooldownTimer !== null) return;
+
+   sendBellButton.disabled = true;
+   setStatus('Ringing bell…');
+
+   try {
+      await graffiti.sendBell(fromKey, toKey);
+      setStatus('Bell sent');
+      shouldScrollToBottomOnSend = true;
+   } catch (err: unknown) {
+      setStatus(`Error: ${(err as Error).message}`);
+   } finally {
+      let remaining = 10;
+      if (sendBellButton) sendBellButton.textContent = `🔔 (${remaining}s)`;
+      bellCooldownTimer = window.setInterval(() => {
+         remaining--;
+         if (remaining <= 0) {
+            if (bellCooldownTimer !== null) {
+               clearInterval(bellCooldownTimer);
+               bellCooldownTimer = null;
+            }
+            if (sendBellButton) {
+               sendBellButton.disabled = false;
+               sendBellButton.textContent = '🔔';
+            }
+         } else {
+            if (sendBellButton) {
+               sendBellButton.textContent = `🔔 (${remaining}s)`;
+            }
+         }
+      }, 1000);
+   }
+});
+
 function updateSameAuthorRecipientWarning(): void {
    const warningEl = document.getElementById('same-author-recipient-warning');
    if (!warningEl) return;
@@ -1046,6 +1091,7 @@ function getMessageTypeText(type: string): string {
 }
 
 function notifyNewMessage(msg: MessageData): void {
+   if (msg.type === 'bell') return;
    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
       if (document.hidden || !document.hasFocus()) {
          const now = Date.now();
