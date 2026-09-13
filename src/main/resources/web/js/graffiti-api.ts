@@ -246,8 +246,16 @@ export const graffiti = {
       return get('/api/message/remove', {key});
    },
 
-   async sendText(identityKey: string, peerKey: string, text: string): Promise<SendMessageResponse> {
-      const url = new URL(`/api/message/send/text?identityKey=${encodeURIComponent(identityKey)}&peerKey=${encodeURIComponent(peerKey)}`, window.location.origin);
+   forwardMessage(key: string, identityKey?: string, peerKey?: string, urgent = false): Promise<SendMessageResponse> {
+      const params: Record<string, string> = { key };
+      if (identityKey) params.identityKey = identityKey;
+      if (peerKey) params.peerKey = peerKey;
+      if (urgent) params.urgent = 'true';
+      return get('/api/message/forward', params);
+   },
+
+   async sendText(identityKey: string, peerKey: string, text: string, urgent = false): Promise<SendMessageResponse> {
+      const url = new URL(`/api/message/send/text?identityKey=${encodeURIComponent(identityKey)}&peerKey=${encodeURIComponent(peerKey)}${urgent ? '&urgent=true' : ''}`, window.location.origin);
       const res = await fetch(url.toString(), {
          method: 'PUT',
          headers: {'Content-Type': 'text/plain'},
@@ -256,8 +264,8 @@ export const graffiti = {
       return parseJson<SendMessageResponse>(res);
    },
 
-   async sendFile(identityKey: string, peerKey: string, file: File): Promise<SendMessageResponse> {
-      const url = new URL(`/api/message/send/file?identityKey=${encodeURIComponent(identityKey)}&peerKey=${encodeURIComponent(peerKey)}&file=${encodeURIComponent(file.name)}`, window.location.origin);
+   async sendFile(identityKey: string, peerKey: string, file: File, urgent = false): Promise<SendMessageResponse> {
+      const url = new URL(`/api/message/send/file?identityKey=${encodeURIComponent(identityKey)}&peerKey=${encodeURIComponent(peerKey)}&file=${encodeURIComponent(file.name)}${urgent ? '&urgent=true' : ''}`, window.location.origin);
       const res = await fetch(url.toString(), {
          method: 'PUT',
          headers: {

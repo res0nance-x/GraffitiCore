@@ -6,7 +6,7 @@ const fromField = document.getElementById('from-field') as HTMLSelectElement | n
 const toField = document.getElementById('to-field') as HTMLSelectElement | null;
 const messageText = document.getElementById('message-text') as HTMLTextAreaElement | null;
 const sendFileButton = document.getElementById('send-file') as HTMLButtonElement | null;
-const sendBellButton = document.getElementById('send-bell') as HTMLButtonElement | null;
+const urgentCheckbox = document.getElementById('urgent-checkbox') as HTMLInputElement | null;
 const fileInput = document.getElementById('file-input') as HTMLInputElement | null;
 const messagesSection = document.getElementById('section-messages') as HTMLElement | null;
 const messagesContainer = document.getElementById('messages') as HTMLElement | null;
@@ -373,6 +373,7 @@ interface MessageData {
    size?: number;
    type: string;
    created?: number | string;
+   urgent?: boolean;
 }
 
 function fillHeader(item: HTMLElement, msg: MessageData): void {
@@ -415,6 +416,24 @@ function fillHeader(item: HTMLElement, msg: MessageData): void {
          timeEl.dateTime = iso;
          timeEl.title = new Date(Number(msg.created)).toLocaleString();
       }
+   }
+
+   if (msg.urgent) {
+      item.classList.add('urgent-message');
+      if (!item.querySelector('.msg-urgent-badge')) {
+         const badge = document.createElement('span');
+         badge.className = 'msg-urgent-badge';
+         badge.textContent = '⚠️ Urgent';
+         const header = item.querySelector('.message-header');
+         if (header && timeEl) {
+            header.insertBefore(badge, timeEl);
+         } else if (header) {
+            header.appendChild(badge);
+         }
+      }
+   } else {
+      item.classList.remove('urgent-message');
+      item.querySelector('.msg-urgent-badge')?.remove();
    }
 }
 
@@ -491,6 +510,32 @@ async function handleCopy(msg: MessageData): Promise<void> {
       setStatus('Message copied to clipboard.');
    } catch (err: any) {
       setStatus(`Copy failed: ${err?.message || err}`);
+   }
+}
+
+async function handleForward(msg: MessageData): Promise<void> {
+   const fromKey = fromField?.value;
+   const toKey = toField?.value;
+   if (!fromKey || !toKey) {
+      setStatus('Select a sender and recipient first');
+      alert('Please select a sender and recipient first.');
+      return;
+   }
+   if (toKey === msg.recipientKey) {
+      alert('Change the to field to the recipient you want to receive the message.');
+      setStatus('Change the to field to the recipient you want to receive the message.');
+      return;
+   }
+
+   const isUrgent = urgentCheckbox?.checked ?? false;
+   setStatus('Forwarding message…');
+   shouldScrollToBottomOnSend = true;
+   try {
+      await graffiti.forwardMessage(msg.key, fromKey, toKey, isUrgent);
+      if (urgentCheckbox) urgentCheckbox.checked = false;
+      setStatus('Message forwarded.');
+   } catch (err: any) {
+      setStatus(`Forward failed: ${err?.message || err}`);
    }
 }
 
@@ -820,8 +865,8 @@ function getEnvelope(): { identityKey: string; peerKey: string } {
 }
 
 type Payload =
-   | { type: 'text'; text: string; identityKey: string; peerKey: string }
-   | { type: 'file'; fileName: string; file: File; identityKey: string; peerKey: string; source?: string };
+   | { type: 'text'; text: string; identityKey: string; peerKey: string; urgent?: boolean }
+   | { type: 'file'; fileName: string; file: File; identityKey: string; peerKey: string; source?: string; urgent?: boolean };
 
 async function sendPayload(payload: Payload): Promise<void> {
    if (isSending) {
@@ -834,10 +879,11 @@ async function sendPayload(payload: Payload): Promise<void> {
       const { identityKey, peerKey } = payload;
       if (!identityKey || !peerKey) throw new Error('Select a sender and recipient first.');
       if (payload.type === 'text') {
-         await graffiti.sendText(identityKey, peerKey, payload.text);
+         await graffiti.sendText(identityKey, peerKey, payload.text, !!payload.urgent);
       } else {
-         await graffiti.sendFile(identityKey, peerKey, payload.file);
+         await graffiti.sendFile(identityKey, peerKey, payload.file, !!payload.urgent);
       }
+      if (urgentCheckbox) urgentCheckbox.checked = false;
       setStatus(`${payload.type} sent.`);
       shouldScrollToBottomOnSend = true;
       await refreshMessages();
@@ -872,7 +918,8 @@ form?.addEventListener('submit', async (event: SubmitEvent) => {
       setStatus('Type a message before sending.');
       return;
    }
-   await sendPayload({ type: 'text', text, ...getEnvelope() });
+   const urgent = urgentCheckbox?.checked ?? false;
+   await sendPayload({ type: 'text', text, urgent, ...getEnvelope() });
    if (!isSending && messageText) {
       messageText.value = '';
       autoResizeTextarea(messageText);
@@ -889,49 +936,6 @@ messageText?.addEventListener('keydown', (event: KeyboardEvent) => {
 });
 
 sendFileButton?.addEventListener('click', () => fileInput?.click());
-
-let bellCooldownTimer: number | null = null;
-sendBellButton?.addEventListener('click', async () => {
-   const fromKey = fromField?.value;
-   const toKey = toField?.value;
-   if (!fromKey || !toKey) {
-      setStatus('Select a sender and recipient first');
-      return;
-   }
-
-   if (bellCooldownTimer !== null) return;
-
-   sendBellButton.disabled = true;
-   setStatus('Ringing bell…');
-
-   try {
-      await graffiti.sendBell(fromKey, toKey);
-      setStatus('Bell sent');
-      shouldScrollToBottomOnSend = true;
-   } catch (err: unknown) {
-      setStatus(`Error: ${(err as Error).message}`);
-   } finally {
-      let remaining = 10;
-      if (sendBellButton) sendBellButton.textContent = `🔔 (${remaining}s)`;
-      bellCooldownTimer = window.setInterval(() => {
-         remaining--;
-         if (remaining <= 0) {
-            if (bellCooldownTimer !== null) {
-               clearInterval(bellCooldownTimer);
-               bellCooldownTimer = null;
-            }
-            if (sendBellButton) {
-               sendBellButton.disabled = false;
-               sendBellButton.textContent = '🔔';
-            }
-         } else {
-            if (sendBellButton) {
-               sendBellButton.textContent = `🔔 (${remaining}s)`;
-            }
-         }
-      }, 1000);
-   }
-});
 
 function updateSameAuthorRecipientWarning(): void {
    const warningEl = document.getElementById('same-author-recipient-warning');
@@ -964,7 +968,8 @@ toField?.addEventListener('change', () => {
 fileInput?.addEventListener('change', async () => {
    const file = fileInput?.files?.[0];
    if (!file) return;
-   await sendPayload({ type: 'file', fileName: file.name, file, ...getEnvelope() });
+   const urgent = urgentCheckbox?.checked ?? false;
+   await sendPayload({ type: 'file', fileName: file.name, file, urgent, ...getEnvelope() });
    if (fileInput) fileInput.value = '';
    scrollToBottom();
 });
@@ -1693,6 +1698,8 @@ msgContextMenu?.addEventListener('click', async (e: MouseEvent) => {
 
    if (action === 'view') {
       openFullContentViewer(msg, textContentCache.get(msg.key));
+   } else if (action === 'forward') {
+      await handleForward(msg);
    } else if (action === 'delete') {
       try {
          await graffiti.removeMessage(msg.key);

@@ -89,6 +89,7 @@ void loadAppearanceSettings();
 // ── Notification Settings ───────────────────────────────────────────────────
 const bellSoundSel = document.getElementById('settings-bell-sound') as HTMLSelectElement | null;
 const previewBellBtn = document.getElementById('btn-preview-bell') as HTMLButtonElement | null;
+const ignoreUrgentCheck = document.getElementById('settings-ignore-urgent') as HTMLInputElement | null;
 
 async function loadNotificationSettings(): Promise<void> {
    if (bellSoundSel) {
@@ -99,11 +100,25 @@ async function loadNotificationSettings(): Promise<void> {
          bellSoundSel.value = 'chime';
       }
    }
+   if (ignoreUrgentCheck) {
+      try {
+         const stored = await graffiti.getStore('graffiti:ignore-urgent');
+         ignoreUrgentCheck.checked = stored === 'true';
+      } catch {
+         ignoreUrgentCheck.checked = false;
+      }
+   }
 }
 
 if (bellSoundSel) {
    bellSoundSel.addEventListener('change', async () => {
       await graffiti.setStore('graffiti:bell-sound', bellSoundSel.value);
+   });
+}
+
+if (ignoreUrgentCheck) {
+   ignoreUrgentCheck.addEventListener('change', async () => {
+      await graffiti.setStore('graffiti:ignore-urgent', ignoreUrgentCheck.checked ? 'true' : 'false');
    });
 }
 

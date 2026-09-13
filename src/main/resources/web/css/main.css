@@ -253,6 +253,33 @@ h6 {
     color: var(--button-hover-text, #ffffff);
 }
 
+.urgent-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+    padding: 0.25rem 0.5rem;
+    border-radius: var(--radius-control, 0.4rem);
+    border: 1px solid transparent;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.urgent-toggle:hover {
+    background: rgba(229, 57, 53, 0.08);
+}
+
+.urgent-toggle input[type="checkbox"] {
+    cursor: pointer;
+    accent-color: #e53935;
+}
+
+.urgent-toggle input[type="checkbox"]:checked + span {
+    color: #e53935;
+}
+
 /* Subtle outline shown only while a drag is in progress over the messages section */
 #section-messages.is-dragover {
     outline: 2px dashed var(--button);
@@ -301,6 +328,27 @@ h6 {
     border-radius: var(--radius-box, 0.5rem);
     overflow: hidden;
     background: var(--background);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.message-item.urgent-message {
+    border-color: #e53935;
+    box-shadow: 0 0 6px rgba(229, 57, 53, 0.3);
+}
+
+.msg-urgent-badge {
+    background: #e53935;
+    color: #ffffff;
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 0.1rem 0.45rem;
+    border-radius: 3px;
+    margin-left: 0.35rem;
+    letter-spacing: 0.03em;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    flex-shrink: 0;
 }
 
 /* Disable text selection and word highlighting only on touch/mobile devices so PC desktop mouse selection is unaffected */

@@ -189,7 +189,10 @@ Messages
 						<div class="composer-actions">
 							<button id="send-text" type="submit">Send</button>
 							<button id="send-file" type="button">Send File</button>
-							<button id="send-bell" type="button" title="Ring Bell (Send Notification)">🔔</button>
+							<label class="urgent-toggle" title="Send as urgent message (plays notification chime for recipient)">
+								<input id="urgent-checkbox" type="checkbox">
+								<span>Urgent ⚠️</span>
+							</label>
 							<input hidden id="file-input" type="file">
 							<span aria-live="polite" class="send-status" id="send-status">Ready</span>
 						</div>
@@ -330,23 +333,29 @@ Settings
 				<section class="net-card">
 					<h3>Notifications</h3>
 					<p style="font-size:0.88rem; opacity:0.7; margin:0 0 0.75rem">
-						Choose the sound played when you receive a bell notification.
+						Choose the sound played when you receive an urgent notification.
 					</p>
-					<div style="display:flex; flex-wrap:wrap; gap:1.5rem; align-items:flex-end;">
-						<label style="display:flex; flex-direction:column; gap:0.35rem; font-size:0.88rem; font-weight:600;">
-							Bell Sound
-							<select id="settings-bell-sound"
-								style="padding:0.4rem 0.6rem; border-radius:4px; background:var(--background); color:var(--primary); border:1px solid var(--button);">
-								<option selected value="chime">Chime (Default)</option>
-								<option value="knock">Knock</option>
-								<option value="ping">Ping</option>
-								<option value="harp">Harp</option>
-								<option value="mute">Mute (Silent)</option>
-							</select>
+					<div style="display:flex; flex-direction:column; gap:1rem;">
+						<div style="display:flex; flex-wrap:wrap; gap:1.5rem; align-items:flex-end;">
+							<label style="display:flex; flex-direction:column; gap:0.35rem; font-size:0.88rem; font-weight:600;">
+								Notification Sound
+								<select id="settings-bell-sound"
+									style="padding:0.4rem 0.6rem; border-radius:4px; background:var(--background); color:var(--primary); border:1px solid var(--button);">
+									<option selected value="chime">Chime (Default)</option>
+									<option value="knock">Knock</option>
+									<option value="ping">Ping</option>
+									<option value="harp">Harp</option>
+									<option value="mute">Mute (Silent)</option>
+								</select>
+							</label>
+							<button id="btn-preview-bell" style="padding:0.4rem 0.8rem; border-radius:4px; display:inline-flex; align-items:center; gap:0.35rem;" type="button">
+								<span style="font-size:1.05rem;">▶</span> Preview Sound
+							</button>
+						</div>
+						<label style="display:inline-flex; align-items:center; gap:0.5rem; font-size:0.88rem; font-weight:600; cursor:pointer;">
+							<input id="settings-ignore-urgent" type="checkbox" style="cursor:pointer;">
+							<span>Ignore urgent messages (never play sound)</span>
 						</label>
-						<button id="btn-preview-bell" style="padding:0.4rem 0.8rem; border-radius:4px; display:inline-flex; align-items:center; gap:0.35rem;" type="button">
-							<span style="font-size:1.05rem;">▶</span> Preview Sound
-						</button>
 					</div>
 				</section>
 
@@ -733,6 +742,10 @@ Settings
 		<button type="button" class="msg-context-item" data-action="view">
 			<span class="material-symbols-outlined" style="font-size: 1.15rem;">visibility</span>
 			<span>View in Full Viewer</span>
+		</button>
+		<button type="button" class="msg-context-item" data-action="forward">
+			<span class="material-symbols-outlined" style="font-size: 1.15rem;">forward</span>
+			<span>Forward</span>
 		</button>
 		<button type="button" class="msg-context-item" data-action="quote">
 			<span class="material-symbols-outlined" style="font-size: 1.15rem;">format_quote</span>
