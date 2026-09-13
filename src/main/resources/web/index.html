@@ -191,7 +191,7 @@ Messages
 							<button id="send-file" type="button">Send File</button>
 							<label class="urgent-toggle" title="Send as urgent message (plays notification chime for recipient)">
 								<input id="urgent-checkbox" type="checkbox">
-								<span>Urgent ⚠️</span>
+								<span>🔔!</span>
 							</label>
 							<input hidden id="file-input" type="file">
 							<span aria-live="polite" class="send-status" id="send-status">Ready</span>
@@ -729,6 +729,14 @@ Settings
 				<input type="checkbox" name="saveOnDevice">
 				<span>Save on device (Persistent)</span>
 			</label>
+		</div>
+	</template>
+
+	<template id="tpl-message-forward">
+		<div class="dialog-field">
+			<label for="dlg-forward-to">Destination topic or recipient</label>
+			<select id="dlg-forward-to" name="targetPeer" required></select>
+			<small>Select the topic or peer to forward this message to.</small>
 		</div>
 	</template>
 

@@ -1,5 +1,6 @@
 import { graffiti, IdentityEntry, PeerEntry, openPackFile } from './graffiti-api.js';
 import { onSectionShow, onWsEvent, onWsOpen, showSection } from './app.js';
+import { showDialog } from './dialog.js';
 
 const form = document.getElementById('message-form') as HTMLFormElement | null;
 const fromField = document.getElementById('from-field') as HTMLSelectElement | null;
@@ -88,10 +89,64 @@ const BUFFER_ITEMS = 8;
 
 const itemHeights = new Map<string, number>();
 const textContentCache = new Map<string, string>();
+let allRawMessages: MessageData[] = [];
 let allFilteredMessages: MessageData[] = [];
 let vlistTopSpacer: HTMLDivElement | null = null;
 let vlistBottomSpacer: HTMLDivElement | null = null;
 let isVListRenderScheduled = false;
+
+function isMessageInSelectedTopic(msg: MessageData, selectedToKey: string): boolean {
+   if (!selectedToKey) return false;
+   const recKey = msg.recipientKey || (msg.recipient ? nameToKey.get(msg.recipient) : '');
+   if (recKey && recKey === selectedToKey) return true;
+
+   const iden = knownIdentities.find(id => id.peerKey === selectedToKey || id.key === selectedToKey);
+   if (iden) {
+      if (recKey && (recKey === iden.key || recKey === iden.peerKey)) return true;
+      if (msg.recipient && msg.recipient === iden.name) return true;
+   }
+
+   const peer = knownPeers.find(p => p.key === selectedToKey);
+   if (peer) {
+      if (recKey && recKey === peer.key) return true;
+      if (msg.recipient && msg.recipient === peer.name) return true;
+   }
+
+   return false;
+}
+
+function updateFilteredMessages(): void {
+   const selectedTo = toField?.value ?? '';
+   if (!selectedTo) {
+      allFilteredMessages = [];
+   } else {
+      allFilteredMessages = allRawMessages.filter(m => isMessageInSelectedTopic(m, selectedTo));
+   }
+}
+
+export function applyTopicFilter(shouldScrollToBottom = true): void {
+   updateFilteredMessages();
+   const container = document.getElementById('messages');
+   if (container) {
+      const { topSpacer, bottomSpacer } = ensureSpacers(container);
+      topSpacer.style.height = '0px';
+      topSpacer.style.display = 'none';
+      bottomSpacer.style.height = '0px';
+      bottomSpacer.style.display = 'none';
+      const children = Array.from(container.children) as HTMLElement[];
+      for (const child of children) {
+         if (child !== topSpacer && child !== bottomSpacer && child.id !== 'messages-empty') {
+            itemResizeObserver?.unobserve(child);
+            child.remove();
+         }
+      }
+      currentMessages.clear();
+   }
+   renderVirtualList();
+   if (shouldScrollToBottom) {
+      scrollToBottom();
+   }
+}
 
 const itemResizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver((entries) => {
    let heightChanged = false;
@@ -153,14 +208,30 @@ function renderVirtualList(): void {
       bottomSpacer.style.display = 'none';
       const children = Array.from(container.children) as HTMLElement[];
       for (const child of children) {
-         if (child !== topSpacer && child !== bottomSpacer) {
+         if (child !== topSpacer && child !== bottomSpacer && child.id !== 'messages-empty') {
             itemResizeObserver?.unobserve(child);
             child.remove();
          }
       }
       currentMessages.clear();
+      let emptyEl = document.getElementById('messages-empty');
+      if (!emptyEl) {
+         emptyEl = document.createElement('div');
+         emptyEl.id = 'messages-empty';
+         emptyEl.className = 'empty-row';
+         container.appendChild(emptyEl);
+      }
+      const selectedTo = toField?.value;
+      if (!selectedTo) {
+         emptyEl.textContent = 'No topic or recipient selected.';
+      } else {
+         const selectedName = toField?.selectedOptions?.[0]?.textContent || 'this topic';
+         emptyEl.textContent = `No messages in ${selectedName} yet.`;
+      }
       return;
    }
+
+   document.getElementById('messages-empty')?.remove();
 
    const rect = container.getBoundingClientRect();
    const viewportTop = Math.max(0, -rect.top);
@@ -293,7 +364,8 @@ async function refreshMessages(): Promise<void> {
       if (!container) return;
 
       const wasAtBottom = isNearBottom();
-      allFilteredMessages = messages;
+      allRawMessages = messages;
+      updateFilteredMessages();
       renderVirtualList();
       if (shouldScrollToBottomOnLoad || shouldScrollToBottomOnSend || wasAtBottom) {
          shouldScrollToBottomOnLoad = false;
@@ -515,25 +587,69 @@ async function handleCopy(msg: MessageData): Promise<void> {
 
 async function handleForward(msg: MessageData): Promise<void> {
    const fromKey = fromField?.value;
-   const toKey = toField?.value;
-   if (!fromKey || !toKey) {
-      setStatus('Select a sender and recipient first');
-      alert('Please select a sender and recipient first.');
-      return;
-   }
-   if (toKey === msg.recipientKey) {
-      alert('Change the to field to the recipient you want to receive the message.');
-      setStatus('Change the to field to the recipient you want to receive the message.');
+   if (!fromKey) {
+      setStatus('Select a sender identity first');
+      alert('Please select a sender identity first.');
       return;
    }
 
+   const msgRecipientKey = msg.recipientKey || (msg.recipient ? nameToKey.get(msg.recipient) : '');
+
+   const data = await showDialog({
+      title: 'Forward Message',
+      templateId: 'tpl-message-forward',
+      confirmLabel: 'Forward',
+      init: (body) => {
+         const select = body.querySelector<HTMLSelectElement>('#dlg-forward-to');
+         if (!select) return;
+         select.replaceChildren();
+
+         const optGroupIdentities = document.createElement('optgroup');
+         optGroupIdentities.label = 'Identities (Topics)';
+         let idCount = 0;
+         for (const id of knownIdentities) {
+            if (id.peerKey !== msgRecipientKey && id.key !== msgRecipientKey) {
+               const opt = document.createElement('option');
+               opt.value = id.peerKey;
+               opt.textContent = id.name;
+               optGroupIdentities.append(opt);
+               idCount++;
+            }
+         }
+         if (idCount > 0) select.append(optGroupIdentities);
+
+         const optGroupPeers = document.createElement('optgroup');
+         optGroupPeers.label = 'Peers';
+         let peerCount = 0;
+         for (const peer of knownPeers) {
+            if (peer.key !== msgRecipientKey) {
+               const opt = document.createElement('option');
+               opt.value = peer.key;
+               opt.textContent = peer.name;
+               optGroupPeers.append(opt);
+               peerCount++;
+            }
+         }
+         if (peerCount > 0) select.append(optGroupPeers);
+      }
+   });
+
+   if (!data || !data.targetPeer) return;
+   const destKey = data.targetPeer;
+
    const isUrgent = urgentCheckbox?.checked ?? false;
    setStatus('Forwarding message…');
-   shouldScrollToBottomOnSend = true;
    try {
-      await graffiti.forwardMessage(msg.key, fromKey, toKey, isUrgent);
+      await graffiti.forwardMessage(msg.key, fromKey, destKey, isUrgent);
       if (urgentCheckbox) urgentCheckbox.checked = false;
       setStatus('Message forwarded.');
+      if (toField) {
+         toField.value = destKey;
+         updateSameAuthorRecipientWarning();
+         void saveOrClearRememberedFields();
+         applyTopicFilter(true);
+      }
+      queueRefreshMessages();
    } catch (err: any) {
       setStatus(`Forward failed: ${err?.message || err}`);
    }
@@ -855,6 +971,7 @@ async function populateSelects(): Promise<void> {
    }
    updateSameAuthorRecipientWarning();
    void saveOrClearRememberedFields();
+   applyTopicFilter(false);
 }
 
 function getEnvelope(): { identityKey: string; peerKey: string } {
@@ -961,6 +1078,7 @@ fromField?.addEventListener('change', () => {
 toField?.addEventListener('change', () => {
    updateSameAuthorRecipientWarning();
    void saveOrClearRememberedFields();
+   applyTopicFilter(true);
 });
 
 
@@ -1127,7 +1245,8 @@ onWsEvent('messages_update', async (msg: Record<string, unknown>) => {
       const removedKey = msg.key as string;
       currentMessages.delete(removedKey);
       itemHeights.delete(removedKey);
-      allFilteredMessages = allFilteredMessages.filter(m => m.key !== removedKey);
+      allRawMessages = allRawMessages.filter(m => m.key !== removedKey);
+      updateFilteredMessages();
       renderVirtualList();
    } else if (msg.action === 'add') {
       const m = msg.msg as MessageData | undefined;
@@ -1703,11 +1822,12 @@ msgContextMenu?.addEventListener('click', async (e: MouseEvent) => {
    } else if (action === 'delete') {
       try {
          await graffiti.removeMessage(msg.key);
-         currentMessages.delete(msg.key);
-         itemHeights.delete(msg.key);
-         textContentCache.delete(msg.key);
-         allFilteredMessages = allFilteredMessages.filter(m => m.key !== msg.key);
-         renderVirtualList();
+          currentMessages.delete(msg.key);
+          itemHeights.delete(msg.key);
+          textContentCache.delete(msg.key);
+          allRawMessages = allRawMessages.filter(m => m.key !== msg.key);
+          updateFilteredMessages();
+          renderVirtualList();
       } catch (err: any) {
          setStatus(`Delete failed: ${err?.message || err}`);
       }
