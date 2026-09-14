@@ -128,6 +128,10 @@ export interface GetQuotaResponse extends ApiOk {
    quota: number;
 }
 
+export interface GetVersionResponse extends ApiOk {
+   version: string;
+}
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 async function parseJson<T extends { ok: boolean; error?: string }>(res: Response): Promise<T> {
@@ -406,6 +410,16 @@ export const graffiti = {
 
    closePack(sessionId: string): Promise<ApiOk> {
       return get('/api/pack/close', { sessionId });
+   },
+
+   // ── Version ─────────────────────────────────────────────────────────────
+   async getVersion(): Promise<string> {
+      try {
+         const res = await get<GetVersionResponse>('/api/version');
+         return res.version || 'Unknown';
+      } catch (_) {
+         return 'Unknown';
+      }
    },
 };
 

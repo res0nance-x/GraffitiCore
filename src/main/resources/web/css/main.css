@@ -317,14 +317,9 @@ h6 {
     font-family: var(--message-font-family, inherit);
 }
 
-.vlist-spacer-top,
-.vlist-spacer-bottom {
-    width: 100%;
-    pointer-events: none;
-    flex-shrink: 0;
-}
-
 .message-item {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 90px;
     border: 1px solid var(--button);
     border-radius: var(--radius-box, 0.5rem);
     overflow: hidden;

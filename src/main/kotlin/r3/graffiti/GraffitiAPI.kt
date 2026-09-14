@@ -135,8 +135,32 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/store" -> handleStore(header, content)
 			"/api/pack/open" -> openPackApi(header, content)
 			"/api/pack/close" -> closePackApi(header)
+			"/api/version" -> getVersion()
 			else -> null
 		}
+	}
+
+	// ── Version API ───────────────────────────────────────────────────────────
+	var onGetVersion: (() -> String)? = null
+
+	private fun getVersion(): Content {
+		val ver = onGetVersion?.invoke()?.takeIf { it.isNotBlank() } ?: run {
+			try {
+				val location = GraffitiAPI::class.java.protectionDomain?.codeSource?.location
+				if (location != null) {
+					val file = File(location.toURI())
+					if (file.exists()) {
+						java.time.Instant.ofEpochMilli(file.lastModified())
+							.atZone(java.time.ZoneId.systemDefault())
+							.toLocalDate()
+							.toString()
+					} else "Unknown"
+				} else "Unknown"
+			} catch (_: Exception) {
+				"Unknown"
+			}
+		}
+		return ok { put("version", ver) }
 	}
 
 	// ── Pack Viewing API ──────────────────────────────────────────────────────

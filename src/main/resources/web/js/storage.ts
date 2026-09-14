@@ -224,9 +224,24 @@ async function loadStorageInfo(): Promise<void> {
    }
 }
 
-// Reload storage info when entering Settings tab
+// ── About / Version ───────────────────────────────────────────────────────────
+const appVersionEl = document.getElementById('settings-app-version') as HTMLElement | null;
+
+async function loadAppVersion(): Promise<void> {
+   if (!appVersionEl) return;
+   try {
+      const ver = await graffiti.getVersion();
+      appVersionEl.textContent = ver;
+   } catch {
+      appVersionEl.textContent = 'Unknown';
+   }
+}
+
+void loadAppVersion();
+
+// Reload storage info and version when entering Settings tab
 onSectionShow('section-settings', async () => {
-   await loadStorageInfo();
+   await Promise.all([loadStorageInfo(), loadAppVersion()]);
 });
 
 const quotaInput = document.getElementById('settings-storage-quota') as HTMLInputElement | null;

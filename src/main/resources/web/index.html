@@ -370,6 +370,15 @@ Settings
 						<span class="material-symbols-outlined" style="font-size: 1.1rem;">help</span> Read Help Documentation
 					</button>
 				</section>
+
+				<!-- ── About ────────────────────────────────────────────── -->
+				<section class="net-card">
+					<h3>About</h3>
+					<div style="display:flex; justify-content:space-between; align-items:center; font-size:0.88rem;">
+						<span style="opacity:0.8;">Version / Build Date</span>
+						<span id="settings-app-version" style="font-weight:600;">Loading…</span>
+					</div>
+				</section>
 			</main>
 		</section>
 
@@ -658,7 +667,7 @@ Settings
 			</header>
 			<div class="message-body">
 				<span class="msg-file-name"></span>
-				<audio class="msg-media" controls></audio>
+				<audio class="msg-media" controls preload="none"></audio>
 			</div>
 		</article>
 	</template>
@@ -679,7 +688,7 @@ Settings
 			</header>
 			<div class="message-body">
 				<span class="msg-file-name"></span>
-				<video class="msg-media" controls></video>
+				<video class="msg-media" controls preload="metadata"></video>
 			</div>
 		</article>
 	</template>

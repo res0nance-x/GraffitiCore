@@ -82,18 +82,47 @@ function queueRefreshMessages(): void {
    }, 50);
 }
 
-// ── Virtual List Controller State ─────────────────────────────────────────────
-const DEFAULT_ITEM_HEIGHT = 76;
-const ITEM_GAP = 8; // 0.5rem flex gap in #messages
-const BUFFER_ITEMS = 8;
+// ── Windowed Message List State ─────────────────────────────────────────────
+const PAGE_BATCH_SIZE = 50;
+let visibleBatchCount = PAGE_BATCH_SIZE;
+let isPrepending = false;
 
-const itemHeights = new Map<string, number>();
 const textContentCache = new Map<string, string>();
 let allRawMessages: MessageData[] = [];
 let allFilteredMessages: MessageData[] = [];
-let vlistTopSpacer: HTMLDivElement | null = null;
-let vlistBottomSpacer: HTMLDivElement | null = null;
-let isVListRenderScheduled = false;
+
+// ── LRU Message DOM Element Cache ──────────────────────────────────────────
+const MAX_CACHED_ELEMENTS = 300;
+const messageElementCache = new Map<string, HTMLElement>();
+
+function getCachedElement(key: string): HTMLElement | undefined {
+   const el = messageElementCache.get(key);
+   if (el) {
+      // Refresh recency in Map insertion order
+      messageElementCache.delete(key);
+      messageElementCache.set(key, el);
+   }
+   return el;
+}
+
+function putCachedElement(key: string, el: HTMLElement): void {
+   if (messageElementCache.has(key)) {
+      messageElementCache.delete(key);
+   } else if (messageElementCache.size >= MAX_CACHED_ELEMENTS) {
+      // Evict oldest entry that is NOT currently connected to the DOM
+      for (const [k, oldEl] of messageElementCache.entries()) {
+         if (!oldEl.isConnected) {
+            messageElementCache.delete(k);
+            break;
+         }
+      }
+   }
+   messageElementCache.set(key, el);
+}
+
+function evictCachedElement(key: string): void {
+   messageElementCache.delete(key);
+}
 
 function isMessageInSelectedTopic(msg: MessageData, selectedToKey: string): boolean {
    if (!selectedToKey) return false;
@@ -125,94 +154,20 @@ function updateFilteredMessages(): void {
 }
 
 export function applyTopicFilter(shouldScrollToBottom = true): void {
+   visibleBatchCount = PAGE_BATCH_SIZE;
    updateFilteredMessages();
-   const container = document.getElementById('messages');
-   if (container) {
-      const { topSpacer, bottomSpacer } = ensureSpacers(container);
-      topSpacer.style.height = '0px';
-      topSpacer.style.display = 'none';
-      bottomSpacer.style.height = '0px';
-      bottomSpacer.style.display = 'none';
-      const children = Array.from(container.children) as HTMLElement[];
-      for (const child of children) {
-         if (child !== topSpacer && child !== bottomSpacer && child.id !== 'messages-empty') {
-            itemResizeObserver?.unobserve(child);
-            child.remove();
-         }
-      }
-      currentMessages.clear();
-   }
-   renderVirtualList();
+   renderMessageList();
    if (shouldScrollToBottom) {
       scrollToBottom();
    }
 }
 
-const itemResizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver((entries) => {
-   let heightChanged = false;
-   for (const entry of entries) {
-      const el = entry.target as HTMLElement;
-      const key = el.dataset.msgKey;
-      if (key) {
-         const newH = Math.round(el.offsetHeight);
-         const oldH = itemHeights.get(key);
-         if (newH > 0 && (oldH === undefined || Math.abs(newH - oldH) > 2)) {
-            itemHeights.set(key, newH);
-            heightChanged = true;
-         }
-      }
-   }
-   if (heightChanged) {
-      scheduleVListRender();
-   }
-}) : null;
-
-function scheduleVListRender(): void {
-   if (isVListRenderScheduled) return;
-   isVListRenderScheduled = true;
-   requestAnimationFrame(() => {
-      isVListRenderScheduled = false;
-      renderVirtualList();
-   });
-}
-
-function ensureSpacers(container: HTMLElement): { topSpacer: HTMLDivElement; bottomSpacer: HTMLDivElement } {
-   if (!vlistTopSpacer || !vlistTopSpacer.parentElement) {
-      vlistTopSpacer = document.createElement('div');
-      vlistTopSpacer.className = 'vlist-spacer-top';
-   }
-   if (!vlistBottomSpacer || !vlistBottomSpacer.parentElement) {
-      vlistBottomSpacer = document.createElement('div');
-      vlistBottomSpacer.className = 'vlist-spacer-bottom';
-   }
-
-   if (container.firstElementChild !== vlistTopSpacer) {
-      container.insertBefore(vlistTopSpacer, container.firstElementChild);
-   }
-   if (container.lastElementChild !== vlistBottomSpacer) {
-      container.appendChild(vlistBottomSpacer);
-   }
-   return { topSpacer: vlistTopSpacer, bottomSpacer: vlistBottomSpacer };
-}
-
-function renderVirtualList(): void {
+export function renderMessageList(): void {
    const container = document.getElementById('messages');
    if (!container) return;
 
-   const { topSpacer, bottomSpacer } = ensureSpacers(container);
-
    if (allFilteredMessages.length === 0) {
-      topSpacer.style.height = '0px';
-      topSpacer.style.display = 'none';
-      bottomSpacer.style.height = '0px';
-      bottomSpacer.style.display = 'none';
-      const children = Array.from(container.children) as HTMLElement[];
-      for (const child of children) {
-         if (child !== topSpacer && child !== bottomSpacer && child.id !== 'messages-empty') {
-            itemResizeObserver?.unobserve(child);
-            child.remove();
-         }
-      }
+      container.innerHTML = '';
       currentMessages.clear();
       let emptyEl = document.getElementById('messages-empty');
       if (!emptyEl) {
@@ -233,68 +188,24 @@ function renderVirtualList(): void {
 
    document.getElementById('messages-empty')?.remove();
 
-   const rect = container.getBoundingClientRect();
-   const viewportTop = Math.max(0, -rect.top);
-   const viewportBottom = viewportTop + window.innerHeight;
-
-   let currentTop = 0;
-   let rawStartIndex = 0;
-   let rawEndIndex = allFilteredMessages.length - 1;
-   let foundStart = false;
-
-   for (let i = 0; i < allFilteredMessages.length; i++) {
-      const msg = allFilteredMessages[i];
-      const h = itemHeights.get(msg.key) ?? DEFAULT_ITEM_HEIGHT;
-      const itemBottom = currentTop + h;
-
-      if (!foundStart && itemBottom >= viewportTop) {
-         rawStartIndex = i;
-         foundStart = true;
-      }
-      if (currentTop <= viewportBottom) {
-         rawEndIndex = i;
-      }
-      currentTop += h + ITEM_GAP;
-   }
-
-   const startIndex = Math.max(0, rawStartIndex - BUFFER_ITEMS);
-   const endIndex = Math.min(allFilteredMessages.length - 1, rawEndIndex + BUFFER_ITEMS);
-
-   let topSpacerHeight = 0;
-   if (startIndex > 0) {
-      for (let i = 0; i < startIndex; i++) {
-         const msg = allFilteredMessages[i];
-         topSpacerHeight += itemHeights.get(msg.key) ?? DEFAULT_ITEM_HEIGHT;
-      }
-      topSpacerHeight += (startIndex - 1) * ITEM_GAP;
-   }
-
-   let bottomSpacerHeight = 0;
-   if (endIndex < allFilteredMessages.length - 1) {
-      const unrenderedBottomCount = (allFilteredMessages.length - 1) - endIndex;
-      for (let i = endIndex + 1; i < allFilteredMessages.length; i++) {
-         const msg = allFilteredMessages[i];
-         bottomSpacerHeight += itemHeights.get(msg.key) ?? DEFAULT_ITEM_HEIGHT;
-      }
-      bottomSpacerHeight += (unrenderedBottomCount - 1) * ITEM_GAP;
-   }
-
-   topSpacer.style.height = `${topSpacerHeight}px`;
-   topSpacer.style.display = topSpacerHeight > 0 ? '' : 'none';
-   bottomSpacer.style.height = `${bottomSpacerHeight}px`;
-   bottomSpacer.style.display = bottomSpacerHeight > 0 ? '' : 'none';
-
-   const visibleSlice = allFilteredMessages.slice(startIndex, endIndex + 1);
+   const startIndex = Math.max(0, allFilteredMessages.length - visibleBatchCount);
+   const visibleSlice = allFilteredMessages.slice(startIndex);
    const visibleElements: HTMLElement[] = [];
 
    for (const msg of visibleSlice) {
       let el = container.querySelector(`[data-msg-key="${CSS.escape(msg.key)}"]`) as HTMLElement | null;
       if (el) {
          fillHeader(el, msg);
+         getCachedElement(msg.key);
       } else {
-         el = createMessageElement(msg);
+         el = getCachedElement(msg.key);
          if (el) {
-            itemResizeObserver?.observe(el);
+            fillHeader(el, msg);
+         } else {
+            el = createMessageElement(msg);
+            if (el) {
+               putCachedElement(msg.key, el);
+            }
          }
       }
       if (el) {
@@ -302,21 +213,20 @@ function renderVirtualList(): void {
       }
    }
 
-   const keepSet = new Set<HTMLElement>([topSpacer, bottomSpacer, ...visibleElements]);
+   const keepSet = new Set<HTMLElement>(visibleElements);
    const children = Array.from(container.children) as HTMLElement[];
    for (const child of children) {
-      if (!keepSet.has(child)) {
-         itemResizeObserver?.unobserve(child);
+      if (!keepSet.has(child) && child.id !== 'messages-empty') {
          child.remove();
          const key = child.dataset.msgKey;
          if (key) currentMessages.delete(key);
       }
    }
 
-   let refNode: Node = bottomSpacer;
+   let refNode: Node | null = null;
    for (let i = visibleElements.length - 1; i >= 0; i--) {
       const el = visibleElements[i];
-      if (el.nextElementSibling !== refNode) {
+      if (el.parentElement !== container || el.nextElementSibling !== refNode) {
          container.insertBefore(el, refNode);
       }
       refNode = el;
@@ -328,8 +238,31 @@ function renderVirtualList(): void {
    }
 }
 
-window.addEventListener('scroll', scheduleVListRender, { passive: true });
-window.addEventListener('resize', scheduleVListRender, { passive: true });
+function checkAndPrependHistory(): void {
+   const section = document.getElementById('section-messages');
+   if (!section || !section.classList.contains('is-active')) return;
+   if (isPrepending) return;
+   if (visibleBatchCount >= allFilteredMessages.length) return;
+
+   if (window.scrollY < 250) {
+      isPrepending = true;
+      const prevScrollHeight = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
+      const prevScrollY = window.scrollY;
+
+      visibleBatchCount = Math.min(allFilteredMessages.length, visibleBatchCount + PAGE_BATCH_SIZE);
+      renderMessageList();
+
+      const newScrollHeight = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
+      const heightDelta = newScrollHeight - prevScrollHeight;
+      window.scrollTo(0, prevScrollY + heightDelta);
+
+      requestAnimationFrame(() => {
+         isPrepending = false;
+      });
+   }
+}
+
+window.addEventListener('scroll', checkAndPrependHistory, { passive: true });
 
 let shouldScrollToBottomOnLoad = true;
 let shouldScrollToBottomOnSend = false;
@@ -366,7 +299,7 @@ async function refreshMessages(): Promise<void> {
       const wasAtBottom = isNearBottom();
       allRawMessages = messages;
       updateFilteredMessages();
-      renderVirtualList();
+      renderMessageList();
       if (shouldScrollToBottomOnLoad || shouldScrollToBottomOnSend || wasAtBottom) {
          shouldScrollToBottomOnLoad = false;
          shouldScrollToBottomOnSend = false;
@@ -796,7 +729,10 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
       const fileNameEl = el.querySelector<HTMLElement>('.msg-file-name');
       if (fileNameEl) fileNameEl.textContent = msg.name || '';
       const audio = el.querySelector<HTMLAudioElement>('.msg-media');
-      if (audio) audio.src = url;
+      if (audio) {
+         audio.preload = 'none';
+         if (audio.src !== url) audio.src = url;
+      }
       let viewBtn = el.querySelector<HTMLButtonElement>('.btn-view-media');
       if (!viewBtn) {
          viewBtn = document.createElement('button');
@@ -819,7 +755,11 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
       const fileNameEl = el.querySelector<HTMLElement>('.msg-file-name');
       if (fileNameEl) fileNameEl.textContent = msg.name || '';
       const video = el.querySelector<HTMLVideoElement>('.msg-media');
-      if (video) video.src = url;
+      if (video) {
+         video.preload = 'metadata';
+         const videoUrl = `${url}#t=0.001`;
+         if (video.src !== videoUrl) video.src = videoUrl;
+      }
       let viewBtn = el.querySelector<HTMLButtonElement>('.btn-view-media');
       if (!viewBtn) {
          viewBtn = document.createElement('button');
@@ -876,7 +816,8 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
 
 function displayMessage(msg: MessageData): void {
    allFilteredMessages.push(msg);
-   renderVirtualList();
+   visibleBatchCount++;
+   renderMessageList();
 }
 
 async function populateSelects(): Promise<void> {
@@ -1157,7 +1098,6 @@ function updateComposerHeight(): void {
 if (composerElement && typeof ResizeObserver !== 'undefined') {
    new ResizeObserver(() => {
       updateComposerHeight();
-      scheduleVListRender();
    }).observe(composerElement);
    updateComposerHeight();
 }
@@ -1166,7 +1106,7 @@ onSectionShow('section-messages', () => {
    updateComposerHeight();
    shouldScrollToBottomOnLoad = true;
    void populateSelects();
-   scheduleVListRender();
+   renderMessageList();
    scrollToBottom();
    void queueRefreshMessages();
 });
@@ -1244,10 +1184,10 @@ onWsEvent('messages_update', async (msg: Record<string, unknown>) => {
    if (msg.action === 'remove') {
       const removedKey = msg.key as string;
       currentMessages.delete(removedKey);
-      itemHeights.delete(removedKey);
+      evictCachedElement(removedKey);
       allRawMessages = allRawMessages.filter(m => m.key !== removedKey);
       updateFilteredMessages();
-      renderVirtualList();
+      renderMessageList();
    } else if (msg.action === 'add') {
       const m = msg.msg as MessageData | undefined;
       if (m && !currentMessages.has(m.key)) {
@@ -1822,12 +1762,12 @@ msgContextMenu?.addEventListener('click', async (e: MouseEvent) => {
    } else if (action === 'delete') {
       try {
          await graffiti.removeMessage(msg.key);
-          currentMessages.delete(msg.key);
-          itemHeights.delete(msg.key);
-          textContentCache.delete(msg.key);
-          allRawMessages = allRawMessages.filter(m => m.key !== msg.key);
-          updateFilteredMessages();
-          renderVirtualList();
+         currentMessages.delete(msg.key);
+         textContentCache.delete(msg.key);
+         evictCachedElement(msg.key);
+         allRawMessages = allRawMessages.filter(m => m.key !== msg.key);
+         updateFilteredMessages();
+         renderMessageList();
       } catch (err: any) {
          setStatus(`Delete failed: ${err?.message || err}`);
       }
