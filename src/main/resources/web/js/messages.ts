@@ -95,14 +95,17 @@ let allFilteredMessages: MessageData[] = [];
 const MAX_CACHED_ELEMENTS = 300;
 const messageElementCache = new Map<string, HTMLElement>();
 
-function getCachedElement(key: string): HTMLElement | undefined {
+function getCachedElement(key: string): HTMLElement | null {
    const el = messageElementCache.get(key);
    if (el) {
       // Refresh recency in Map insertion order
       messageElementCache.delete(key);
       messageElementCache.set(key, el);
    }
-   return el;
+   if (el) {
+      return el
+   }
+   return null;
 }
 
 function putCachedElement(key: string, el: HTMLElement): void {
@@ -193,7 +196,7 @@ export function renderMessageList(): void {
    const visibleElements: HTMLElement[] = [];
 
    for (const msg of visibleSlice) {
-      let el: HTMLElement | null | undefined = container.querySelector(`[data-msg-key="${CSS.escape(msg.key)}"]`);
+      let el: HTMLElement | null = container.querySelector(`[data-msg-key="${CSS.escape(msg.key)}"]`);
       if (el) {
          fillHeader(el, msg);
          getCachedElement(msg.key);
@@ -352,11 +355,11 @@ const audioExtensions = new Set(['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a']);
 const videoExtensions = new Set(['mp4', 'webm', 'mkv', 'avi', 'mov']);
 const htmlExtensions = new Set(['html', 'htm']);
 
-const isImage = (t: string) => imageExtensions.has(t);
-const isText = (t: string) => textExtensions.has(t);
-const isAudio = (t: string) => audioExtensions.has(t);
-const isVideo = (t: string) => videoExtensions.has(t);
-const isHtml = (t: string) => htmlExtensions.has(t);
+const isImage = (t: string) => imageExtensions.has(t.toLowerCase());
+const isText = (t: string) => textExtensions.has(t.toLowerCase());
+const isAudio = (t: string) => audioExtensions.has(t.toLowerCase());
+const isVideo = (t: string) => videoExtensions.has(t.toLowerCase());
+const isHtml = (t: string) => htmlExtensions.has(t.toLowerCase());
 
 function pickTemplateId(type: string): string {
    if (type === 'bell') return 'tpl-bell-message';
@@ -1590,17 +1593,59 @@ function sanitizeUrl(url: string): string {
    return '#';
 }
 
+function getUrlExtension(url: string): string {
+   const clean = url.split(/[?#]/)[0];
+   const lastSlash = clean.lastIndexOf('/');
+   const lastDot = clean.lastIndexOf('.');
+   if (lastDot === -1 || lastDot < lastSlash) return '';
+   return clean.slice(lastDot + 1);
+}
+
+function isImageUrl(url: string): boolean {
+   return isImage(getUrlExtension(url));
+}
+
+function isVideoUrl(url: string): boolean {
+   return isVideo(getUrlExtension(url));
+}
+
+function isAudioUrl(url: string): boolean {
+   return isAudio(getUrlExtension(url));
+}
+
+function makeImageFigure(safeUrl: string, alt: string = ''): string {
+   return `<figure class="msg-figure" style="max-width:90vw; margin:0.35rem 0; display:inline-block;"><img src="${escHtml(safeUrl)}" alt="${escHtml(alt)}" class="msg-img" style="max-height:25vh; max-width:90vw; width:auto; height:auto; object-fit:contain; border-radius:4px; display:block;"><figcaption class="msg-figcaption" style="font-size:0.8rem; opacity:0.75; margin-top:0.25rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; display:block;" title="${escHtml(safeUrl)}">${escHtml(safeUrl)}</figcaption></figure>`;
+}
+
+function makeVideoFigure(safeUrl: string): string {
+   return `<figure class="msg-figure" style="max-width:90vw; margin:0.35rem 0; display:inline-block;"><video src="${escHtml(safeUrl)}" controls preload="metadata" style="max-height:25vh; max-width:90vw; width:auto; height:auto; border-radius:4px; display:block; background:#000;"></video><figcaption class="msg-figcaption" style="font-size:0.8rem; opacity:0.75; margin-top:0.25rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; display:block;" title="${escHtml(safeUrl)}">${escHtml(safeUrl)}</figcaption></figure>`;
+}
+
+function makeAudioFigure(safeUrl: string): string {
+   return `<figure class="msg-figure" style="max-width:min(90vw, 420px); margin:0.35rem 0; display:inline-block; width:100%;"><audio src="${escHtml(safeUrl)}" controls preload="none" style="width:100%; display:block;"></audio><figcaption class="msg-figcaption" style="font-size:0.8rem; opacity:0.75; margin-top:0.25rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; display:block;" title="${escHtml(safeUrl)}">${escHtml(safeUrl)}</figcaption></figure>`;
+}
+
+function makeMediaFigure(safeUrl: string, alt: string = ''): string {
+   if (isVideoUrl(safeUrl)) {
+      return makeVideoFigure(safeUrl);
+   }
+   if (isAudioUrl(safeUrl)) {
+      return makeAudioFigure(safeUrl);
+   }
+   return makeImageFigure(safeUrl, alt);
+}
+
 function inlineFormat(text: string): string {
    const links: string[] = [];
 
-   // 1. Markdown Images: ![alt](url)
+   // 1. Markdown Media: ![alt](url)
    let formatted = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt, url) => {
       const idx = links.length;
       const safeUrl = sanitizeUrl(url);
       if (safeUrl === '#') {
          links.push('');
       } else {
-         links.push(`<img src="${escHtml(safeUrl)}" alt="${alt}" class="msg-img" style="max-width:100%; height:auto; border-radius:4px; vertical-align:middle; margin:0.35rem 0;">`);
+         links.push(makeMediaFigure(safeUrl, alt));
       }
       return `@@@LINK_${idx}@@@`;
    });
@@ -1623,7 +1668,13 @@ function inlineFormat(text: string): string {
       }
       const idx = links.length;
       const safeUrl = sanitizeUrl(cleanUrl);
-      links.push(`<a href="${escHtml(safeUrl)}" target="_blank" rel="noopener noreferrer" class="msg-link">${cleanUrl}</a>`);
+      if (safeUrl === '#') {
+         links.push('');
+      } else if (isImageUrl(safeUrl) || isVideoUrl(safeUrl) || isAudioUrl(safeUrl)) {
+         links.push(makeMediaFigure(safeUrl));
+      } else {
+         links.push(`<a href="${escHtml(safeUrl)}" target="_blank" rel="noopener noreferrer" class="msg-link">${cleanUrl}</a>`);
+      }
       return `@@@LINK_${idx}@@@${trailingPunct}`;
    });
 
