@@ -1,12 +1,69 @@
 import { showSection, onSectionShow } from './app.js';
 import { graffiti } from './graffiti-api.js';
 
-// ── Help Documentation Navigation ─────────────────────────────────────────────
+// ── Help Documentation Navigation & Dynamic Loading ─────────────────────────
 const showHelpBtn = document.getElementById('btn-show-help') as HTMLButtonElement | null;
 const closeHelpBtn = document.getElementById('btn-close-help') as HTMLButtonElement | null;
+const helpContentEl = document.getElementById('help-content') as HTMLElement | null;
+
+export function parseHelpHtmlSections(htmlText: string): string {
+   const parser = new DOMParser();
+   const doc = parser.parseFromString(htmlText, 'text/html');
+   const body = doc.body;
+   if (!body || !body.children.length) {
+      return '';
+   }
+
+   // Ensure all links open safely in a new window/tab
+   doc.querySelectorAll('a[href]').forEach(a => {
+      a.setAttribute('target', '_blank');
+      a.setAttribute('rel', 'noopener');
+   });
+
+   // Ensure images have the msg-img class for consistent styling
+   doc.querySelectorAll('img').forEach(img => {
+      img.classList.add('msg-img');
+   });
+
+   const cards: string[] = [];
+   let currentCardNodes: string[] = [];
+
+   for (let i = 0; i < body.children.length; i++) {
+      const child = body.children[i];
+      const isHeader = /^H[1-3]$/i.test(child.tagName);
+
+      if (isHeader && currentCardNodes.length > 0) {
+         cards.push(`<section class="net-card">\n${currentCardNodes.join('\n')}\n</section>`);
+         currentCardNodes = [];
+      }
+      currentCardNodes.push(child.outerHTML);
+   }
+
+   if (currentCardNodes.length > 0) {
+      cards.push(`<section class="net-card">\n${currentCardNodes.join('\n')}\n</section>`);
+   }
+
+   return cards.join('\n\n');
+}
+
+export async function loadHelpDocumentation(): Promise<void> {
+   if (!helpContentEl) return;
+   try {
+      const resp = await fetch('help.html?t=' + Date.now());
+      if (!resp.ok) {
+         throw new Error(`HTTP ${resp.status}`);
+      }
+      const text = await resp.text();
+      helpContentEl.innerHTML = parseHelpHtmlSections(text);
+   } catch (err) {
+      console.error('Failed to load help.html:', err);
+      helpContentEl.innerHTML = `<section class="net-card"><p style="color:var(--danger, #f44336); font-size:0.9rem;">Failed to load help documentation.</p></section>`;
+   }
+}
 
 if (showHelpBtn) {
    showHelpBtn.addEventListener('click', () => {
+      loadHelpDocumentation();
       showSection('section-help');
    });
 }
@@ -16,6 +73,10 @@ if (closeHelpBtn) {
       showSection('section-settings');
    });
 }
+
+onSectionShow('section-help', () => {
+   loadHelpDocumentation();
+});
 
 // ── Appearance Settings ───────────────────────────────────────────────────────
 const themeSel = document.getElementById('settings-theme') as HTMLSelectElement | null;

@@ -191,7 +191,7 @@ Messages
 							<button id="send-file" type="button">Send File</button>
 							<label class="urgent-toggle" title="Send as urgent message (plays notification chime for recipient)">
 								<input id="urgent-checkbox" type="checkbox">
-								<span>🔔!</span>
+								<span>🔔</span>
 							</label>
 							<input hidden id="file-input" type="file">
 							<span aria-live="polite" class="send-status" id="send-status">Ready</span>
@@ -395,100 +395,9 @@ Settings
 					</button>
 				</div>
 
-				<section class="net-card">
-					<h3>What is Graffiti?</h3>
-					<p style="font-size:0.9rem; opacity:0.8; line-height:1.4; margin-top:0.5rem">
-						Graffiti is a secure, decentralized, peer-to-peer (P2P) messaging application. It allows you to
-						communicate directly with other nodes without central servers. All messages are encrypted end-to-end,
-						ensuring that only the intended recipient can read the content.
-					</p>
-				</section>
-
-				<section class="net-card">
-					<h3>Server & Connections</h3>
-					<p style="font-size:0.9rem; opacity:0.8; line-height:1.4; margin-top:0.5rem">
-						To receive direct connections, you can start a <strong>Server</strong> on your node. This opens a port
-						(typically <code>38214</code>) so that other peers on the network can connect to you, handshake, and
-						synchronize messages.
-					</p>
-				</section>
-
-				<section class="net-card">
-					<h3>Peer Discovery & Syncing</h3>
-					<p style="font-size:0.9rem; opacity:0.8; line-height:1.4; margin-top:0.5rem">
-						Graffiti discovers local network nodes automatically using multicast discovery. You can also manually
-						connect to any reachable peer by inputting their IP/host and port in the Network tab. Once connected,
-						Graffiti automatically runs an initial sync, exchanging encrypted message metadata so both nodes get
-						caught up.
-					</p>
-				</section>
-
-				<section class="net-card">
-					<h3>Topic / Relay Workflow</h3>
-					<p style="font-size:0.9rem; opacity:0.8; line-height:1.4; margin-top:0.5rem">
-						To start messaging in a shared topic/forum using a relay node, follow this standard flow:
-					</p>
-					<ol
-						style="font-size:0.9rem; opacity:0.8; line-height:1.4; margin-left:1.2rem; margin-top:0.5rem; display: flex; flex-direction: column; gap: 0.5rem;">
-						<li><strong>Setup the Shared Topic:</strong> Create or import the target Identity using its
-							deterministic
-							seed phrase. Ensure this identity is active in your "Identities" tab.
-						</li>
-						<li><strong>Import Peers:</strong> Add the public keys of the peers you want to send messages to in
-							the
-							"Peers" tab.
-						</li>
-						<li><strong>Connect to the Relay:</strong> In the "Network" tab, input the host/IP and port of the
-							relay
-							node and click <strong>Connect</strong>. Alternatively, scan and connect via "Nearby Nodes".
-						</li>
-						<li><strong>Write and Send:</strong> Go to the "Messages" tab. Compose your message, selecting your
-							sender identity in the "From" field and the shared/recipient peer in the "To" field. Click
-							<strong>Send</strong>.
-						</li>
-						<li><strong>Propagation:</strong> The message is encrypted locally, stored on your disk, and
-							automatically pushed to the connected relay. The relay caches the encrypted payload and serves it
-							to
-							the recipient when they connect and synchronize.
-						</li>
-					</ol>
-				</section>
-
-				<section class="net-card">
-					<h3>Relay Mode</h3>
-					<p style="font-size:0.9rem; opacity:0.8; line-height:1.4; margin-top:0.5rem">
-						If you enable <strong>Relay mode</strong>, your node acts as a store-and-forward peer. It will
-						download
-						and cache encrypted messages destined for other identities and pass them along when those nodes
-						connect
-						to you. This is highly useful for bridging communication when peers are not online at the same time.
-					</p>
-				</section>
-
-				<section class="net-card">
-					<h3>Identities & Passphrases</h3>
-					<p style="font-size:0.9rem; opacity:0.8; line-height:1.4; margin-top:0.5rem">
-						In Graffiti, accounts are called <strong>Identities</strong>.
-					</p>
-					<ul
-						style="font-size:0.9rem; opacity:0.8; line-height:1.4; margin-left:1.2rem; margin-top:0.5rem; display: flex; flex-direction: column; gap: 0.5rem;">
-						<li><strong>Receiving Messages:</strong> You can only read and decrypt messages addressed to an
-							Identity
-							key that you currently have active in your "Identities" tab.
-						</li>
-						<li><strong>Seed Phrases:</strong> Identities are created deterministically using a seed phrase
-							(password/passphrase). If you share this seed phrase with someone else (or use it on a second
-							device),
-							that device will recreate the exact same Identity and can view and receive the same message
-							history.
-						</li>
-						<li><strong>Forums & Uniqueness:</strong> You can uniquely identify yourself to others by creating
-							your
-							own private Identity and using it to write to forum topics. Emojis and avatar colors represent the
-							unique fingerprint of each identity key.
-						</li>
-					</ul>
-				</section>
+				<div id="help-content">
+					<!-- Dynamically loaded from help.html -->
+				</div>
 			</main>
 		</section>
 

@@ -966,3 +966,61 @@ code {
     opacity: 0.92;
     transform: scale(1.015);
 }
+
+/* ── Help Documentation formatting ────────────────────────────────────────── */
+#help-content .net-card h1,
+#help-content .net-card h2,
+#help-content .net-card h3,
+#help-content .net-card h4,
+#help-content .net-card .msg-h1,
+#help-content .net-card .msg-h2,
+#help-content .net-card .msg-h3 {
+    margin-top: 0;
+    margin-bottom: 0.5rem;
+}
+#help-content .net-card h4 {
+    font-size: 0.95rem;
+    margin-top: 0.75rem;
+    opacity: 0.95;
+}
+#help-content .net-card p,
+#help-content .net-card .msg-para {
+    font-size: 0.9rem;
+    opacity: 0.85;
+    line-height: 1.45;
+    margin: 0.4rem 0;
+}
+#help-content .net-card ul,
+#help-content .net-card ol,
+#help-content .net-card .msg-list {
+    font-size: 0.9rem;
+    opacity: 0.85;
+    line-height: 1.45;
+    margin-left: 1.2rem;
+    margin-top: 0.4rem;
+    margin-bottom: 0.5rem;
+}
+#help-content .net-card li {
+    margin-bottom: 0.35rem;
+}
+#help-content .net-card li > p {
+    margin: 0;
+}
+#help-content .net-card a {
+    color: var(--button, #4caf50);
+    text-decoration: underline;
+}
+#help-content .net-card img,
+#help-content .net-card img.msg-img {
+    display: inline-block;
+    vertical-align: middle;
+    border-radius: var(--radius-box, 4px);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(128, 128, 128, 0.25);
+    padding: 3px;
+    margin: 0.5rem 0;
+    max-width: 100%;
+    height: auto;
+}
+
+

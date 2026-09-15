@@ -83,7 +83,7 @@ function queueRefreshMessages(): void {
 }
 
 // ── Windowed Message List State ─────────────────────────────────────────────
-const PAGE_BATCH_SIZE = 50;
+const PAGE_BATCH_SIZE = 20;
 let visibleBatchCount = PAGE_BATCH_SIZE;
 let isPrepending = false;
 
@@ -193,7 +193,7 @@ export function renderMessageList(): void {
    const visibleElements: HTMLElement[] = [];
 
    for (const msg of visibleSlice) {
-      let el = container.querySelector(`[data-msg-key="${CSS.escape(msg.key)}"]`) as HTMLElement | null;
+      let el: HTMLElement | null | undefined = container.querySelector(`[data-msg-key="${CSS.escape(msg.key)}"]`);
       if (el) {
          fillHeader(el, msg);
          getCachedElement(msg.key);
@@ -1565,145 +1565,207 @@ export function openFullContentViewer(msg: MessageData, fullText?: string): void
 }
 
 function escHtml(str: string): string {
-   return String(str)
+   return str
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
 }
 
-function inlineFormat(str: string): string {
-   const urls: string[] = [];
-   let formatted = str.replace(/(https?:\/\/[^\s<]+)/gi, (match) => {
+function sanitizeUrl(url: string): string {
+   const clean = url.trim().replace(/&amp;/g, '&');
+   // Block dangerous protocol schemes like javascript:, vbscript:, data:
+   if (/^\s*(javascript|vbscript|data):/i.test(clean)) {
+      return '#';
+   }
+   // Allow standard web protocols, mailto, relative paths, anchor fragments, local files
+   if (/^(https?:|mailto:|\/|\.\/|\.\.\/|#|[a-zA-Z0-9_-]+\.[a-zA-Z0-9]+)/i.test(clean)) {
+      return clean;
+   }
+   // Relative path without known protocol
+   if (!/^[a-zA-Z0-9+.-]+:/.test(clean)) {
+      return clean;
+   }
+   return '#';
+}
+
+function inlineFormat(text: string): string {
+   const links: string[] = [];
+
+   // 1. Markdown Images: ![alt](url)
+   let formatted = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt, url) => {
+      const idx = links.length;
+      const safeUrl = sanitizeUrl(url);
+      if (safeUrl === '#') {
+         links.push('');
+      } else {
+         links.push(`<img src="${escHtml(safeUrl)}" alt="${alt}" class="msg-img" style="max-width:100%; height:auto; border-radius:4px; vertical-align:middle; margin:0.35rem 0;">`);
+      }
+      return `@@@LINK_${idx}@@@`;
+   });
+
+   // 2. Markdown Links: [label](url)
+   formatted = formatted.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label, url) => {
+      const idx = links.length;
+      const safeUrl = sanitizeUrl(url);
+      links.push(`<a href="${escHtml(safeUrl)}" target="_blank" rel="noopener noreferrer" class="msg-link">${label}</a>`);
+      return `@@@LINK_${idx}@@@`;
+   });
+
+   // 3. Raw URLs auto-linking (http:// or https://)
+   formatted = formatted.replace(/(https?:\/\/[^\s<]+)/gi, (match) => {
       let cleanUrl = match;
       let trailingPunct = '';
       while (/[.,!?)]$/.test(cleanUrl) && !cleanUrl.endsWith('()')) {
          trailingPunct = cleanUrl.slice(-1) + trailingPunct;
          cleanUrl = cleanUrl.slice(0, -1);
       }
-      const idx = urls.length;
-      urls.push(cleanUrl);
-      return `@@@URL_${idx}@@@${trailingPunct}`;
+      const idx = links.length;
+      const safeUrl = sanitizeUrl(cleanUrl);
+      links.push(`<a href="${escHtml(safeUrl)}" target="_blank" rel="noopener noreferrer" class="msg-link">${cleanUrl}</a>`);
+      return `@@@LINK_${idx}@@@${trailingPunct}`;
    });
 
+   // 4. Bold & Italic (Asterisks & Underscores)
+   // Triple: ***bold-italic*** or ___bold-italic___
    formatted = formatted
-      .replace(/(\*\*\*|___)(.*?)\1/g, '<strong><em>$2</em></strong>')
-      .replace(/(\*\*|__)(.*?)\1/g, '<strong>$2</strong>')
-      .replace(/(^|\s|\()(\*|_)(.*?)\2(?=\s|\)|$|\.|,|\?|!)/g, '$1<em>$3</em>')
-      .replace(/~~(.*?)~~/g, '<del>$1</del>');
+      .replace(/\*\*\*([^\*]+)\*\*\*/g, '<strong><em>$1</em></strong>')
+      .replace(/(^|[^\w])___([^_]+)___(?=[^\w]|$)/g, '$1<strong><em>$2</em></strong>')
+      // Double: **bold** or __bold__
+      .replace(/\*\*([^\*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[^\w])__([^_]+)__(?=[^\w]|$)/g, '$1<strong>$2</strong>')
+      // Single: *italic* or _italic_
+      .replace(/(^|[^\*])\*([^\*]+)\*(?!\*)/g, '$1<em>$2</em>')
+      .replace(/(^|[^\w])_([^_]+)_(?=[^\w]|$)/g, '$1<em>$2</em>')
+      // Strikethrough: ~~text~~
+      .replace(/~~([^~]+)~~/g, '<del>$1</del>');
 
-   return formatted.replace(/@@@URL_(\d+)@@@/g, (_m, idxStr) => {
-      const idx = Number(idxStr);
-      const rawUrl = urls[idx] || '';
-      const hrefUrl = rawUrl.replace(/&amp;/g, '&');
-      return `<a href="${hrefUrl}" target="_blank" rel="noopener" class="msg-link">${rawUrl}</a>`;
-   });
+   // 5. Restore Links & Images
+   return formatted.replace(/@@@LINK_(\d+)@@@/g, (_m, idx) => links[Number(idx)] || '');
 }
 
 export function renderMarkdown(raw: string): string {
    if (!raw) return '';
 
-   let html = escHtml(raw);
-
+   // 1. Stash code blocks and inline code BEFORE general escaping and block processing
    const codeBlocks: string[] = [];
-   html = html.replace(/```([\s\S]*?)```/g, (_match, p1) => {
-      const index = codeBlocks.length;
-      codeBlocks.push(`<pre class="msg-code-block"><code>${p1.trim()}</code></pre>`);
-      return `@@@CODEBLOCK_${index}@@@`;
+   const inlineCodes: string[] = [];
+
+   // Fenced code blocks with optional language
+   let text = raw.replace(/```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g, (_m, lang, code) => {
+      const idx = codeBlocks.length;
+      const langClass = lang ? ` class="language-${escHtml(lang)}"` : '';
+      codeBlocks.push(`<pre class="msg-code-block"><code${langClass}>${escHtml(code.replace(/\n$/, ''))}</code></pre>`);
+      return `\n\n@@@CODE_BLOCK_${idx}@@@\n\n`;
    });
 
-   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+   // Inline code
+   text = text.replace(/`([^`\n]+)`/g, (_m, code) => {
+      const idx = inlineCodes.length;
+      inlineCodes.push(`<code>${escHtml(code)}</code>`);
+      return `@@@INLINE_CODE_${idx}@@@`;
+   });
 
-   const lines = html.split('\n');
+   // 2. Process block elements line-by-line
+   const lines = text.split('\n');
    const result: string[] = [];
-   let inList = false;
-   let listType: 'ul' | 'ol' | null = null;
-   let inBlockquote = false;
-   let blockquoteLines: string[] = [];
 
-   const flushBlockquote = () => {
-      if (inBlockquote) {
-         result.push(`<blockquote class="msg-blockquote">${blockquoteLines.map(l => inlineFormat(l)).join('<br>')}</blockquote>`);
-         inBlockquote = false;
-         blockquoteLines = [];
+   let listType: 'ul' | 'ol' | null = null;
+   let bqLines: string[] = [];
+   let paraLines: string[] = [];
+
+   const flushList = () => {
+      if (listType) {
+         result.push(listType === 'ul' ? '</ul>' : '</ol>');
+         listType = null;
       }
+   };
+
+   const flushBq = () => {
+      if (bqLines.length > 0) {
+         result.push(`<blockquote class="msg-blockquote">${bqLines.map(l => inlineFormat(escHtml(l))).join('<br>')}</blockquote>`);
+         bqLines = [];
+      }
+   };
+
+   const flushPara = () => {
+      if (paraLines.length > 0) {
+         result.push(`<p class="msg-para">${paraLines.map(l => inlineFormat(escHtml(l))).join('<br>')}</p>`);
+         paraLines = [];
+      }
+   };
+
+   const flushAll = () => {
+      flushList();
+      flushBq();
+      flushPara();
    };
 
    for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
-      if (line.includes('@@@CODEBLOCK_')) {
-         if (inList) {
-            result.push(listType === 'ul' ? '</ul>' : '</ol>');
-            inList = false;
-            listType = null;
-         }
-         flushBlockquote();
-         result.push(line);
+      // Placeholder check
+      const cbMatch = line.trim().match(/^@@@CODE_BLOCK_(\d+)@@@$/);
+      if (cbMatch) {
+         flushAll();
+         result.push(codeBlocks[Number(cbMatch[1])]);
          continue;
       }
 
-      const h3Match = line.match(/^###\s+(.+)$/);
-      const h2Match = line.match(/^##\s+(.+)$/);
-      const h1Match = line.match(/^#\s+(.+)$/);
+      // Blank line terminates active blocks
+      if (line.trim() === '') {
+         flushAll();
+         continue;
+      }
+
+      // Blockquote
+      const bqMatch = line.match(/^>\s?(.*)$/);
+      if (bqMatch) {
+         flushList();
+         flushPara();
+         bqLines.push(bqMatch[1]);
+         continue;
+      } else {
+         flushBq();
+      }
+
+      // Lists
       const ulMatch = line.match(/^[\*\-\+]\s+(.+)$/);
       const olMatch = line.match(/^\d+\.\s+(.+)$/);
-      const bqMatch = line.match(/^&gt;\s?(.*)$/);
-
-      if (bqMatch) {
-         if (inList) {
-            result.push(listType === 'ul' ? '</ul>' : '</ol>');
-            inList = false;
-            listType = null;
-         }
-         inBlockquote = true;
-         blockquoteLines.push(bqMatch[1]);
-         continue;
-      } else {
-         flushBlockquote();
-      }
-
       if (ulMatch || olMatch) {
+         flushPara();
          const currentType = ulMatch ? 'ul' : 'ol';
-         const itemContent = ulMatch ? ulMatch[1] : olMatch![1];
+         const itemText = ulMatch ? ulMatch[1] : olMatch![1];
 
-         if (!inList || listType !== currentType) {
-            if (inList) {
-               result.push(listType === 'ul' ? '</ul>' : '</ol>');
-            }
+         if (listType !== currentType) {
+            flushList();
             result.push(currentType === 'ul' ? '<ul class="msg-list">' : '<ol class="msg-list">');
-            inList = true;
             listType = currentType;
          }
-         result.push(`<li>${inlineFormat(itemContent)}</li>`);
+         result.push(`<li>${inlineFormat(escHtml(itemText))}</li>`);
          continue;
-      } else if (inList) {
-         result.push(listType === 'ul' ? '</ul>' : '</ol>');
-         inList = false;
-         listType = null;
-      }
-
-      if (h3Match) {
-         result.push(`<h3 class="msg-h3">${inlineFormat(h3Match[1])}</h3>`);
-      } else if (h2Match) {
-         result.push(`<h2 class="msg-h2">${inlineFormat(h2Match[1])}</h2>`);
-      } else if (h1Match) {
-         result.push(`<h1 class="msg-h1">${inlineFormat(h1Match[1])}</h1>`);
-      } else if (line.trim() === '') {
-         result.push('<div class="msg-spacer"></div>');
       } else {
-         result.push(`<p class="msg-para">${inlineFormat(line)}</p>`);
+         flushList();
       }
+
+      // Headings
+      const hMatch = line.match(/^(#{1,6})\s+(.+)$/);
+      if (hMatch) {
+         flushPara();
+         const level = hMatch[1].length;
+         result.push(`<h${level} class="msg-h${level}">${inlineFormat(escHtml(hMatch[2]))}</h${level}>`);
+         continue;
+      }
+
+      // Standard paragraph line (buffered)
+      paraLines.push(line.trim());
    }
 
-   if (inList) {
-      result.push(listType === 'ul' ? '</ul>' : '</ol>');
-   }
-   flushBlockquote();
+   flushAll();
 
-   let finalHtml = result.join('');
-   finalHtml = finalHtml.replace(/@@@CODEBLOCK_(\d+)@@@/g, (_m, idx) => codeBlocks[Number(idx)] || '');
-   return finalHtml;
+   // 3. Restore inline code
+   return result.join('').replace(/@@@INLINE_CODE_(\d+)@@@/g, (_m, idx) => inlineCodes[Number(idx)] || '');
 }
 
 document.addEventListener('click', (e: MouseEvent) => {
@@ -1852,12 +1914,12 @@ messagesContainer?.addEventListener('touchstart', (e: TouchEvent) => {
       isLongPressActive = true;
       try {
          window.getSelection()?.removeAllRanges();
-      } catch {}
+      } catch { }
       const key = item.dataset.msgKey;
       const msg = allFilteredMessages.find(m => m.key === key);
       if (msg) {
          if ('vibrate' in navigator) {
-            try { navigator.vibrate(35); } catch {}
+            try { navigator.vibrate(35); } catch { }
          }
          openContextMenu(touchStartX, touchStartY, msg);
       }
