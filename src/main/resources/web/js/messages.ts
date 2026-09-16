@@ -1,6 +1,6 @@
-import { graffiti, IdentityEntry, PeerEntry, openPackFile } from './graffiti-api.js';
-import { onSectionShow, onWsEvent, onWsOpen, showSection } from './app.js';
-import { showDialog } from './dialog.js';
+import {graffiti, IdentityEntry, openPackFile, PeerEntry} from './graffiti-api.js';
+import {onSectionShow, onWsEvent, onWsOpen, showSection} from './app.js';
+import {showDialog} from './dialog.js';
 
 const form = document.getElementById('message-form') as HTMLFormElement | null;
 const fromField = document.getElementById('from-field') as HTMLSelectElement | null;
@@ -55,7 +55,7 @@ async function saveOrClearRememberedFields(): Promise<void> {
 
 async function refreshNameMaps(): Promise<void> {
    try {
-      const [{ identities }, { peers }] = await Promise.all([
+      const [{identities}, {peers}] = await Promise.all([
          graffiti.listIdentities(),
          graffiti.listPeers(),
       ]);
@@ -74,6 +74,7 @@ async function refreshNameMaps(): Promise<void> {
 }
 
 let refreshTimeout: number | null = null;
+
 function queueRefreshMessages(): void {
    if (refreshTimeout !== null) return;
    refreshTimeout = window.setTimeout(async () => {
@@ -265,7 +266,7 @@ function checkAndPrependHistory(): void {
    }
 }
 
-window.addEventListener('scroll', checkAndPrependHistory, { passive: true });
+window.addEventListener('scroll', checkAndPrependHistory, {passive: true});
 
 let shouldScrollToBottomOnLoad = true;
 let shouldScrollToBottomOnSend = false;
@@ -295,7 +296,7 @@ async function refreshMessages(): Promise<void> {
    isRefreshing = true;
    try {
       await refreshNameMaps();
-      const { messages } = await graffiti.listMessages();
+      const {messages} = await graffiti.listMessages();
       const container = document.getElementById('messages');
       if (!container) return;
 
@@ -652,9 +653,10 @@ async function handleQuote(msg: MessageData): Promise<void> {
       }
       messageText.focus();
       messageText.setSelectionRange(messageText.value.length, messageText.value.length);
-      messageText.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      messageText.scrollIntoView({behavior: 'smooth', block: 'center'});
    }
 }
+
 const handleReply = handleQuote;
 
 function createMessageElement(msg: MessageData): HTMLElement | null {
@@ -824,7 +826,7 @@ function displayMessage(msg: MessageData): void {
 }
 
 async function populateSelects(): Promise<void> {
-   const [{ identities }, { peers }, node] = await Promise.all([
+   const [{identities}, {peers}, node] = await Promise.all([
       graffiti.listIdentities(),
       graffiti.listPeers(),
       graffiti.nodeInfo(),
@@ -927,7 +929,15 @@ function getEnvelope(): { identityKey: string; peerKey: string } {
 
 type Payload =
    | { type: 'text'; text: string; identityKey: string; peerKey: string; urgent?: boolean }
-   | { type: 'file'; fileName: string; file: File; identityKey: string; peerKey: string; source?: string; urgent?: boolean };
+   | {
+   type: 'file';
+   fileName: string;
+   file: File;
+   identityKey: string;
+   peerKey: string;
+   source?: string;
+   urgent?: boolean
+};
 
 async function sendPayload(payload: Payload): Promise<void> {
    if (isSending) {
@@ -937,7 +947,7 @@ async function sendPayload(payload: Payload): Promise<void> {
    isSending = true;
    setStatus(`Sending ${payload.type}`);
    try {
-      const { identityKey, peerKey } = payload;
+      const {identityKey, peerKey} = payload;
       if (!identityKey || !peerKey) throw new Error('Select a sender and recipient first.');
       if (payload.type === 'text') {
          await graffiti.sendText(identityKey, peerKey, payload.text, !!payload.urgent);
@@ -963,11 +973,11 @@ interface DroppedContent {
 
 function firstDroppedContent(dataTransfer: DataTransfer | null): DroppedContent | null {
    if (!dataTransfer) return null;
-   if (dataTransfer.files?.length > 0) return { kind: 'file', value: dataTransfer.files[0] };
+   if (dataTransfer.files?.length > 0) return {kind: 'file', value: dataTransfer.files[0]};
    const plain = dataTransfer.getData('text/plain');
-   if (plain) return { kind: 'text', value: plain };
+   if (plain) return {kind: 'text', value: plain};
    const html = dataTransfer.getData('text/html');
-   if (html) return { kind: 'html', value: html };
+   if (html) return {kind: 'html', value: html};
    return null;
 }
 
@@ -980,7 +990,7 @@ form?.addEventListener('submit', async (event: SubmitEvent) => {
       return;
    }
    const urgent = urgentCheckbox?.checked ?? false;
-   await sendPayload({ type: 'text', text, urgent, ...getEnvelope() });
+   await sendPayload({type: 'text', text, urgent, ...getEnvelope()});
    if (!isSending && messageText) {
       messageText.value = '';
       autoResizeTextarea(messageText);
@@ -1026,12 +1036,11 @@ toField?.addEventListener('change', () => {
 });
 
 
-
 fileInput?.addEventListener('change', async () => {
    const file = fileInput?.files?.[0];
    if (!file) return;
    const urgent = urgentCheckbox?.checked ?? false;
-   await sendPayload({ type: 'file', fileName: file.name, file, urgent, ...getEnvelope() });
+   await sendPayload({type: 'file', fileName: file.name, file, urgent, ...getEnvelope()});
    if (fileInput) fileInput.value = '';
    scrollToBottom();
 });
@@ -1067,10 +1076,10 @@ messagesSection?.addEventListener('drop', async (event: DragEvent) => {
    }
    if (content.kind === 'file') {
       const file = content.value as File;
-      await sendPayload({ type: 'file', fileName: file.name, file, ...getEnvelope() });
+      await sendPayload({type: 'file', fileName: file.name, file, ...getEnvelope()});
       return;
    }
-   await sendPayload({ type: 'text', text: content.value as string, ...getEnvelope() });
+   await sendPayload({type: 'text', text: content.value as string, ...getEnvelope()});
 });
 
 // ── Clipboard paste (files / screenshots) ────────────────────────────────────
@@ -1079,10 +1088,9 @@ messagesSection?.addEventListener('paste', async (event: ClipboardEvent) => {
    if (files && files.length > 0) {
       event.preventDefault();
       const file = files[0];
-      await sendPayload({ type: 'file', fileName: file.name, file, ...getEnvelope() });
+      await sendPayload({type: 'file', fileName: file.name, file, ...getEnvelope()});
    }
 });
-
 
 
 // ── Bootstrap & Foreground Lifecycle ──────────────────────────────────────────
@@ -1090,6 +1098,7 @@ setStatus('Ready');
 autoResizeTextarea(messageText);
 
 const composerElement = document.querySelector('.composer') as HTMLElement | null;
+
 function updateComposerHeight(): void {
    if (!composerElement) return;
    const height = composerElement.offsetHeight;
@@ -1179,7 +1188,7 @@ if (typeof Notification !== 'undefined' && Notification.permission === 'default'
    const requestPermission = () => {
       Notification.requestPermission().catch(err => console.warn('Notification permission request failed:', err));
    };
-   document.addEventListener('click', requestPermission, { once: true });
+   document.addEventListener('click', requestPermission, {once: true});
 }
 
 // ── WebSocket hooks ───────────────────────────────────────────────────────────
@@ -1338,7 +1347,7 @@ function initImageZoomController(): void {
          imgInitialPinchDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
          imgInitialScale = imgScale;
       }
-   }, { passive: false });
+   }, {passive: false});
 
    viewport.addEventListener('touchmove', (e: TouchEvent) => {
       if (e.touches.length === 2 && imgInitialPinchDist > 0) {
@@ -1356,7 +1365,7 @@ function initImageZoomController(): void {
          imgTranslateY = touch.clientY - imgDragStartY;
          applyImageTransform(false);
       }
-   }, { passive: false });
+   }, {passive: false});
 
    viewport.addEventListener('touchend', (e: TouchEvent) => {
       if (e.touches.length === 0) {
@@ -1409,7 +1418,7 @@ function initImageZoomController(): void {
          imgTranslateY = 0;
       }
       applyImageTransform(false);
-   }, { passive: false });
+   }, {passive: false});
 }
 
 function initTextViewerControls(): void {
@@ -1520,7 +1529,7 @@ export function openFullContentViewer(msg: MessageData, fullText?: string): void
       if (packTitle) packTitle.textContent = msg.name || 'Web Pack Archive';
       if (openBtn) {
          openBtn.onclick = () => {
-            void openPackFile({ encKey: msg.key, name: msg.name });
+            void openPackFile({encKey: msg.key, name: msg.name});
          };
       }
    } else if (isText(msg.type)) {
@@ -1593,94 +1602,10 @@ function sanitizeUrl(url: string): string {
    return '#';
 }
 
-function getUrlExtension(url: string): string {
-   const clean = url.split(/[?#]/)[0];
-   const lastSlash = clean.lastIndexOf('/');
-   const lastDot = clean.lastIndexOf('.');
-   if (lastDot === -1 || lastDot < lastSlash) return '';
-   return clean.slice(lastDot + 1);
-}
-
-function isImageUrl(url: string): boolean {
-   return isImage(getUrlExtension(url));
-}
-
-function isVideoUrl(url: string): boolean {
-   return isVideo(getUrlExtension(url));
-}
-
-function isAudioUrl(url: string): boolean {
-   return isAudio(getUrlExtension(url));
-}
-
-function makeImageFigure(safeUrl: string, alt: string = ''): string {
-   return `<figure class="msg-figure" style="max-width:90vw; margin:0.35rem 0; display:inline-block;"><img src="${escHtml(safeUrl)}" alt="${escHtml(alt)}" class="msg-img" style="max-height:25vh; max-width:90vw; width:auto; height:auto; object-fit:contain; border-radius:4px; display:block;"><figcaption class="msg-figcaption" style="font-size:0.8rem; opacity:0.75; margin-top:0.25rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; display:block;" title="${escHtml(safeUrl)}">${escHtml(safeUrl)}</figcaption></figure>`;
-}
-
-function makeVideoFigure(safeUrl: string): string {
-   return `<figure class="msg-figure" style="max-width:90vw; margin:0.35rem 0; display:inline-block;"><video src="${escHtml(safeUrl)}" controls preload="metadata" style="max-height:25vh; max-width:90vw; width:auto; height:auto; border-radius:4px; display:block; background:#000;"></video><figcaption class="msg-figcaption" style="font-size:0.8rem; opacity:0.75; margin-top:0.25rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; display:block;" title="${escHtml(safeUrl)}">${escHtml(safeUrl)}</figcaption></figure>`;
-}
-
-function makeAudioFigure(safeUrl: string): string {
-   return `<figure class="msg-figure" style="max-width:min(90vw, 420px); margin:0.35rem 0; display:inline-block; width:100%;"><audio src="${escHtml(safeUrl)}" controls preload="none" style="width:100%; display:block;"></audio><figcaption class="msg-figcaption" style="font-size:0.8rem; opacity:0.75; margin-top:0.25rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; display:block;" title="${escHtml(safeUrl)}">${escHtml(safeUrl)}</figcaption></figure>`;
-}
-
-function makeMediaFigure(safeUrl: string, alt: string = ''): string {
-   if (isVideoUrl(safeUrl)) {
-      return makeVideoFigure(safeUrl);
-   }
-   if (isAudioUrl(safeUrl)) {
-      return makeAudioFigure(safeUrl);
-   }
-   return makeImageFigure(safeUrl, alt);
-}
-
 function inlineFormat(text: string): string {
-   const links: string[] = [];
-
-   // 1. Markdown Media: ![alt](url)
-   let formatted = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt, url) => {
-      const idx = links.length;
-      const safeUrl = sanitizeUrl(url);
-      if (safeUrl === '#') {
-         links.push('');
-      } else {
-         links.push(makeMediaFigure(safeUrl, alt));
-      }
-      return `@@@LINK_${idx}@@@`;
-   });
-
-   // 2. Markdown Links: [label](url)
-   formatted = formatted.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label, url) => {
-      const idx = links.length;
-      const safeUrl = sanitizeUrl(url);
-      links.push(`<a href="${escHtml(safeUrl)}" target="_blank" rel="noopener noreferrer" class="msg-link">${label}</a>`);
-      return `@@@LINK_${idx}@@@`;
-   });
-
-   // 3. Raw URLs auto-linking (http:// or https://)
-   formatted = formatted.replace(/(https?:\/\/[^\s<]+)/gi, (match) => {
-      let cleanUrl = match;
-      let trailingPunct = '';
-      while (/[.,!?)]$/.test(cleanUrl) && !cleanUrl.endsWith('()')) {
-         trailingPunct = cleanUrl.slice(-1) + trailingPunct;
-         cleanUrl = cleanUrl.slice(0, -1);
-      }
-      const idx = links.length;
-      const safeUrl = sanitizeUrl(cleanUrl);
-      if (safeUrl === '#') {
-         links.push('');
-      } else if (isImageUrl(safeUrl) || isVideoUrl(safeUrl) || isAudioUrl(safeUrl)) {
-         links.push(makeMediaFigure(safeUrl));
-      } else {
-         links.push(`<a href="${escHtml(safeUrl)}" target="_blank" rel="noopener noreferrer" class="msg-link">${cleanUrl}</a>`);
-      }
-      return `@@@LINK_${idx}@@@${trailingPunct}`;
-   });
-
-   // 4. Bold & Italic (Asterisks & Underscores)
+   // Bold & Italic (Asterisks & Underscores)
    // Triple: ***bold-italic*** or ___bold-italic___
-   formatted = formatted
+   return text
       .replace(/\*\*\*([^\*]+)\*\*\*/g, '<strong><em>$1</em></strong>')
       .replace(/(^|[^\w])___([^_]+)___(?=[^\w]|$)/g, '$1<strong><em>$2</em></strong>')
       // Double: **bold** or __bold__
@@ -1692,8 +1617,6 @@ function inlineFormat(text: string): string {
       // Strikethrough: ~~text~~
       .replace(/~~([^~]+)~~/g, '<del>$1</del>');
 
-   // 5. Restore Links & Images
-   return formatted.replace(/@@@LINK_(\d+)@@@/g, (_m, idx) => links[Number(idx)] || '');
 }
 
 export function renderMarkdown(raw: string): string {
@@ -1909,13 +1832,13 @@ window.addEventListener('scroll', () => {
    if (msgContextMenu && !msgContextMenu.hidden) {
       closeContextMenu();
    }
-}, { passive: true });
+}, {passive: true});
 
 window.addEventListener('resize', () => {
    if (msgContextMenu && !msgContextMenu.hidden) {
       closeContextMenu();
    }
-}, { passive: true });
+}, {passive: true});
 
 // Right-click on desktop
 messagesContainer?.addEventListener('contextmenu', (e: MouseEvent) => {
@@ -1965,17 +1888,21 @@ messagesContainer?.addEventListener('touchstart', (e: TouchEvent) => {
       isLongPressActive = true;
       try {
          window.getSelection()?.removeAllRanges();
-      } catch { }
+      } catch {
+      }
       const key = item.dataset.msgKey;
       const msg = allFilteredMessages.find(m => m.key === key);
       if (msg) {
          if ('vibrate' in navigator) {
-            try { navigator.vibrate(35); } catch { }
+            try {
+               navigator.vibrate(35);
+            } catch {
+            }
          }
          openContextMenu(touchStartX, touchStartY, msg);
       }
    }, 450);
-}, { passive: true });
+}, {passive: true});
 
 messagesContainer?.addEventListener('touchmove', (e: TouchEvent) => {
    if (touchTimer === null) return;
@@ -1987,7 +1914,7 @@ messagesContainer?.addEventListener('touchmove', (e: TouchEvent) => {
       clearTimeout(touchTimer);
       touchTimer = null;
    }
-}, { passive: true });
+}, {passive: true});
 
 messagesContainer?.addEventListener('touchend', (e: TouchEvent) => {
    if (touchTimer !== null) {

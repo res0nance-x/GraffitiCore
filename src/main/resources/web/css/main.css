@@ -888,21 +888,7 @@ code {
     color: var(--button);
     text-decoration: underline;
 }
-.msg-figure {
-    margin: 0.35rem 0;
-    display: inline-block;
-    max-width: 90vw;
-}
-.msg-figcaption {
-    font-size: 0.8rem;
-    opacity: 0.75;
-    margin-top: 0.25rem;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 100%;
-    display: block;
-}
+
 
 #nav-network-icon {
     transition: color 0.2s ease;
@@ -1037,5 +1023,6 @@ code {
     max-width: 100%;
     height: auto;
 }
+
 
 
