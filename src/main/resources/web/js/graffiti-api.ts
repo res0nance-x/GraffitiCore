@@ -132,6 +132,10 @@ export interface GetVersionResponse extends ApiOk {
    version: string;
 }
 
+export interface CreatePackBeginResponse extends ApiOk {
+   sessionId: string;
+}
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 async function parseJson<T extends { ok: boolean; error?: string }>(res: Response): Promise<T> {
@@ -279,6 +283,43 @@ export const graffiti = {
          body: file
       });
       return parseJson<SendMessageResponse>(res);
+   },
+
+   async createPackBegin(identityKey: string, peerKey: string, packName: string, urgent = false): Promise<CreatePackBeginResponse> {
+      const url = new URL(`/api/pack/create/begin?identityKey=${encodeURIComponent(identityKey)}&peerKey=${encodeURIComponent(peerKey)}&name=${encodeURIComponent(packName)}${urgent ? '&urgent=true' : ''}`, window.location.origin);
+      const res = await fetch(url.toString(), {
+         method: 'PUT'
+      });
+      return parseJson<CreatePackBeginResponse>(res);
+   },
+
+   async uploadPackFile(sessionId: string, relativePath: string, file: File | Blob): Promise<ApiOk> {
+      const url = new URL(`/api/pack/create/file?sessionId=${encodeURIComponent(sessionId)}&filePath=${encodeURIComponent(relativePath)}`, window.location.origin);
+      const res = await fetch(url.toString(), {
+         method: 'PUT',
+         headers: {
+            'Content-Type': 'application/octet-stream',
+            'file-path': encodeURIComponent(relativePath)
+         },
+         body: file
+      });
+      return parseJson<ApiOk>(res);
+   },
+
+   async createPackFinish(sessionId: string): Promise<SendMessageResponse> {
+      const url = new URL(`/api/pack/create/finish?sessionId=${encodeURIComponent(sessionId)}`, window.location.origin);
+      const res = await fetch(url.toString(), {
+         method: 'POST'
+      });
+      return parseJson<SendMessageResponse>(res);
+   },
+
+   async createPackCancel(sessionId: string): Promise<ApiOk> {
+      const url = new URL(`/api/pack/create/cancel?sessionId=${encodeURIComponent(sessionId)}`, window.location.origin);
+      const res = await fetch(url.toString(), {
+         method: 'POST'
+      });
+      return parseJson<ApiOk>(res);
    },
 
    async sendBell(identityKey: string, peerKey: string): Promise<SendMessageResponse> {

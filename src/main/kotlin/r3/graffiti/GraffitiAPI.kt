@@ -10,6 +10,9 @@ import r3.key.Key256
 import r3.org.json.JSONArray
 import r3.org.json.JSONObject
 import r3.pke.*
+import r3.pack.BinaryPack
+import r3.pack.DirPack
+import r3.source.FileSink
 import r3.source.FileSource
 import r3.source.readString
 import java.io.DataInputStream
@@ -18,6 +21,8 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.URLDecoder
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : ContentHandler {
 	var onBellReceived: ((author: Key256, sound: String) -> Unit)? = null
@@ -135,6 +140,10 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/store" -> handleStore(header, content)
 			"/api/pack/open" -> openPackApi(header, content)
 			"/api/pack/close" -> closePackApi(header)
+			"/api/pack/create/begin" -> beginPackCreation(header)
+			"/api/pack/create/file" -> content?.let { uploadPackFile(header, it) } ?: err("No file content provided")
+			"/api/pack/create/finish" -> finishPackCreation(header)
+			"/api/pack/create/cancel" -> cancelPackCreation(header)
 			"/api/version" -> getVersion()
 			else -> null
 		}
@@ -221,6 +230,155 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		onClosePack?.invoke(sessionId)
 		return ok()
 	}
+
+	// ── Pack Creation API ─────────────────────────────────────────────────────
+	private data class PackStagingSession(
+		val sessionId: String,
+		val identityKey: IdentityKey,
+		val peerKey: PeerKey,
+		val packName: String,
+		val isUrgent: Boolean,
+		val stagingDir: File,
+		val createdAt: Long = System.currentTimeMillis()
+	)
+
+	private val packStagingSessions = ConcurrentHashMap<String, PackStagingSession>()
+
+	private fun beginPackCreation(header: JSONObject): Content {
+		// Clean up sessions older than 30 minutes
+		val now = System.currentTimeMillis()
+		val stale = packStagingSessions.filterValues { now - it.createdAt > 30 * 60 * 1000L }
+		for ((id, sess) in stale) {
+			packStagingSessions.remove(id)
+			sess.stagingDir.deleteRecursively()
+		}
+
+		val keys = resolveSendKeys(header) ?: return err("Select a sender and recipient first")
+		val (idenKey, peerKey) = keys
+		val fileParam = header.optString("name").takeIf { it.isNotEmpty() }
+			?: header.optString("packName").takeIf { it.isNotEmpty() }
+			?: "archive.pack"
+		val decodedName = try {
+			URLDecoder.decode(fileParam, "UTF-8")
+		} catch (_: Exception) {
+			fileParam
+		}
+		val packName = if (decodedName.endsWith(".pack", ignoreCase = true)) decodedName else "$decodedName.pack"
+		val isUrgent = header.optBoolean("urgent", false) || header.optString("urgent") == "true"
+
+		val sessionId = UUID.randomUUID().toString()
+		val stagingDir = File(p2p.tmpDir, "pack_stage_$sessionId")
+		if (!stagingDir.mkdirs()) {
+			return err("Failed to create staging directory")
+		}
+
+		val session = PackStagingSession(sessionId, idenKey, peerKey, packName, isUrgent, stagingDir)
+		packStagingSessions[sessionId] = session
+		return ok { put("sessionId", sessionId) }
+	}
+
+	private fun sanitizeRelativePath(rawPath: String): String {
+		val decoded = try { URLDecoder.decode(rawPath, "UTF-8") } catch (_: Exception) { rawPath }
+		val p = decoded.replace('\\', '/').trim().trimStart('/')
+		val parts = p.split('/').filter { it.isNotEmpty() && it != "." && it != ".." }
+		return parts.joinToString(File.separator)
+	}
+
+	private fun uploadPackFile(header: JSONObject, content: Content): Content {
+		val sessionId = header.optString("sessionId")
+		if (sessionId.isEmpty()) return err("Missing 'sessionId' parameter")
+		val session = packStagingSessions[sessionId] ?: return err("Pack staging session not found or expired")
+
+		val paramObj = header.optJSONObject("param")
+		val pathParam = header.optString("filePath").takeIf { it.isNotEmpty() }
+			?: header.optString("file-path").takeIf { it.isNotEmpty() }
+			?: paramObj?.optString("filePath")?.takeIf { it.isNotEmpty() }
+			?: paramObj?.optString("path")?.takeIf { it.isNotEmpty() }
+			?: header.optString("file").takeIf { it.isNotEmpty() && it != "file" }
+			?: paramObj?.optString("file")?.takeIf { it.isNotEmpty() }
+			?: return err("Missing 'path' parameter")
+
+		val sanitized = sanitizeRelativePath(pathParam)
+		if (sanitized.isEmpty()) return err("Invalid path")
+
+		val destFile = File(session.stagingDir, sanitized)
+		if (!destFile.canonicalFile.startsWith(session.stagingDir.canonicalFile)) {
+			return err("Path traversal detected")
+		}
+
+		destFile.parentFile?.mkdirs()
+		try {
+			destFile.outputStream().use { out ->
+				content.createInputStream().use { inp ->
+					inp.copyTo(out)
+				}
+			}
+		} catch (e: Exception) {
+			return err("Failed to write staged file: ${e.message}")
+		}
+
+		return ok()
+	}
+
+	private fun finishPackCreation(header: JSONObject): Content {
+		val sessionId = header.optString("sessionId")
+		if (sessionId.isEmpty()) return err("Missing 'sessionId' parameter")
+		val session = packStagingSessions.remove(sessionId) ?: return err("Pack staging session not found or expired")
+
+		val iden = p2p.getIdentityByKey(session.identityKey) ?: run {
+			session.stagingDir.deleteRecursively()
+			return err("No identity found for ${session.identityKey}")
+		}
+		val peer = p2p.getPeerByKey(session.peerKey) ?: run {
+			session.stagingDir.deleteRecursively()
+			return err("No peer found for ${session.peerKey}")
+		}
+
+		val tempPackFile = File(p2p.tmpDir, "pack_${session.sessionId}.pack")
+		try {
+			val dirPack = DirPack(session.stagingDir)
+			val sink = FileSink(tempPackFile, append = false)
+			BinaryPack.create(dirPack, sink)
+
+			val storedPath = if (session.isUrgent) "urgent:${session.packName}" else session.packName
+			val wrappedContent = MutableMetaDataContent(FileContent(tempPackFile)).apply {
+				path = storedPath
+				ext = "pack"
+			}
+			val encKey = p2p.pkeEncrypt(wrappedContent, iden, peer)
+			p2p.pushNewMessage(encKey)
+			val metaFile = File(p2p.metaDir, "$encKey")
+			try {
+				val eMeta = DataInputStream(metaFile.inputStream()).use { EncryptedContentMetaData.read(it) }
+				val (meta, _) = eMeta.decrypt(iden)
+				sendToAll(
+					JSONObject().put("event", "messages_update").put("action", "add")
+						.put("msg", buildMsgJson(eMeta, meta))
+				)
+			} catch (_: Exception) {
+				sendToAll(JSONObject().put("event", "messages_update").put("action", "add"))
+			}
+			return ok { put("key", encKey.toString()) }
+		} catch (e: Exception) {
+			log("Pack creation failed: ${e.message}")
+			return err("Failed to build pack archive: ${e.message}")
+		} finally {
+			session.stagingDir.deleteRecursively()
+			if (tempPackFile.exists()) {
+				tempPackFile.delete()
+			}
+		}
+	}
+
+	private fun cancelPackCreation(header: JSONObject): Content {
+		val sessionId = header.optString("sessionId")
+		if (sessionId.isNotEmpty()) {
+			val session = packStagingSessions.remove(sessionId)
+			session?.stagingDir?.deleteRecursively()
+		}
+		return ok()
+	}
+
 
 
 	// ── Identity ──────────────────────────────────────────────────────────────

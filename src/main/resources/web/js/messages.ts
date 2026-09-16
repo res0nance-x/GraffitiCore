@@ -1,6 +1,6 @@
 import {graffiti, IdentityEntry, openPackFile, PeerEntry} from './graffiti-api.js';
 import {onSectionShow, onWsEvent, onWsOpen, showSection} from './app.js';
-import {showDialog} from './dialog.js';
+import {showDialog, showProgressModal} from './dialog.js';
 
 const form = document.getElementById('message-form') as HTMLFormElement | null;
 const fromField = document.getElementById('from-field') as HTMLSelectElement | null;
@@ -1036,13 +1036,216 @@ toField?.addEventListener('change', () => {
 });
 
 
+interface DroppedItem {
+   file: File;
+   path: string;
+}
+
+async function extractDroppedEntries(dataTransfer: DataTransfer): Promise<{ items: DroppedItem[], defaultName?: string, isFolder: boolean }> {
+   const items: DroppedItem[] = [];
+   const dtItems = dataTransfer.items;
+   let isFolder = false;
+   let folderName: string | undefined;
+
+   if (dtItems && dtItems.length > 0 && typeof (dtItems[0] as any).webkitGetAsEntry === 'function') {
+      const entryPromises: Promise<void>[] = [];
+
+      for (let i = 0; i < dtItems.length; i++) {
+         const entry = (dtItems[i] as any).webkitGetAsEntry();
+         if (!entry) continue;
+
+         if (entry.isDirectory) {
+            isFolder = true;
+            if (!folderName) folderName = entry.name;
+         }
+
+         async function traverse(ent: any, currentPath: string): Promise<void> {
+            if (ent.isFile) {
+               const file = await new Promise<File>((resolve, reject) => ent.file(resolve, reject));
+               const relPath = currentPath ? `${currentPath}/${file.name}` : file.name;
+               items.push({ file, path: relPath });
+            } else if (ent.isDirectory) {
+               const reader = ent.createReader();
+               const readAll = async (): Promise<any[]> => {
+                  const all: any[] = [];
+                  while (true) {
+                     const batch = await new Promise<any[]>((resolve, reject) => reader.readEntries(resolve, reject));
+                     if (!batch || batch.length === 0) break;
+                     all.push(...batch);
+                  }
+                  return all;
+               };
+               const nextDir = currentPath ? `${currentPath}/${ent.name}` : ent.name;
+               const children = await readAll();
+               for (const child of children) {
+                  await traverse(child, nextDir);
+               }
+            }
+         }
+
+         if (entry.isDirectory && dtItems.length === 1) {
+            const reader = entry.createReader();
+            const readAll = async (): Promise<any[]> => {
+               const all: any[] = [];
+               while (true) {
+                  const batch = await new Promise<any[]>((resolve, reject) => reader.readEntries(resolve, reject));
+                  if (!batch || batch.length === 0) break;
+                  all.push(...batch);
+               }
+               return all;
+            };
+            entryPromises.push((async () => {
+               const children = await readAll();
+               for (const child of children) {
+                  await traverse(child, "");
+               }
+            })());
+         } else {
+            entryPromises.push(traverse(entry, ""));
+         }
+      }
+
+      await Promise.all(entryPromises);
+   } else if (dataTransfer.files && dataTransfer.files.length > 0) {
+      for (let i = 0; i < dataTransfer.files.length; i++) {
+         const file = dataTransfer.files[i];
+         items.push({ file, path: file.name });
+      }
+   }
+
+   return { items, defaultName: folderName, isFolder };
+}
+
+async function sendPackPipeline(
+   fileList: DroppedItem[],
+   packName: string,
+   urgent: boolean,
+   envelope: { identityKey: string, peerKey: string }
+): Promise<void> {
+   if (isSending) {
+      setStatus('Send in progress. Only one item can be sent at a time.');
+      return;
+   }
+   if (!envelope.identityKey || !envelope.peerKey) {
+      setStatus('Select a sender and recipient first.');
+      return;
+   }
+   if (fileList.length === 0) {
+      setStatus('No files to package.');
+      return;
+   }
+
+   isSending = true;
+   setStatus(`Preparing pack: ${packName}...`);
+
+   const progress = showProgressModal('Creating Pack Archive', `Starting upload for ${packName}...`);
+   let sessionId: string | null = null;
+
+   try {
+      progress.update(`Starting pack session: ${packName}...`, 0);
+      const beginRes = await graffiti.createPackBegin(envelope.identityKey, envelope.peerKey, packName, urgent);
+      sessionId = beginRes.sessionId;
+
+      const total = fileList.length;
+      for (let i = 0; i < total; i++) {
+         const item = fileList[i];
+         const pct = Math.round((i / total) * 100);
+         progress.update(
+            `Staging file ${i + 1} of ${total} (${pct}%)`,
+            pct,
+            item.path
+         );
+         setStatus(`Staging pack: ${i + 1}/${total} files...`);
+         await graffiti.uploadPackFile(sessionId, item.path, item.file);
+      }
+
+      progress.update('Compiling pack archive on server...', 100, 'Writing pack index and entries');
+      setStatus('Compiling pack archive...');
+
+      await graffiti.createPackFinish(sessionId);
+
+      progress.update('Pack sent successfully!', 100);
+      setStatus('Pack sent.');
+      if (urgentCheckbox) urgentCheckbox.checked = false;
+      shouldScrollToBottomOnSend = true;
+      await refreshMessages();
+      scrollToBottom();
+   } catch (err) {
+      const errMsg = (err as Error).message || 'Unknown error';
+      setStatus(`Failed: ${errMsg}`);
+      if (sessionId) {
+         void graffiti.createPackCancel(sessionId).catch(() => {});
+      }
+      alert(`Pack creation error: ${errMsg}`);
+   } finally {
+      isSending = false;
+      progress.close();
+   }
+}
+
+async function promptPackNameAndSend(
+   fileList: DroppedItem[],
+   defaultName: string,
+   urgent: boolean
+): Promise<void> {
+   const envelope = getEnvelope();
+   if (!envelope.identityKey || !envelope.peerKey) {
+      setStatus('Select a sender and recipient first.');
+      return;
+   }
+
+   const initialName = defaultName.toLowerCase().endsWith('.pack') ? defaultName : `${defaultName}.pack`;
+
+   const res = await showDialog({
+      title: 'Create Pack Archive',
+      templateId: 'tpl-pack-create-name',
+      confirmLabel: 'Send Pack',
+      init(body) {
+         const input = body.querySelector<HTMLInputElement>('input[name="packName"]');
+         if (input) {
+            input.value = initialName;
+            input.select();
+         }
+      }
+   });
+
+   if (!res || !res.packName || !res.packName.trim()) {
+      setStatus('Pack creation cancelled.');
+      return;
+   }
+
+   let packName = res.packName.trim();
+   if (!packName.toLowerCase().endsWith('.pack')) {
+      packName += '.pack';
+   }
+
+   await sendPackPipeline(fileList, packName, urgent, envelope);
+}
+
 fileInput?.addEventListener('change', async () => {
-   const file = fileInput?.files?.[0];
-   if (!file) return;
+   const files = fileInput?.files;
+   if (!files || files.length === 0) return;
    const urgent = urgentCheckbox?.checked ?? false;
-   await sendPayload({type: 'file', fileName: file.name, file, urgent, ...getEnvelope()});
+
+   if (files.length === 1) {
+      const file = files[0];
+      await sendPayload({type: 'file', fileName: file.name, file, urgent, ...getEnvelope()});
+      if (fileInput) fileInput.value = '';
+      scrollToBottom();
+      return;
+   }
+
+   // Multiple files selected: bundle into pack
+   const items: DroppedItem[] = [];
+   for (let i = 0; i < files.length; i++) {
+      items.push({ file: files[i], path: files[i].name });
+   }
+
+   const firstBase = files[0].name.replace(/\.[^/.]+$/, '');
+   const defaultName = `${firstBase}_pack.pack`;
+
    if (fileInput) fileInput.value = '';
-   scrollToBottom();
+   await promptPackNameAndSend(items, defaultName, urgent);
 });
 
 // ── Drag-and-drop ─────────────────────────────────────────────────────────────
@@ -1069,17 +1272,45 @@ messagesSection?.addEventListener('drop', async (event: DragEvent) => {
    event.stopPropagation();
    dragDepth = 0;
    messagesSection.classList.remove('is-dragover');
-   const content = firstDroppedContent(event.dataTransfer);
-   if (!content) {
+
+   if (!event.dataTransfer) {
       setStatus('Nothing to send from drop.');
       return;
    }
-   if (content.kind === 'file') {
-      const file = content.value as File;
-      await sendPayload({type: 'file', fileName: file.name, file, ...getEnvelope()});
+
+   const urgent = urgentCheckbox?.checked ?? false;
+
+   // Check if files or folders were dropped
+   const dropped = await extractDroppedEntries(event.dataTransfer);
+   if (dropped.items.length > 0) {
+      if (dropped.items.length === 1 && !dropped.isFolder) {
+         const single = dropped.items[0];
+         await sendPayload({type: 'file', fileName: single.file.name, file: single.file, urgent, ...getEnvelope()});
+         return;
+      }
+
+      // Multiple files or folder dropped -> Create Pack
+      const defaultName = dropped.defaultName
+         ? dropped.defaultName
+         : `${dropped.items[0].file.name.replace(/\.[^/.]+$/, '')}_pack`;
+
+      await promptPackNameAndSend(dropped.items, defaultName, urgent);
       return;
    }
-   await sendPayload({type: 'text', text: content.value as string, ...getEnvelope()});
+
+   // Plain text or HTML fallback
+   const plain = event.dataTransfer.getData('text/plain');
+   if (plain) {
+      await sendPayload({type: 'text', text: plain, urgent, ...getEnvelope()});
+      return;
+   }
+   const html = event.dataTransfer.getData('text/html');
+   if (html) {
+      await sendPayload({type: 'text', text: html, urgent, ...getEnvelope()});
+      return;
+   }
+
+   setStatus('Nothing to send from drop.');
 });
 
 // ── Clipboard paste (files / screenshots) ────────────────────────────────────

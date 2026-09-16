@@ -81,3 +81,66 @@ export function showDialog({
    });
 }
 
+export interface ProgressDialog {
+   update(statusText: string, percent: number, detailText?: string): void;
+   close(): void;
+}
+
+let progressDialog: HTMLDialogElement | null = null;
+
+function ensureProgressDialog(): HTMLDialogElement {
+   if (progressDialog) return progressDialog;
+
+   progressDialog = document.createElement('dialog');
+   progressDialog.className = 'app-dialog progress-modal';
+   progressDialog.innerHTML = `
+        <div class="app-dialog-form">
+            <h2 class="app-dialog-title" id="progress-dialog-title">Creating Pack Archive</h2>
+            <div class="app-dialog-body">
+                <div class="dialog-field" style="text-align: center; padding: 0.5rem 0;">
+                    <div id="progress-dialog-status" style="font-weight: 600; margin-bottom: 0.75rem;">Preparing...</div>
+                    <div style="background: rgba(255,255,255,0.12); border-radius: 6px; overflow: hidden; height: 12px; margin-bottom: 0.75rem;">
+                        <div id="progress-dialog-bar" style="width: 0%; height: 100%; background: var(--accent, #38bdf8); transition: width 0.15s ease;"></div>
+                    </div>
+                    <div id="progress-dialog-detail" style="font-size: 0.85rem; opacity: 0.7; word-break: break-all;"></div>
+                </div>
+            </div>
+        </div>`;
+   document.body.appendChild(progressDialog);
+
+   // Prevent closing on escape while in progress
+   progressDialog.addEventListener('cancel', (e) => e.preventDefault());
+   return progressDialog;
+}
+
+export function showProgressModal(title: string, initialStatus = 'Preparing...'): ProgressDialog {
+   const pd = ensureProgressDialog();
+   const titleEl = pd.querySelector<HTMLElement>('#progress-dialog-title');
+   const statusEl = pd.querySelector<HTMLElement>('#progress-dialog-status');
+   const barEl = pd.querySelector<HTMLElement>('#progress-dialog-bar');
+   const detailEl = pd.querySelector<HTMLElement>('#progress-dialog-detail');
+
+   if (titleEl) titleEl.textContent = title;
+   if (statusEl) statusEl.textContent = initialStatus;
+   if (barEl) barEl.style.width = '0%';
+   if (detailEl) detailEl.textContent = '';
+
+   if (!pd.open) {
+      pd.showModal();
+   }
+
+   return {
+      update(statusText: string, percent: number, detailText?: string) {
+         if (statusEl) statusEl.textContent = statusText;
+         if (barEl) barEl.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+         if (detailEl) detailEl.textContent = detailText ?? '';
+      },
+      close() {
+         if (pd.open) {
+            pd.close();
+         }
+      }
+   };
+}
+
+

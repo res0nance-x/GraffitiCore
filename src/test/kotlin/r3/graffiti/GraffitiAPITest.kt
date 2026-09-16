@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import r3.content.Content
 import r3.org.json.JSONObject
+import r3.pack.BinaryPack
 import r3.pke.EncryptedMetaKey
 import r3.source.BinarySource
 import r3.source.readString
@@ -164,4 +165,76 @@ class GraffitiAPITest {
 		val invalidJson = JSONObject(invalidRes!!.readString())
 		assertFalse(invalidJson.getBoolean("ok"))
 	}
+
+	@Test
+	fun testPackCreationPipeline(@TempDir tempDir: File) {
+		val p2p = GraffitiP2P(tempDir)
+		val api = GraffitiAPI(p2p) {}
+
+		val alice = p2p.createIdentity("alice-pack-seed")
+		val bob = p2p.createIdentity("bob-pack-seed")
+
+		// 1. Begin pack creation
+		val beginHeader = JSONObject()
+			.put("path", "/api/pack/create/begin")
+			.put("name", "gallery.pack")
+			.put("identityKey", alice.key.toString())
+			.put("peerKey", bob.asPeer().key.toString())
+		val beginRes = api.handle(beginHeader, null)
+		assertNotNull(beginRes)
+		val beginJson = JSONObject(beginRes!!.readString())
+		assertTrue(beginJson.getBoolean("ok"))
+		val sessionId = beginJson.getString("sessionId")
+		assertTrue(sessionId.isNotEmpty())
+
+		// 2. Upload files to pack
+		val file1Content = TestStringContent("Contents of image 1")
+		val upload1Header = JSONObject()
+			.put("path", "/api/pack/create/file")
+			.put("sessionId", sessionId)
+			.put("filePath", "image1.txt")
+		val upload1Res = api.handle(upload1Header, file1Content)
+		assertNotNull(upload1Res)
+		assertTrue(JSONObject(upload1Res!!.readString()).getBoolean("ok"))
+
+		val file2Content = TestStringContent("Contents of nested image 2")
+		val upload2Header = JSONObject()
+			.put("path", "/api/pack/create/file")
+			.put("sessionId", sessionId)
+			.put("filePath", "nested/folder/image2.txt")
+		val upload2Res = api.handle(upload2Header, file2Content)
+		assertNotNull(upload2Res)
+		assertTrue(JSONObject(upload2Res!!.readString()).getBoolean("ok"))
+
+		// 3. Finish pack creation
+		val finishHeader = JSONObject()
+			.put("path", "/api/pack/create/finish")
+			.put("sessionId", sessionId)
+		val finishRes = api.handle(finishHeader, null)
+		assertNotNull(finishRes)
+		val finishJson = JSONObject(finishRes!!.readString())
+		assertTrue(finishJson.getBoolean("ok"))
+		val encKeyStr = finishJson.getString("key")
+		val encKey = EncryptedMetaKey(encKeyStr)
+
+		// 4. Verify recipient Bob received and can decrypt the pack
+		assertTrue(p2p.hasContent(encKey))
+		val packContent = p2p.getContent(encKey)
+		assertEquals("gallery.pack", packContent.path)
+		assertEquals("pack", packContent.ext)
+
+		// 5. Open the pack with BinaryPack and verify entries
+		val binaryPack = BinaryPack(packContent)
+		assertTrue(binaryPack.keys.contains("image1.txt"))
+		assertTrue(binaryPack.keys.contains("nested/folder/image2.txt"))
+		assertEquals("Contents of image 1", binaryPack["image1.txt"]!!.readString())
+		assertEquals("Contents of nested image 2", binaryPack["nested/folder/image2.txt"]!!.readString())
+
+		// 6. Verify staging directory and temp pack file in tmpDir are cleaned up
+		val stagingDir = File(p2p.tmpDir, "pack_stage_$sessionId")
+		assertFalse(stagingDir.exists())
+		val tempPackFile = File(p2p.tmpDir, "pack_$sessionId.pack")
+		assertFalse(tempPackFile.exists())
+	}
 }
+

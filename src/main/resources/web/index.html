@@ -178,7 +178,7 @@ Messages
 								<input id="urgent-checkbox" type="checkbox">
 								<span>🔔</span>
 							</label>
-							<input hidden id="file-input" type="file">
+							<input hidden id="file-input" type="file" multiple>
 							<span aria-live="polite" class="send-status" id="send-status">Ready</span>
 						</div>
 					</form>
@@ -641,6 +641,14 @@ Settings
 			<label for="dlg-forward-to">Destination topic or recipient</label>
 			<select id="dlg-forward-to" name="targetPeer" required></select>
 			<small>Select the topic or peer to forward this message to.</small>
+		</div>
+	</template>
+
+	<template id="tpl-pack-create-name">
+		<div class="dialog-field">
+			<label for="dlg-pack-name">Pack Archive Name</label>
+			<input autocomplete="off" id="dlg-pack-name" name="packName" placeholder="archive.pack" required type="text">
+			<small>All selected files will be archived into this pack.</small>
 		</div>
 	</template>
 
