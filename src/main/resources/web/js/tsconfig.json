@@ -23,7 +23,8 @@
 	 "network.ts",
 	 "peers.ts",
 	 "storage.ts",
-	 "table.ts"
+	 "table.ts",
+	 "theme-init.ts"
   ]
 }
 
