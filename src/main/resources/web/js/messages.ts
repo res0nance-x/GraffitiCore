@@ -806,11 +806,17 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
          viewBtn.style.display = 'inline-flex';
          viewBtn.style.alignItems = 'center';
          viewBtn.style.gap = '0.25rem';
-         viewBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size: 1rem;">visibility</span> View';
+         viewBtn.innerHTML = isPackFile
+            ? '<span class="material-symbols-outlined" style="font-size: 1rem;">open_in_new</span> Launch'
+            : '<span class="material-symbols-outlined" style="font-size: 1rem;">visibility</span> View';
          viewBtn.onclick = (e) => {
             e.preventDefault();
             e.stopPropagation();
-            openFullContentViewer(msg);
+            if (isPackFile) {
+               void openPackFile({encKey: msg.key, name: msg.name});
+            } else {
+               openFullContentViewer(msg);
+            }
          };
          link?.parentElement?.appendChild(viewBtn);
       }
@@ -1106,7 +1112,9 @@ async function extractDroppedEntries(dataTransfer: DataTransfer): Promise<{ item
       }
 
       await Promise.all(entryPromises);
-   } else if (dataTransfer.files && dataTransfer.files.length > 0) {
+   }
+
+   if (items.length === 0 && dataTransfer.files && dataTransfer.files.length > 0) {
       for (let i = 0; i < dataTransfer.files.length; i++) {
          const file = dataTransfer.files[i];
          items.push({ file, path: file.name });
@@ -1315,11 +1323,26 @@ messagesSection?.addEventListener('drop', async (event: DragEvent) => {
 
 // ── Clipboard paste (files / screenshots) ────────────────────────────────────
 messagesSection?.addEventListener('paste', async (event: ClipboardEvent) => {
-   const files = event.clipboardData?.files;
-   if (files && files.length > 0) {
+   if (!event.clipboardData) return;
+
+   const urgent = urgentCheckbox?.checked ?? false;
+
+   const dropped = await extractDroppedEntries(event.clipboardData);
+   if (dropped.items.length > 0) {
       event.preventDefault();
-      const file = files[0];
-      await sendPayload({type: 'file', fileName: file.name, file, ...getEnvelope()});
+
+      if (dropped.items.length === 1 && !dropped.isFolder) {
+         const single = dropped.items[0];
+         await sendPayload({type: 'file', fileName: single.file.name, file: single.file, urgent, ...getEnvelope()});
+         return;
+      }
+
+      // Multiple files or folder pasted -> Create Pack
+      const defaultName = dropped.defaultName
+         ? dropped.defaultName
+         : `${dropped.items[0].file.name.replace(/\.[^/.]+$/, '')}_pack`;
+
+      await promptPackNameAndSend(dropped.items, defaultName, urgent);
    }
 });
 
@@ -1682,23 +1705,14 @@ function initTextViewerControls(): void {
 }
 
 export function openFullContentViewer(msg: MessageData, fullText?: string): void {
+   const isPackFile = msg.name && (msg.name.toLowerCase().endsWith('.pack') || msg.name.toLowerCase().endsWith('.epack'));
+   if (isPackFile) {
+      void openPackFile({encKey: msg.key, name: msg.name});
+      return;
+   }
+
    currentViewerMsg = msg;
    const url = graffiti.contentUrl(msg.key);
-
-   const filenameEl = document.getElementById('view-content-filename');
-   const metaEl = document.getElementById('view-content-meta');
-
-   const authorLabel = msg.author || 'Unknown';
-   const recipientLabel = msg.recipient || 'Unknown';
-   const sizeStr = msg.size ? ` • ${formatSize(msg.size)}` : '';
-   const timeStr = msg.created ? ` • ${formatTime(msg.created)}` : '';
-
-   if (filenameEl) {
-      filenameEl.textContent = msg.name || (isText(msg.type) ? 'Text Message' : `${msg.type.toUpperCase()} Media`);
-   }
-   if (metaEl) {
-      metaEl.textContent = `From ${authorLabel} to ${recipientLabel}${sizeStr}${timeStr}`;
-   }
 
    // Cleanup any currently playing media
    cleanupViewerMedia();
@@ -1709,7 +1723,6 @@ export function openFullContentViewer(msg: MessageData, fullText?: string): void
    const videoContainer = document.getElementById('view-content-video-container');
    const audioContainer = document.getElementById('view-content-audio-container');
    const htmlContainer = document.getElementById('view-content-html-container');
-   const packContainer = document.getElementById('view-content-pack-container');
    const genericContainer = document.getElementById('view-content-generic-container');
 
    if (imgContainer) imgContainer.style.display = 'none';
@@ -1717,11 +1730,9 @@ export function openFullContentViewer(msg: MessageData, fullText?: string): void
    if (videoContainer) videoContainer.style.display = 'none';
    if (audioContainer) audioContainer.style.display = 'none';
    if (htmlContainer) htmlContainer.style.display = 'none';
-   if (packContainer) packContainer.style.display = 'none';
    if (genericContainer) genericContainer.style.display = 'none';
 
    const isHtmlFile = isHtml(msg.type) || (msg.name && (msg.name.toLowerCase().endsWith('.html') || msg.name.toLowerCase().endsWith('.htm')));
-   const isPackFile = msg.name && (msg.name.toLowerCase().endsWith('.pack') || msg.name.toLowerCase().endsWith('.epack'));
 
    if (isImage(msg.type)) {
       if (imgContainer) imgContainer.style.display = '';
@@ -1752,16 +1763,6 @@ export function openFullContentViewer(msg: MessageData, fullText?: string): void
       const iframe = document.getElementById('view-content-iframe') as HTMLIFrameElement | null;
       if (iframe) {
          iframe.src = url;
-      }
-   } else if (isPackFile) {
-      if (packContainer) packContainer.style.display = '';
-      const packTitle = document.getElementById('view-content-pack-title');
-      const openBtn = document.getElementById('btn-view-pack-open') as HTMLButtonElement | null;
-      if (packTitle) packTitle.textContent = msg.name || 'Web Pack Archive';
-      if (openBtn) {
-         openBtn.onclick = () => {
-            void openPackFile({encKey: msg.key, name: msg.name});
-         };
       }
    } else if (isText(msg.type)) {
       if (textContainer) textContainer.style.display = '';
@@ -1800,6 +1801,7 @@ export function openFullContentViewer(msg: MessageData, fullText?: string): void
       if (genericContainer) genericContainer.style.display = '';
       const genericName = document.getElementById('view-content-generic-name');
       const genericMeta = document.getElementById('view-content-generic-meta');
+      const sizeStr = msg.size ? ` • ${formatSize(msg.size)}` : '';
       if (genericName) genericName.textContent = msg.name || 'File Attachment';
       if (genericMeta) genericMeta.textContent = `${msg.type ? `Type: ${msg.type.toUpperCase()}` : ''}${sizeStr}`;
    }
@@ -1986,7 +1988,12 @@ document.addEventListener('click', (e: MouseEvent) => {
       if (key) {
          const msg = allFilteredMessages.find(m => m.key === key);
          if (msg) {
-            openFullContentViewer(msg, textContentCache.get(key));
+            const isPack = msg.name && (msg.name.toLowerCase().endsWith('.pack') || msg.name.toLowerCase().endsWith('.epack'));
+            if (isPack) {
+               void openPackFile({encKey: msg.key, name: msg.name});
+            } else {
+               openFullContentViewer(msg, textContentCache.get(key));
+            }
          }
       }
       return;
@@ -2009,6 +2016,18 @@ document.addEventListener('click', (e: MouseEvent) => {
       cleanupViewerMedia();
       showSection('section-messages');
       return;
+   }
+});
+
+// Escape key to exit fullscreen viewer
+window.addEventListener('keydown', (e: KeyboardEvent) => {
+   if (e.key === 'Escape') {
+      const viewerSection = document.getElementById('section-view-content');
+      if (viewerSection?.classList.contains('is-active')) {
+         e.preventDefault();
+         cleanupViewerMedia();
+         showSection('section-messages');
+      }
    }
 });
 

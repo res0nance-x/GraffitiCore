@@ -64,6 +64,8 @@ export function showSection(id: string): void {
       link.setAttribute('aria-current', active ? 'page' : 'false');
    }
 
+   document.body.classList.toggle('in-fullscreen-viewer', id === 'section-view-content');
+
    currentActiveSectionId = id;
 
    // 3. Restore scroll position for entering section (or scroll to bottom for messages)
