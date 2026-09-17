@@ -8,6 +8,17 @@ const toField = document.getElementById('to-field') as HTMLSelectElement | null;
 const messageText = document.getElementById('message-text') as HTMLTextAreaElement | null;
 const sendFileButton = document.getElementById('send-file') as HTMLButtonElement | null;
 const urgentCheckbox = document.getElementById('urgent-checkbox') as HTMLInputElement | null;
+
+function resetUrgentCheckbox(): void {
+   if (urgentCheckbox) {
+      urgentCheckbox.checked = false;
+      urgentCheckbox.closest('.urgent-toggle')?.classList.remove('is-active');
+   }
+}
+
+urgentCheckbox?.addEventListener('change', () => {
+   urgentCheckbox.closest('.urgent-toggle')?.classList.toggle('is-active', urgentCheckbox.checked);
+});
 const fileInput = document.getElementById('file-input') as HTMLInputElement | null;
 const messagesSection = document.getElementById('section-messages') as HTMLElement | null;
 const messagesContainer = document.getElementById('messages') as HTMLElement | null;
@@ -578,7 +589,7 @@ async function handleForward(msg: MessageData): Promise<void> {
    setStatus('Forwarding message…');
    try {
       await graffiti.forwardMessage(msg.key, fromKey, destKey, isUrgent);
-      if (urgentCheckbox) urgentCheckbox.checked = false;
+      resetUrgentCheckbox();
       setStatus('Message forwarded.');
       if (toField) {
          toField.value = destKey;
@@ -651,9 +662,14 @@ async function handleQuote(msg: MessageData): Promise<void> {
       } else {
          messageText.value = quoteBlock;
       }
+      autoResizeTextarea(messageText);
+      updateComposerHeight();
+      const wasAtBottom = isNearBottom();
+      if (wasAtBottom) {
+         scrollToBottom();
+      }
       messageText.focus();
       messageText.setSelectionRange(messageText.value.length, messageText.value.length);
-      messageText.scrollIntoView({behavior: 'smooth', block: 'center'});
    }
 }
 
@@ -960,7 +976,7 @@ async function sendPayload(payload: Payload): Promise<void> {
       } else {
          await graffiti.sendFile(identityKey, peerKey, payload.file, !!payload.urgent);
       }
-      if (urgentCheckbox) urgentCheckbox.checked = false;
+      resetUrgentCheckbox();
       setStatus(`${payload.type} sent.`);
       shouldScrollToBottomOnSend = true;
       await refreshMessages();
@@ -1013,6 +1029,7 @@ messageText?.addEventListener('keydown', (event: KeyboardEvent) => {
 });
 
 sendFileButton?.addEventListener('click', () => fileInput?.click());
+
 
 function updateSameAuthorRecipientWarning(): void {
    const warningEl = document.getElementById('same-author-recipient-warning');
@@ -1174,7 +1191,7 @@ async function sendPackPipeline(
 
       progress.update('Pack sent successfully!', 100);
       setStatus('Pack sent.');
-      if (urgentCheckbox) urgentCheckbox.checked = false;
+      resetUrgentCheckbox();
       shouldScrollToBottomOnSend = true;
       await refreshMessages();
       scrollToBottom();
@@ -2058,6 +2075,7 @@ msgContextMenu?.addEventListener('click', async (e: MouseEvent) => {
          setStatus(`Delete failed: ${err?.message || err}`);
       }
    } else if (action === 'quote' || action === 'reply') {
+      messageText?.focus();
       await handleQuote(msg);
    } else if (action === 'copy') {
       await handleCopy(msg);
