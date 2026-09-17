@@ -2217,7 +2217,6 @@ initTextViewerControls();
 onSectionShow('section-messages', cleanupViewerMedia);
 onSectionShow('section-network', cleanupViewerMedia);
 onSectionShow('section-identity', cleanupViewerMedia);
-onSectionShow('section-peers', cleanupViewerMedia);
 onSectionShow('section-settings', cleanupViewerMedia);
 onSectionShow('section-help', cleanupViewerMedia);
 

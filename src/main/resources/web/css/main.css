@@ -112,6 +112,12 @@ nav a.is-active:visited {
     border-bottom: 1px solid var(--button);
 }
 
+.toolbar h3 {
+    margin: 0;
+    font-size: 0.94rem;
+    font-weight: 600;
+}
+
 .toolbar button {
     padding: 4px 8px;
     background: none;

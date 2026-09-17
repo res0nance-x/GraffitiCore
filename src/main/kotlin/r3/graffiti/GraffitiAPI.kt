@@ -27,6 +27,7 @@ import java.util.concurrent.ConcurrentHashMap
 class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : ContentHandler {
 	var onBellReceived: ((author: Key256, sound: String) -> Unit)? = null
 	private var lastBellPlayedTime: Long = 0L
+	private val settingsFile = File(p2p.graffitiDir, "settings.json")
 
 	init {
 		// Wire up p2p event callbacks — p2p is always ready at construction.
@@ -94,6 +95,16 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 				}
 			}
 		}
+		p2p.onPeerReceived = { peer ->
+			sendToAll(
+				JSONObject()
+					.put("event", "peers_update")
+					.put("action", "add")
+					.put("peerKey", peer.key.toString())
+					.put("peerName", peer.key.name)
+			)
+		}
+		p2p.setWhitelistEnabled(loadSetting("graffiti:whitelist-enabled") == "true")
 	}
 
 	// ── Helpers ───────────────────────────────────────────────────────────────
@@ -113,6 +124,8 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/identity/create" -> createIdentity(header, content)
 			"/api/identity/persist" -> persistIdentity(header)
 			"/api/identity/remove" -> removeIdentity(header)
+			"/api/identity/to-peer" -> identityToPeer(header)
+			"/api/whitelist" -> handleWhitelist(header)
 			"/api/peers" -> listPeers(header)
 			"/api/peer/export" -> exportPeer(header)
 			"/api/peer/import" -> content?.let { importPeer(header, it) }
@@ -329,7 +342,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			session.stagingDir.deleteRecursively()
 			return err("No identity found for ${session.identityKey}")
 		}
-		val peer = p2p.getPeerByKey(session.peerKey) ?: run {
+		val peer = p2p.getPeerByKey(session.peerKey) ?: p2p.getIdentityByKey(IdentityKey(session.peerKey.arr))?.asPeer() ?: run {
 			session.stagingDir.deleteRecursively()
 			return err("No peer found for ${session.peerKey}")
 		}
@@ -433,6 +446,40 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		return err("Identity not found or failed to set persistence")
 	}
 
+	private fun identityToPeer(header: JSONObject): Content {
+		val keyStr = header.optString("key").ifEmpty { header.optString("idKey") }
+		if (keyStr.isEmpty()) return err("Missing key parameter")
+		val iden = p2p.getIdentityByKey(IdentityKey(keyStr)) ?: return err("Identity not found for $keyStr")
+		val peer = iden.asPeer()
+		p2p.savePeer(peer)
+		sendToAll(
+			JSONObject()
+				.put("event", "peers_update")
+				.put("action", "add")
+				.put("peerKey", peer.key.toString())
+				.put("peerName", peer.key.name)
+		)
+		return ok {
+			put("name", peer.key.name)
+			put("key", peer.key.toString())
+		}
+	}
+
+	private fun handleWhitelist(header: JSONObject): Content {
+		if (header.has("enabled")) {
+			val enabled = header.optBoolean("enabled", false) || header.optString("enabled") == "true"
+			p2p.setWhitelistEnabled(enabled)
+			saveSetting("graffiti:whitelist-enabled", enabled.toString())
+			sendToAll(
+				JSONObject()
+					.put("event", "whitelist_update")
+					.put("enabled", enabled)
+			)
+			return ok { put("enabled", enabled) }
+		}
+		return ok { put("enabled", p2p.isWhitelistEnabled()) }
+	}
+
 	// ── Peer ──────────────────────────────────────────────────────────────────
 	private fun listPeers(header: JSONObject): Content {
 		val arr = JSONArray()
@@ -471,7 +518,10 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 	/** GET param: {@code key} — returns the peer file as a download */
 	private fun exportPeer(header: JSONObject): Content {
 		val keyStr = header.getString("key")
-		val peer = p2p.getPeerByKey(PeerKey(keyStr)) ?: error("No peer found for $keyStr")
+		val peerKey = PeerKey(keyStr)
+		val peer = p2p.getPeerByKey(peerKey)
+			?: p2p.getIdentityByKey(IdentityKey(peerKey.arr))?.asPeer()
+			?: error("No peer or identity found for $keyStr")
 		return BinaryContent(
 			peer.serialize(),
 			path = "${peer.key}",
@@ -679,7 +729,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		val keys = resolveSendKeys(header) ?: return err("Select a sender and recipient first")
 		val (idenKey, peerKey) = keys
 		val iden = p2p.getIdentityByKey(idenKey) ?: return err("No identity found for $idenKey")
-		val peer = p2p.getPeerByKey(peerKey) ?: return err("No peer found for $peerKey")
+		val peer = p2p.getPeerByKey(peerKey) ?: p2p.getIdentityByKey(IdentityKey(peerKey.arr))?.asPeer() ?: return err("No peer found for $peerKey")
 		val msgKey = EncryptedMetaKey(keyStr)
 		if (!p2p.hasContent(msgKey)) {
 			return err("Message content is not available locally")
@@ -738,7 +788,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		val (idenKey, peerKey) = keys
 		val text = content.readString()
 		val iden = p2p.getIdentityByKey(idenKey) ?: return err("No identity found for $idenKey")
-		val peer = p2p.getPeerByKey(peerKey) ?: return err("No peer found for $peerKey")
+		val peer = p2p.getPeerByKey(peerKey) ?: p2p.getIdentityByKey(IdentityKey(peerKey.arr))?.asPeer() ?: return err("No peer found for $peerKey")
 		val isUrgent = header.optBoolean("urgent", false) || header.optString("urgent") == "true"
 		val textContent = if (isUrgent) {
 			MutableMetaDataContent(BinaryContent(text.toByteArray(), "urgent:text", "txt"))
@@ -772,7 +822,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			fileParam
 		}
 		val iden = p2p.getIdentityByKey(idenKey) ?: return err("No identity found for $idenKey")
-		val peer = p2p.getPeerByKey(peerKey) ?: return err("No peer found for $peerKey")
+		val peer = p2p.getPeerByKey(peerKey) ?: p2p.getIdentityByKey(IdentityKey(peerKey.arr))?.asPeer() ?: return err("No peer found for $peerKey")
 		val isUrgent = header.optBoolean("urgent", false) || header.optString("urgent") == "true"
 		val storedPath = if (isUrgent) "urgent:$originalName" else originalName
 		val wrappedContent = MutableMetaDataContent(content).apply {
@@ -799,7 +849,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		val keys = resolveSendKeys(header) ?: return err("Select a sender and recipient first")
 		val (idenKey, peerKey) = keys
 		val iden = p2p.getIdentityByKey(idenKey) ?: return err("No identity found for $idenKey")
-		val peer = p2p.getPeerByKey(peerKey) ?: return err("No peer found for $peerKey")
+		val peer = p2p.getPeerByKey(peerKey) ?: p2p.getIdentityByKey(IdentityKey(peerKey.arr))?.asPeer() ?: return err("No peer found for $peerKey")
 		val wrappedContent = MutableMetaDataContent(BinaryContent(ByteArray(0), "bell", "bell")).apply {
 			path = "bell"
 			ext = "bell"
@@ -921,7 +971,6 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		return ok { put("running", port != null); if (port != null) put("port", port) }
 	}
 
-	private val settingsFile = File(p2p.graffitiDir, "settings.json")
 	private fun saveSetting(key: String, value: String) {
 		synchronized(settingsFile) {
 			val obj = if (settingsFile.exists()) {

@@ -24,10 +24,8 @@
 					<li><a class="app-nav-link" data-section="section-messages" href="#" title="Secure P2P Messages"><span
 								class="material-symbols-outlined">mail</span> Msg</a></li>
 					<li><a class="app-nav-link" data-section="section-identity" href="#"
-							title="Manage Forum and Personal Identities"><span class="material-symbols-outlined">person</span>
+							title="Manage Identities & Peer Public Keys"><span class="material-symbols-outlined">person</span>
 							ID</a></li>
-					<li><a class="app-nav-link" data-section="section-peers" href="#" title="Manage Peer Public Keys"><span
-								class="material-symbols-outlined">group</span> Peer</a></li>
 					<li><a class="app-nav-link" data-section="section-settings" href="#" title="Settings & Help"><span
 								class="material-symbols-outlined">settings</span></a></li>
 				</ul>
@@ -202,7 +200,8 @@ Identity
 		<section class="app-section" id="section-identity">
 			<main>
 				<div class="toolbar">
-					<button id="create-identity">Create</button>
+					<h3>Identities</h3>
+					<button id="create-identity" style="margin-left: auto;">Create</button>
 				</div>
 				<table id="identities">
 					<thead>
@@ -214,16 +213,14 @@ Identity
 					</thead>
 					<tbody></tbody>
 				</table>
-			</main>
-		</section>
 
-		<!-- ══════════════════════════════════════════════════════════════════════════
-Peers
-══════════════════════════════════════════════════════════════════════ -->
-		<section class="app-section" id="section-peers">
-			<main>
-				<div class="toolbar">
-					<button id="import-peer">Import</button>
+				<div class="toolbar" style="margin-top: 1.5rem;">
+					<h3>Peers</h3>
+					<label class="toggle-label" style="margin-left: auto; display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; cursor: pointer;" title="When enabled, only messages from known peers in this list are accepted">
+						<input id="whitelist-toggle" type="checkbox">
+						Whitelist Only
+					</label>
+					<button id="import-peer" style="margin-left: 0.75rem;">Import</button>
 				</div>
 				<table id="peers">
 					<thead>

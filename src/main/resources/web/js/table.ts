@@ -6,6 +6,7 @@ export interface TableOptions {
    onRemove?: (item: TableItem) => void | Promise<void>;
    onExport?: (item: TableItem) => void | Promise<void>;
    onTogglePersist?: (item: IdentityEntry) => void | Promise<void>;
+   onAddToPeers?: (item: IdentityEntry) => void | Promise<void>;
    nodeKey?: string;
 }
 
@@ -15,12 +16,23 @@ export interface TableOptions {
 export function buildTable(
    table: HTMLTableElement,
    items: TableItem[],
-   {onRemove, onExport, onTogglePersist, nodeKey}: TableOptions = {},
+   {onRemove, onExport, onTogglePersist, onAddToPeers, nodeKey}: TableOptions = {},
 ): void {
    const tbody = table.tBodies[0] ?? table.createTBody();
    tbody.replaceChildren();
 
    const hasStorageColumn = (table.tHead?.rows[0]?.cells.length ?? 2) >= 3;
+
+   if (items.length === 0) {
+      const row = tbody.insertRow();
+      const cell = row.insertCell();
+      cell.colSpan = hasStorageColumn ? 3 : 2;
+      cell.style.opacity = '0.5';
+      cell.style.fontSize = '0.85rem';
+      cell.style.padding = '0.75rem 10px';
+      cell.textContent = table.id === 'peers' ? 'No peers imported yet.' : 'No identities found.';
+      return;
+   }
 
    for (const item of items) {
       const row = tbody.insertRow();
@@ -82,6 +94,14 @@ export function buildTable(
 
       // Actions
       const actionsCell = row.insertCell();
+
+      if (onAddToPeers && 'persistent' in item) {
+         const addPeerBtn = document.createElement('button');
+         addPeerBtn.textContent = 'Add to Peers';
+         addPeerBtn.style.marginRight = '8px';
+         addPeerBtn.addEventListener('click', () => onAddToPeers(item as IdentityEntry));
+         actionsCell.append(addPeerBtn);
+      }
 
       if (onTogglePersist && 'persistent' in item && item.key !== nodeKey) {
          const persistBtn = document.createElement('button');

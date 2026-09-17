@@ -213,6 +213,18 @@ export const graffiti = {
       return get('/api/identity/persist', {key, persistent: String(persistent)});
    },
 
+   identityToPeer(key: string): Promise<ApiOk & { name?: string; key?: string }> {
+      return get('/api/identity/to-peer', {key});
+   },
+
+   getWhitelist(): Promise<{ ok: boolean; enabled: boolean }> {
+      return get('/api/whitelist');
+   },
+
+   setWhitelist(enabled: boolean): Promise<{ ok: boolean; enabled: boolean }> {
+      return get('/api/whitelist', {enabled: String(enabled)});
+   },
+
 
    // ── Peer ──────────────────────────────────────────────────────────────
 

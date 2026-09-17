@@ -201,7 +201,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		loadQuota()
 	}
 
-	val contentHandler: (TCPNode, ByteArray, File?) -> Unit = { node: TCPNode, rawHead: ByteArray, file: File? ->
+	val contentHandler: (TCPNode, ByteArray, File?) -> Unit = contentHandler@{ node: TCPNode, rawHead: ByteArray, file: File? ->
 		try {
 			val type = StringWritable.read(rawHead.toDataInputStream()).str
 			when (type) {
@@ -237,6 +237,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 						val myIdentityKeys = listIdentities().map { it.key }.toSet()
 						val myPeerKeys = listPeers().map { it.key }.toSet()
 						val wantContent = mutableListOf<EncryptedMetaKey>()
+						val wantPeers = mutableSetOf<PeerKey>()
 						log("Received QueryResponse from ${node.remoteAddress}: ${headerList.size} header item(s)")
 						headerList.forEach { msgHeader ->
 							if (isMessageDeleted(msgHeader.key)) return@forEach
@@ -253,19 +254,37 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 								log("Ignoring off-recipient meta ${msgHeader.key.name} from ${node.remoteAddress}")
 								return@forEach
 							}
+							// Whitelist mode: only accept messages from known peers
+							if (whitelistEnabled && !relayEnabled && msgHeader.author !in myPeerKeys) {
+								log("Ignoring meta ${msgHeader.key.name} from ${node.remoteAddress}: author ${msgHeader.author.name} not in whitelist")
+								return@forEach
+							}
 							val metaExists = metaCache.containsKey(msgHeader.key) || File(metaDir, "${msgHeader.key}").exists()
+							val contentExists = smallContentCache.containsKey(msgHeader.key) || File(contentDir, "${msgHeader.key}").exists()
+							if (metaExists && contentExists) return@forEach
+
 							val now = System.currentTimeMillis()
 							val pendingSince = pendingContentRequests[msgHeader.key]
 							val isPending = pendingSince != null && (now - pendingSince) < 30_000L
-							// Ask for it only if we don't already have it and it's not currently in flight
-							if (!metaExists && !isPending) {
+							if (isPending) return@forEach
+
+							val authorPeer = getPeerByKey(msgHeader.author)
+							if (authorPeer == null) {
+								// We need this peer before we can verify and accept content
+								pendingPeerContent.computeIfAbsent(msgHeader.author) { ConcurrentHashMap() }[msgHeader.key] = node
+								wantPeers.add(msgHeader.author)
+							} else {
 								pendingContentRequests[msgHeader.key] = now
 								wantContent.add(msgHeader.key)
 							}
 						}
+						if (wantPeers.isNotEmpty()) {
+							node.send(PeerRequestMessage(wantPeers.toList()).serialize())
+							log("Requested ${wantPeers.size} peer(s) from ${node.remoteAddress}")
+						}
 						if (wantContent.isNotEmpty()) {
 							node.send(ContentRequestMessage(wantContent).serialize())
-						} else {
+						} else if (wantPeers.isEmpty()) {
 							log("No content requests needed from ${node.remoteAddress} after QueryResponse")
 						}
 					}
@@ -311,19 +330,23 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 							log("Ignoring content ${eMeta.key.name} from ${node.remoteAddress}: author and recipient are the same")
 						} else {
 							val peer = getPeerByKey(eMeta.author)
-							val identity = getIdentityByKey(eMeta.recipient)
-							val valid = if (peer != null) {
-								if (identity != null) {
-									// We have both: verify metadata signature AND content hash
-									eMeta.verify(peer, FileSource(file), identity)
-								} else {
-									// We only have the author peer (relaying): verify metadata signature
-									eMeta.verify(peer)
-								}
-							} else {
-								true
+							if (peer == null) {
+								file.delete()
+								log("Rejecting content ${eMeta.key.name} from ${node.remoteAddress}: author peer ${eMeta.author.name} not found")
+								return@contentHandler
 							}
-							if (!valid) error("Invalid Content Message")
+							val identity = getIdentityByKey(eMeta.recipient)
+							val valid = if (identity != null) {
+								// We have both: verify metadata signature AND content hash
+								eMeta.verify(peer, FileSource(file), identity)
+							} else {
+								// We only have the author peer (relaying): verify metadata signature
+								eMeta.verify(peer)
+							}
+							if (!valid) {
+								file.delete()
+								error("Invalid Content Message: signature or content hash mismatch")
+							}
 							var contentStored = false
 							val destFile = File(contentDir, "${eMeta.key}").consistentFile()
 							val fileSize = file.length()
@@ -406,6 +429,55 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 					}
 				}
 
+				// Peer is asking for public keys for a list of author/peer keys.
+				PeerRequestMessage.type -> {
+					val req = PeerRequestMessage.read(rawHead.toDataInputStream())
+					val foundPeers = mutableListOf<Peer>()
+					req.keys.forEach { key ->
+						val p = peerCache[key] ?: getIdentityByKey(IdentityKey(key.arr))?.asPeer()
+						if (p != null) foundPeers.add(p)
+					}
+					if (foundPeers.isNotEmpty()) {
+						node.send(PeerResponseMessage(foundPeers).serialize())
+						log("PeerRequest from ${node.remoteAddress}: served ${foundPeers.size} peer(s)")
+					}
+				}
+				// Response to our earlier PeerRequestMessage: a list of Peer instances.
+				PeerResponseMessage.type -> {
+					val resp = PeerResponseMessage.read(rawHead.toDataInputStream())
+					log("Received PeerResponse from ${node.remoteAddress}: ${resp.peers.size} peer(s)")
+					resp.peers.forEach { peer ->
+						val expectedKey = PeerKey(peer.mx.toByteArray().hash256())
+						if (expectedKey != peer.key) {
+							log("Rejecting spoofed peer ${peer.key.name} from ${node.remoteAddress}: hash mismatch")
+							return@forEach
+						}
+						savePeer(peer)
+						onPeerReceived?.invoke(peer)
+						val pendingMap = pendingPeerContent.remove(peer.key)
+						if (pendingMap != null) {
+							val nodeKeys = mutableMapOf<TCPNode, MutableList<EncryptedMetaKey>>()
+							val now = System.currentTimeMillis()
+							pendingMap.forEach { (metaKey, targetNode) ->
+								if (!targetNode.isClosed() && !isMessageDeleted(metaKey)) {
+									val metaExists = metaCache.containsKey(metaKey) || File(metaDir, "$metaKey").exists()
+									val contentExists = smallContentCache.containsKey(metaKey) || File(contentDir, "$metaKey").exists()
+									if (!metaExists || !contentExists) {
+										pendingContentRequests[metaKey] = now
+										nodeKeys.computeIfAbsent(targetNode) { mutableListOf() }.add(metaKey)
+									}
+								}
+							}
+							nodeKeys.forEach { (targetNode, keys) ->
+								if (keys.isNotEmpty()) {
+									targetNode.send(ContentRequestMessage(keys).serialize())
+									log("Requested ${keys.size} content item(s) from ${targetNode.remoteAddress} after peer resolved")
+								}
+							}
+						}
+					}
+				}
+
 				else -> log("Unknown message type: $type from ${node.remoteAddress}")
 			}
 		} catch (e: Exception) {
@@ -463,11 +535,17 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		if (!relayEnabled && myIdentityKeys.isEmpty()) return
 		val recipientFilter = if (relayEnabled) QueryCondition.ALL
 		else QueryCondition(myIdentityKeys, QueryCondition.ConditionType.Include)
+		val authorFilter = if (whitelistEnabled && !relayEnabled) {
+			val myPeerKeys = listPeers().map { it.key }.toSet()
+			QueryCondition(myPeerKeys, QueryCondition.ConditionType.Include)
+		} else {
+			QueryCondition.ALL
+		}
 		val peerLabel = nodePeerMap[node]?.key?.name ?: node.remoteAddress.toString()
 		log("Syncing with ${node.remoteAddress} (${if (relayEnabled) "relay/all recipients" else "recipient filter ${myIdentityKeys.joinToString { it.name }}"})")
 		node.send(
 			QueryMessage(
-				QueryCondition.ALL,
+				authorFilter,
 				recipientFilter
 			).serialize()
 		)
@@ -687,7 +765,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		else identityCache[key] ?: ephemeralIdentities.firstOrNull { it.key == key }
 
 	fun getPeerByKey(key: PeerKey): Peer? =
-		peerCache[key] ?: getIdentityByKey(IdentityKey(key.arr))?.asPeer()
+		peerCache[key]
 
 	fun getContent(key: EncryptedMetaKey): Content {
 		val eMeta = metaCache[key] ?: run {
@@ -771,8 +849,25 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	/** Fired when a greeting is received and the peer's signature is verified. */
 	var onNodeIdentified: ((node: TCPNode, peer: Peer) -> Unit)? = null
 
+	/** Fired when a peer public key is verified and saved to peerCache. */
+	var onPeerReceived: ((peer: Peer) -> Unit)? = null
+
 	/** Fired when a new encrypted meta file is successfully stored from a peer. */
 	var onMessageReceived: ((key: EncryptedMetaKey) -> Unit)? = null
+
+	/** Tracks metadata keys waiting for an author peer to be resolved: author -> (metaKey -> node). */
+	private val pendingPeerContent = ConcurrentHashMap<PeerKey, ConcurrentHashMap<EncryptedMetaKey, TCPNode>>()
+
+	@Volatile
+	private var whitelistEnabled: Boolean = false
+	fun isWhitelistEnabled(): Boolean = whitelistEnabled
+	fun setWhitelistEnabled(enabled: Boolean) {
+		if (whitelistEnabled == enabled) return
+		whitelistEnabled = enabled
+		if (!relayEnabled) {
+			syncAllConnectedNodes()
+		}
+	}
 
 	/** Maps each live TCPNode to the verified Peer from its challenge-response. */
 	private val nodePeerMap = ConcurrentHashMap<TCPNode, Peer>()
