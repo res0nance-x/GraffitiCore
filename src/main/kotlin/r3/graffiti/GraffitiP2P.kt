@@ -78,6 +78,17 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	// Stored as graffitiDir/serverIdentity; auto-created on first run.
 	val serverIdentity: Identity
 
+	// ── Message Arrival Ordering ──────────────────────────────────────────────
+	private val lastAssignedTimestamp = AtomicLong(0L)
+	val queryOrderTimestamps = ConcurrentHashMap<EncryptedMetaKey, Long>()
+
+	fun nextMonotonicTimestamp(): Long {
+		val now = System.currentTimeMillis()
+		return lastAssignedTimestamp.updateAndGet { prev ->
+			if (now > prev) now else prev + 1L
+		}
+	}
+
 	@Volatile
 	private var relayEnabled = relayEnabledAtStartup
 
@@ -199,6 +210,16 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		// Initialize totalContentSize cache
 		totalContentSize.set(contentDir.listFiles().orEmpty().sumOf { it.length() })
 		loadQuota()
+		// Initialize monotonic timestamp counter based on existing files or wall-clock
+		val maxExistingTime = metaDir.listFiles { f -> f.isFile }
+			?.maxOfOrNull { it.lastModified() } ?: 0L
+		val now = System.currentTimeMillis()
+		val initialTs = if (maxExistingTime in (now + 1)..(now + 86_400_000L)) {
+			maxExistingTime
+		} else {
+			now
+		}
+		lastAssignedTimestamp.set(initialTs)
 	}
 
 	val contentHandler: (TCPNode, ByteArray, File?) -> Unit = contentHandler@{ node: TCPNode, rawHead: ByteArray, file: File? ->
@@ -262,6 +283,9 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 							val metaExists = metaCache.containsKey(msgHeader.key) || File(metaDir, "${msgHeader.key}").exists()
 							val contentExists = smallContentCache.containsKey(msgHeader.key) || File(contentDir, "${msgHeader.key}").exists()
 							if (metaExists && contentExists) return@forEach
+
+							// Preserve the relay's arrival order for incoming content
+							queryOrderTimestamps.computeIfAbsent(msgHeader.key) { nextMonotonicTimestamp() }
 
 							val now = System.currentTimeMillis()
 							val pendingSince = pendingContentRequests[msgHeader.key]
@@ -376,12 +400,16 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 								val metaFile = File(metaDir, eMeta.key.toString())
 								if (!metaFile.exists()) {
 									metaFile.writeBytes(eMeta.serialize())
+									val ts = queryOrderTimestamps.remove(eMeta.key) ?: nextMonotonicTimestamp()
+									metaFile.setLastModified(ts)
 									if (metaFile.exists()) {
 										onMessageReceived?.invoke(eMeta.key)
 										if (relayEnabled) {
 											pushNewMessage(eMeta.key, excludeNode = node)
 										}
 									}
+								} else {
+									queryOrderTimestamps.remove(eMeta.key)
 								}
 							}
 						}
@@ -698,6 +726,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		totalContentSize.addAndGet(fileSize)
 		val metaDest = File(metaDir, eMeta.key.toString()).consistentFile()
 		metaDest.writeBytes(eMeta.serialize())
+		metaDest.setLastModified(nextMonotonicTimestamp())
 
 		metaCache[eMeta.key] = eMeta
 		if (fileSize <= SMALL_CONTENT_THRESHOLD_BYTES && smallContentCache.size < MAX_SMALL_CONTENT_ITEMS) {
@@ -802,6 +831,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 
 	@Synchronized
 	fun deleteMessage(key: EncryptedMetaKey): Boolean {
+		queryOrderTimestamps.remove(key)
 		val hadMeta = metaCache.containsKey(key) || isMessageDeleted(key) || File(metaDir, "$key").exists()
 		pendingContentRequests.remove(key)
 		metaCache.remove(key)
