@@ -552,11 +552,13 @@ async function handleForward(msg: MessageData): Promise<void> {
          if (!select) return;
          select.replaceChildren();
 
+         const seenKeys = new Set<string>();
          const optGroupIdentities = document.createElement('optgroup');
          optGroupIdentities.label = 'Identities (Topics)';
          let idCount = 0;
          for (const id of knownIdentities) {
-            if (id.peerKey !== msgRecipientKey && id.key !== msgRecipientKey) {
+            if (id.peerKey !== msgRecipientKey && id.key !== msgRecipientKey && !seenKeys.has(id.peerKey)) {
+               seenKeys.add(id.peerKey);
                const opt = document.createElement('option');
                opt.value = id.peerKey;
                opt.textContent = id.name;
@@ -570,7 +572,8 @@ async function handleForward(msg: MessageData): Promise<void> {
          optGroupPeers.label = 'Peers';
          let peerCount = 0;
          for (const peer of knownPeers) {
-            if (peer.key !== msgRecipientKey) {
+            if (peer.key !== msgRecipientKey && !seenKeys.has(peer.key)) {
+               seenKeys.add(peer.key);
                const opt = document.createElement('option');
                opt.value = peer.key;
                opt.textContent = peer.name;
@@ -902,8 +905,26 @@ async function populateSelects(): Promise<void> {
    const toEmptyMsg = document.getElementById('to-empty-message');
    if (toField) {
       toField.replaceChildren();
-      const hasOptions = peers.length > 0 || identities.length > 0;
-      if (!hasOptions) {
+      const seenKeys = new Set<string>();
+      for (const id of identities) {
+         if (!seenKeys.has(id.peerKey)) {
+            seenKeys.add(id.peerKey);
+            const opt = document.createElement('option');
+            opt.value = id.peerKey;   // PeerKey, not IdentityKey
+            opt.textContent = id.name;
+            toField.append(opt);
+         }
+      }
+      for (const peer of peers) {
+         if (!seenKeys.has(peer.key)) {
+            seenKeys.add(peer.key);
+            const opt = document.createElement('option');
+            opt.value = peer.key;
+            opt.textContent = peer.name;
+            toField.append(opt);
+         }
+      }
+      if (seenKeys.size === 0) {
          toField.style.display = 'none';
          if (toEmptyMsg) {
             toEmptyMsg.textContent = 'No peers or identities available';
@@ -912,28 +933,10 @@ async function populateSelects(): Promise<void> {
       } else {
          toField.style.display = '';
          if (toEmptyMsg) toEmptyMsg.style.display = 'none';
-         for (const id of identities) {
-            const opt = document.createElement('option');
-            opt.value = id.peerKey;   // PeerKey, not IdentityKey
-            opt.textContent = id.name;
-            toField.append(opt);
-         }
-         for (const peer of peers) {
-            const opt = document.createElement('option');
-            opt.value = peer.key;
-            opt.textContent = peer.name;
-            toField.append(opt);
-         }
-         if (prevTo) {
-            const exists = Array.from(toField.options).some(opt => opt.value === prevTo);
-            if (exists) {
-               toField.value = prevTo;
-            }
-         } else if (savedToKey && isSavedRecipient(savedToKey, identities, peers)) {
-            const exists = Array.from(toField.options).some(opt => opt.value === savedToKey);
-            if (exists) {
-               toField.value = savedToKey;
-            }
+         if (prevTo && seenKeys.has(prevTo)) {
+            toField.value = prevTo;
+         } else if (savedToKey && seenKeys.has(savedToKey) && isSavedRecipient(savedToKey, identities, peers)) {
+            toField.value = savedToKey;
          }
       }
    }
