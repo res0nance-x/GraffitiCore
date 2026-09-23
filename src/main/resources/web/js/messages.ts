@@ -159,6 +159,101 @@ function isMessageInSelectedTopic(msg: MessageData, selectedToKey: string): bool
    return false;
 }
 
+// ── Topic Last Viewed & Unread Badges State ─────────────────────────────────
+let topicLastViewed: Record<string, number> = {};
+let saveTopicLastViewedTimer: number | null = null;
+let activeToKey: string = '';
+
+async function loadTopicLastViewed(): Promise<void> {
+   try {
+      const raw = await graffiti.getStore('graffiti:topic-last-viewed');
+      if (raw) {
+         const parsed = JSON.parse(raw);
+         if (parsed && typeof parsed === 'object') {
+            topicLastViewed = parsed;
+         }
+      }
+   } catch (e) {
+      console.warn('Failed to load topic-last-viewed:', e);
+   }
+}
+
+function scheduleSaveTopicLastViewed(): void {
+   if (saveTopicLastViewedTimer !== null) {
+      window.clearTimeout(saveTopicLastViewedTimer);
+   }
+   saveTopicLastViewedTimer = window.setTimeout(async () => {
+      saveTopicLastViewedTimer = null;
+      try {
+         await graffiti.setStore('graffiti:topic-last-viewed', JSON.stringify(topicLastViewed));
+      } catch (e) {
+         console.warn('Failed to save topic-last-viewed:', e);
+      }
+   }, 300);
+}
+
+function markTopicRead(key: string, timestamp?: number): void {
+   if (!key) return;
+   let ts = timestamp ?? Date.now();
+   if (!timestamp) {
+      for (const msg of allRawMessages) {
+         if (isMessageInSelectedTopic(msg, key)) {
+            const msgTime = typeof msg.fileTime === 'number' && msg.fileTime > 0
+               ? msg.fileTime
+               : Number(msg.created || 0);
+            if (msgTime > ts) {
+               ts = msgTime;
+            }
+         }
+      }
+   }
+   const current = topicLastViewed[key] ?? 0;
+   if (ts > current) {
+      topicLastViewed[key] = ts;
+      scheduleSaveTopicLastViewed();
+   }
+}
+
+export function updateUnreadBadges(): void {
+   if (!toField) return;
+   const currentSelected = toField.value;
+   let totalUnread = 0;
+
+   for (const opt of Array.from(toField.options)) {
+      const key = opt.value;
+      const baseName = opt.dataset.baseName || opt.textContent || '';
+      if (!key) continue;
+
+      if (key === currentSelected) {
+         opt.textContent = baseName;
+      } else {
+         const lastViewed = topicLastViewed[key] ?? 0;
+         let unreadCount = 0;
+         for (const msg of allRawMessages) {
+            if (isMessageInSelectedTopic(msg, key)) {
+               const msgTime = typeof msg.fileTime === 'number' && msg.fileTime > 0
+                  ? msg.fileTime
+                  : Number(msg.created || 0);
+               if (msgTime > lastViewed) {
+                  unreadCount++;
+               }
+            }
+         }
+         if (unreadCount > 0) {
+            opt.textContent = `${baseName} (${unreadCount})`;
+            totalUnread += unreadCount;
+         } else {
+            opt.textContent = baseName;
+         }
+      }
+   }
+
+   const navMsgLabel = document.getElementById('nav-msg-label');
+   if (navMsgLabel) {
+      navMsgLabel.textContent = totalUnread > 0 ? `Msg (${totalUnread})` : 'Msg';
+   }
+}
+
 function updateFilteredMessages(): void {
    const selectedTo = toField?.value ?? '';
    if (!selectedTo) {
@@ -307,14 +402,20 @@ async function refreshMessages(): Promise<void> {
    isRefreshing = true;
    try {
       await refreshNameMaps();
+      await loadTopicLastViewed();
       const {messages} = await graffiti.listMessages();
       const container = document.getElementById('messages');
       if (!container) return;
 
       const wasAtBottom = isNearBottom();
       allRawMessages = messages;
+      const currentSelected = toField?.value ?? '';
+      if (currentSelected) {
+         markTopicRead(currentSelected);
+      }
       updateFilteredMessages();
       renderMessageList();
+      updateUnreadBadges();
       if (shouldScrollToBottomOnLoad || shouldScrollToBottomOnSend || wasAtBottom) {
          shouldScrollToBottomOnLoad = false;
          shouldScrollToBottomOnSend = false;
@@ -393,6 +494,7 @@ interface MessageData {
    size?: number;
    type: string;
    created?: number | string;
+   fileTime?: number;
    urgent?: boolean;
 }
 
@@ -430,11 +532,14 @@ function fillHeader(item: HTMLElement, msg: MessageData): void {
    }
 
    if (timeEl) {
-      timeEl.textContent = formatTime(msg.created);
-      const iso = new Date(Number(msg.created)).toISOString();
+      const displayTime = typeof msg.fileTime === 'number' && msg.fileTime > 0
+         ? msg.fileTime
+         : (msg.created ? Number(msg.created) : Date.now());
+      timeEl.textContent = formatTime(displayTime);
+      const iso = new Date(displayTime).toISOString();
       if (iso !== 'Invalid Date') {
          timeEl.dateTime = iso;
-         timeEl.title = new Date(Number(msg.created)).toLocaleString();
+         timeEl.title = new Date(displayTime).toLocaleString();
       }
    }
 
@@ -533,6 +638,47 @@ async function handleCopy(msg: MessageData): Promise<void> {
    }
 }
 
+async function handleMessageInfo(msg: MessageData): Promise<void> {
+   await showDialog({
+      title: 'Content Info',
+      templateId: 'tpl-message-info',
+      confirmLabel: 'Close',
+      init(body) {
+         const cancelBtn = body.closest('dialog')?.querySelector<HTMLButtonElement>('.app-dialog-cancel');
+         if (cancelBtn) {
+            cancelBtn.style.display = 'none';
+         }
+
+         const nameEl = body.querySelector('#msg-info-name');
+         const sizeEl = body.querySelector('#msg-info-size');
+         const typeEl = body.querySelector('#msg-info-type');
+         const authorEl = body.querySelector('#msg-info-author');
+         const recipientEl = body.querySelector('#msg-info-recipient');
+         const fileTimeEl = body.querySelector('#msg-info-filetime');
+         const createdEl = body.querySelector('#msg-info-created');
+         const keyEl = body.querySelector('#msg-info-key');
+
+         if (nameEl) nameEl.textContent = msg.name || 'Untitled';
+         if (sizeEl) sizeEl.textContent = typeof msg.size === 'number' ? `${formatSize(msg.size)} (${msg.size.toLocaleString()} bytes)` : '—';
+         if (typeEl) typeEl.textContent = msg.type || 'unknown';
+         if (authorEl) authorEl.textContent = msg.authorKey ? `${msg.author || 'Unknown'} (${msg.authorKey})` : (msg.author || 'Unknown');
+         if (recipientEl) recipientEl.textContent = msg.recipientKey ? `${msg.recipient || 'Unknown'} (${msg.recipientKey})` : (msg.recipient || 'Unknown');
+
+         const fileTime = typeof msg.fileTime === 'number' && msg.fileTime > 0 ? msg.fileTime : null;
+         if (fileTimeEl) {
+            fileTimeEl.textContent = fileTime ? new Date(fileTime).toLocaleString() : '—';
+         }
+
+         const createdTime = msg.created ? Number(msg.created) : null;
+         if (createdEl) {
+            createdEl.textContent = createdTime && !isNaN(createdTime) ? new Date(createdTime).toLocaleString() : '—';
+         }
+
+         if (keyEl) keyEl.textContent = msg.key;
+      }
+   });
+}
+
 async function handleForward(msg: MessageData): Promise<void> {
    const fromKey = fromField?.value;
    if (!fromKey) {
@@ -554,14 +700,15 @@ async function handleForward(msg: MessageData): Promise<void> {
 
          const seenKeys = new Set<string>();
          const optGroupIdentities = document.createElement('optgroup');
-         optGroupIdentities.label = 'Identities (Topics)';
+         optGroupIdentities.label = 'Topic Identities';
          let idCount = 0;
          for (const id of knownIdentities) {
             if (id.peerKey !== msgRecipientKey && id.key !== msgRecipientKey && !seenKeys.has(id.peerKey)) {
                seenKeys.add(id.peerKey);
                const opt = document.createElement('option');
                opt.value = id.peerKey;
-               opt.textContent = id.name;
+               opt.textContent = `🏷️ ${id.name}`;
+               opt.title = 'Topic Identity (Shared forum)';
                optGroupIdentities.append(opt);
                idCount++;
             }
@@ -576,7 +723,8 @@ async function handleForward(msg: MessageData): Promise<void> {
                seenKeys.add(peer.key);
                const opt = document.createElement('option');
                opt.value = peer.key;
-               opt.textContent = peer.name;
+               opt.textContent = `👤 ${peer.name}`;
+               opt.title = 'Peer (Direct message to friend)';
                optGroupPeers.append(opt);
                peerCount++;
             }
@@ -595,10 +743,17 @@ async function handleForward(msg: MessageData): Promise<void> {
       resetUrgentCheckbox();
       setStatus('Message forwarded.');
       if (toField) {
+         const prevKey = activeToKey;
+         if (prevKey && prevKey !== destKey) {
+            markTopicRead(prevKey);
+         }
          toField.value = destKey;
+         activeToKey = destKey;
+         markTopicRead(destKey);
          updateSameAuthorRecipientWarning();
          void saveOrClearRememberedFields();
          applyTopicFilter(true);
+         updateUnreadBadges();
       }
       queueRefreshMessages();
    } catch (err: any) {
@@ -873,6 +1028,7 @@ async function populateSelects(): Promise<void> {
    const [savedFromKey, savedToKey] = await Promise.all([
       graffiti.getStore('graffiti:last-from-key'),
       graffiti.getStore('graffiti:last-to-key'),
+      loadTopicLastViewed(),
    ]);
 
    // Populate From: all available identities
@@ -906,23 +1062,40 @@ async function populateSelects(): Promise<void> {
    if (toField) {
       toField.replaceChildren();
       const seenKeys = new Set<string>();
+      const optGroupTopics = document.createElement('optgroup');
+      optGroupTopics.label = 'Topic Identities';
       for (const id of identities) {
          if (!seenKeys.has(id.peerKey)) {
             seenKeys.add(id.peerKey);
             const opt = document.createElement('option');
             opt.value = id.peerKey;   // PeerKey, not IdentityKey
-            opt.textContent = id.name;
-            toField.append(opt);
+            const baseText = `🏷️ ${id.name}`;
+            opt.dataset.baseName = baseText;
+            opt.textContent = baseText;
+            opt.title = 'Topic Identity (Shared topic/forum)';
+            optGroupTopics.append(opt);
          }
       }
+      if (optGroupTopics.children.length > 0) {
+         toField.append(optGroupTopics);
+      }
+
+      const optGroupPeers = document.createElement('optgroup');
+      optGroupPeers.label = 'Peers';
       for (const peer of peers) {
          if (!seenKeys.has(peer.key)) {
             seenKeys.add(peer.key);
             const opt = document.createElement('option');
             opt.value = peer.key;
-            opt.textContent = peer.name;
-            toField.append(opt);
+            const baseText = `👤 ${peer.name}`;
+            opt.dataset.baseName = baseText;
+            opt.textContent = baseText;
+            opt.title = 'Peer (Direct message to friend)';
+            optGroupPeers.append(opt);
          }
+      }
+      if (optGroupPeers.children.length > 0) {
+         toField.append(optGroupPeers);
       }
       if (seenKeys.size === 0) {
          toField.style.display = 'none';
@@ -940,9 +1113,14 @@ async function populateSelects(): Promise<void> {
          }
       }
    }
+   activeToKey = toField?.value ?? '';
+   if (activeToKey) {
+      markTopicRead(activeToKey);
+   }
    updateSameAuthorRecipientWarning();
    void saveOrClearRememberedFields();
    applyTopicFilter(false);
+   updateUnreadBadges();
 }
 
 function getEnvelope(): { identityKey: string; peerKey: string } {
@@ -1056,9 +1234,19 @@ fromField?.addEventListener('change', () => {
    void saveOrClearRememberedFields();
 });
 toField?.addEventListener('change', () => {
+   const prevKey = activeToKey;
+   const newKey = toField?.value ?? '';
+   if (prevKey && prevKey !== newKey) {
+      markTopicRead(prevKey);
+   }
+   activeToKey = newKey;
+   if (newKey) {
+      markTopicRead(newKey);
+   }
    updateSameAuthorRecipientWarning();
    void saveOrClearRememberedFields();
    applyTopicFilter(true);
+   updateUnreadBadges();
 });
 
 
@@ -1474,10 +1662,18 @@ onWsEvent('messages_update', async (msg: Record<string, unknown>) => {
       allRawMessages = allRawMessages.filter(m => m.key !== removedKey);
       updateFilteredMessages();
       renderMessageList();
+      updateUnreadBadges();
    } else if (msg.action === 'add') {
       const m = msg.msg as MessageData | undefined;
-      if (m && !currentMessages.has(m.key)) {
-         notifyNewMessage(m);
+      if (m) {
+         const currentSelected = toField?.value ?? '';
+         if (currentSelected && isMessageInSelectedTopic(m, currentSelected)) {
+            const msgTime = typeof m.fileTime === 'number' && m.fileTime > 0 ? m.fileTime : Number(m.created || 0);
+            markTopicRead(currentSelected, Math.max(Date.now(), msgTime));
+         }
+         if (!currentMessages.has(m.key)) {
+            notifyNewMessage(m);
+         }
       }
       queueRefreshMessages();
    } else {
@@ -2084,6 +2280,8 @@ msgContextMenu?.addEventListener('click', async (e: MouseEvent) => {
       await handleCopy(msg);
    } else if (action === 'download') {
       handleDownload(msg);
+   } else if (action === 'info') {
+      void handleMessageInfo(msg);
    }
 });
 

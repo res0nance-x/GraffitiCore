@@ -530,9 +530,12 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 	}
 // ── Message ───────────────────────────────────────────────────────────────
 	/** Builds the display JSON for a single message. Shared by listMessages and WS push. */
-	private fun buildMsgJson(eMeta: EncryptedContentMetaData, meta: ContentMeta): JSONObject {
+	private fun buildMsgJson(eMeta: EncryptedContentMetaData, meta: ContentMeta, fileTime: Long? = null): JSONObject {
 		val isUrgent = meta.name.startsWith("urgent:")
 		val displayName = if (isUrgent) meta.name.removePrefix("urgent:") else meta.name
+		val effectiveFileTime = fileTime
+			?: File(p2p.metaDir, "${eMeta.key}").lastModified().takeIf { it > 0 }
+			?: System.currentTimeMillis()
 		return JSONObject()
 			.put("key", eMeta.key.toString())
 			.put("author", eMeta.author.name)
@@ -543,6 +546,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			.put("size", meta.length)
 			.put("type", meta.type)
 			.put("created", meta.created)
+			.put("fileTime", effectiveFileTime)
 			.put("urgent", isUrgent)
 	}
 
@@ -559,7 +563,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 				val iden = identities[eMeta.recipient] ?: return@forEach
 				val (meta, _) = eMeta.decrypt(iden)
 				val fileTime = metaFile.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis()
-				entries.add(Entry(fileTime, buildMsgJson(eMeta, meta)))
+				entries.add(Entry(fileTime, buildMsgJson(eMeta, meta, fileTime)))
 			} catch (_: Exception) { /* skip unreadable / undecryptable meta files */
 			}
 		}

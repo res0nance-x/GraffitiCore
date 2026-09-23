@@ -55,6 +55,9 @@ export function showDialog({
    dialog!.querySelector<HTMLElement>('.app-dialog-title')!.textContent = title;
    dialog!.querySelector<HTMLButtonElement>('.app-dialog-confirm')!.textContent = confirmLabel;
 
+   const cancelBtn = dialog!.querySelector<HTMLButtonElement>('.app-dialog-cancel');
+   if (cancelBtn) cancelBtn.style.display = '';
+
    const body = dialog!.querySelector<HTMLElement>('.app-dialog-body')!;
    body.replaceChildren(tpl.content.cloneNode(true));
 

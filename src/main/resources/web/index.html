@@ -22,7 +22,7 @@
 							title="Network Connections & Discovery"><span class="material-symbols-outlined nav-icon-disconnected" id="nav-network-icon">public</span>
 							Net</a></li>
 					<li><a class="app-nav-link" data-section="section-messages" href="#" title="Secure P2P Messages"><span
-								class="material-symbols-outlined">mail</span> Msg</a></li>
+								class="material-symbols-outlined">mail</span> <span id="nav-msg-label">Msg</span></a></li>
 					<li><a class="app-nav-link" data-section="section-identity" href="#"
 							title="Manage Identities & Peer Public Keys"><span class="material-symbols-outlined">person</span>
 							ID</a></li>
@@ -516,7 +516,7 @@ Settings
 	</template>
 
 	<template id="tpl-image-message">
-		<article class="message-item">
+		<article class="message-item msg-type-image">
 			<header class="message-header">
 				<figure class="msg-author">
 					<img alt="" class="msg-author-avatar msg-avatar">
@@ -641,6 +641,47 @@ Settings
 		</div>
 	</template>
 
+	<template id="tpl-message-info">
+		<div class="msg-info-details" style="display: flex; flex-direction: column; gap: 0.65rem; font-size: 0.88rem; min-width: 280px; max-width: 100%;">
+			<div>
+				<strong style="display:block; font-size: 0.72rem; text-transform: uppercase; opacity: 0.65; margin-bottom: 2px;">Name / Path</strong>
+				<span id="msg-info-name" style="word-break: break-all;"></span>
+			</div>
+			<div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+				<div style="flex: 1 1 100px;">
+					<strong style="display:block; font-size: 0.72rem; text-transform: uppercase; opacity: 0.65; margin-bottom: 2px;">Size</strong>
+					<span id="msg-info-size"></span>
+				</div>
+				<div style="flex: 1 1 120px;">
+					<strong style="display:block; font-size: 0.72rem; text-transform: uppercase; opacity: 0.65; margin-bottom: 2px;">Type</strong>
+					<span id="msg-info-type" style="word-break: break-all;"></span>
+				</div>
+			</div>
+			<div>
+				<strong style="display:block; font-size: 0.72rem; text-transform: uppercase; opacity: 0.65; margin-bottom: 2px;">Author</strong>
+				<span id="msg-info-author" style="word-break: break-all;"></span>
+			</div>
+			<div>
+				<strong style="display:block; font-size: 0.72rem; text-transform: uppercase; opacity: 0.65; margin-bottom: 2px;">Recipient</strong>
+				<span id="msg-info-recipient" style="word-break: break-all;"></span>
+			</div>
+			<div style="display: flex; flex-wrap: wrap; gap: 1rem;">
+				<div style="flex: 1 1 130px;">
+					<strong style="display:block; font-size: 0.72rem; text-transform: uppercase; opacity: 0.65; margin-bottom: 2px;">Metadata File Time</strong>
+					<span id="msg-info-filetime"></span>
+				</div>
+				<div style="flex: 1 1 130px;">
+					<strong style="display:block; font-size: 0.72rem; text-transform: uppercase; opacity: 0.65; margin-bottom: 2px;">Content Created Time</strong>
+					<span id="msg-info-created"></span>
+				</div>
+			</div>
+			<div>
+				<strong style="display:block; font-size: 0.72rem; text-transform: uppercase; opacity: 0.65; margin-bottom: 2px;">Message Key</strong>
+				<code id="msg-info-key" style="display:block; font-size: 0.72rem; word-break: break-all; opacity: 0.75; user-select: all; padding: 4px; background: rgba(0,0,0,0.15); border-radius: 4px;"></code>
+			</div>
+		</div>
+	</template>
+
 
 	<!-- Hidden file input for peer import -->
 	<input id="import-peer-file" style="display:none" type="file">
@@ -667,6 +708,10 @@ Settings
 		<button type="button" class="msg-context-item" data-action="download">
 			<span class="material-symbols-outlined" style="font-size: 1.15rem;">download</span>
 			<span>Download</span>
+		</button>
+		<button type="button" class="msg-context-item" data-action="info">
+			<span class="material-symbols-outlined" style="font-size: 1.15rem;">info</span>
+			<span>Info</span>
 		</button>
 		<button type="button" class="msg-context-item danger" data-action="delete">
 			<span class="material-symbols-outlined" style="font-size: 1.15rem;">delete</span>

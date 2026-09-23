@@ -22,7 +22,6 @@ export async function refreshIdentities(): Promise<void> {
             alert(`Add to peers failed: ${(err as Error).message}`);
          }
       },
-      onExport: (item: TableItem) => graffiti.exportPeer(item.key),
       onTogglePersist: async (item: IdentityEntry) => {
          try {
             await graffiti.setIdentityPersistence(item.key, !item.persistent);

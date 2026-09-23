@@ -39,6 +39,7 @@ export interface MessageEntry {
    size: number;
    type: string;
    created: number | string;
+   fileTime?: number;
 }
 
 export interface ConnectionEntry {
