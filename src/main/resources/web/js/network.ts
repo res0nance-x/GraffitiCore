@@ -111,6 +111,13 @@ function updateNetworkNavIcon(): void {
    icon.classList.toggle('nav-icon-disconnected', !isConnected);
 }
 
+export function updateNetTransferIndicator(transferring: boolean): void {
+   const indicator = document.getElementById('nav-net-indicator');
+   if (indicator) {
+      indicator.classList.toggle('is-active', transferring);
+   }
+}
+
 function renderConnections(): void {
    const tbody = connBody();
    [...tbody.querySelectorAll<HTMLElement>('.net-item-card[data-node-key]')].forEach(r => r.remove());
@@ -348,6 +355,10 @@ onWsEvent('node_relay_update', (msg: Record<string, unknown>) => {
    const relay = Boolean(msg.relay);
    setRelayUi(relay);
    setRelayStatus(`Relay mode is ${relay ? 'ON' : 'OFF'}.`);
+});
+
+onWsEvent('transfer_state', (msg: Record<string, unknown>) => {
+   updateNetTransferIndicator(Boolean(msg.transferring));
 });
 
 

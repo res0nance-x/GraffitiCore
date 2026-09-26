@@ -63,6 +63,13 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 					.put("relay", p2p.isNodeRelay(node))
 			)
 		}
+		p2p.onTransferStateChanged = { transferring ->
+			sendToAll(
+				JSONObject()
+					.put("event", "transfer_state")
+					.put("transferring", transferring)
+			)
+		}
 		p2p.onMessageReceived = { encKey ->
 			val metaFile = File(p2p.metaDir, "$encKey")
 			if (metaFile.exists() && p2p.hasContent(encKey)) {
@@ -131,7 +138,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/peer/import" -> content?.let { importPeer(header, it) }
 			"/api/peer/remove" -> removePeer(header)
 			"/api/messages" -> listMessages()
-			"/api/messages/refresh" -> refreshMessages()
+			"/api/messages/refresh" -> refreshMessages(header)
 			"/api/message/remove" -> removeMessage(header)
 			"/api/message/forward" -> forwardMessage(header)
 			"/api/message/send/text" -> content?.let { sendTextMessage(header, it) }
@@ -157,8 +164,15 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/pack/create/file" -> content?.let { uploadPackFile(header, it) } ?: err("No file content provided")
 			"/api/pack/create/finish" -> finishPackCreation(header)
 			"/api/pack/create/cancel" -> cancelPackCreation(header)
+			"/api/transfer/status" -> transferStatus()
 			"/api/version" -> getVersion()
 			else -> null
+		}
+	}
+
+	private fun transferStatus(): Content {
+		return ok {
+			put("transferring", p2p.isAnyTransferActive())
 		}
 	}
 
@@ -573,7 +587,10 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		return ok { put("messages", arr) }
 	}
 
-	private fun refreshMessages(): Content {
+	private fun refreshMessages(header: JSONObject? = null): Content {
+		if (header?.optBoolean("full", false) == true) {
+			p2p.resetPeerQueryTimes()
+		}
 		p2p.syncAllConnectedNodes()
 		return ok()
 	}

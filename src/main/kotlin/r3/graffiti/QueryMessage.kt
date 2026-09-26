@@ -9,12 +9,14 @@ import java.io.DataOutputStream
 
 class QueryMessage(
 	val authorSet: QueryCondition,
-	val recipientSet: QueryCondition
+	val recipientSet: QueryCondition,
+	val queryTime: Long = 0L
 ) : Writable {
 	override fun write(dos: DataOutputStream) {
 		StringWritable(type).write(dos)
 		authorSet.write(dos)
 		recipientSet.write(dos)
+		dos.writeLong(queryTime)
 	}
 
 	fun matches(eMeta: EncryptedContentMetaData): Boolean {
@@ -38,7 +40,8 @@ class QueryMessage(
 			}
 			val authorSet = QueryCondition.read(dis)
 			val recipientSet = QueryCondition.read(dis)
-			return QueryMessage(authorSet, recipientSet)
+			val queryTime = if (dis.available() >= 8) dis.readLong() else 0L
+			return QueryMessage(authorSet, recipientSet, queryTime)
 		}
 	}
 }

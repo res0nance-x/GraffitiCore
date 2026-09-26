@@ -28,6 +28,14 @@ const statusEl = document.getElementById('send-status') as HTMLElement | null;
 let isSending = false;
 let isRefreshing = false;
 
+function setSendingState(sending: boolean): void {
+   isSending = sending;
+   const indicator = document.getElementById('nav-msg-indicator');
+   if (indicator) {
+      indicator.classList.toggle('is-active', sending);
+   }
+}
+
 /** Tracks keys already rendered so WS-triggered refreshes don't duplicate rows. */
 const currentMessages = new Set<string>();
 
@@ -1147,7 +1155,7 @@ async function sendPayload(payload: Payload): Promise<void> {
       setStatus('Send in progress. Only one item can be sent at a time.');
       return;
    }
-   isSending = true;
+   setSendingState(true);
    setStatus(`Sending ${payload.type}`);
    try {
       const {identityKey, peerKey} = payload;
@@ -1165,7 +1173,7 @@ async function sendPayload(payload: Payload): Promise<void> {
    } catch (err) {
       setStatus(`Failed: ${(err as Error).message}`);
    } finally {
-      isSending = false;
+      setSendingState(false);
    }
 }
 
@@ -1351,7 +1359,7 @@ async function sendPackPipeline(
       return;
    }
 
-   isSending = true;
+   setSendingState(true);
    setStatus(`Preparing pack: ${packName}...`);
 
    const progress = showProgressModal('Creating Pack Archive', `Starting upload for ${packName}...`);
@@ -1394,7 +1402,7 @@ async function sendPackPipeline(
       }
       alert(`Pack creation error: ${errMsg}`);
    } finally {
-      isSending = false;
+      setSendingState(false);
       progress.close();
    }
 }

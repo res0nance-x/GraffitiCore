@@ -207,6 +207,7 @@ class P2PVerificationAndWhitelistTest {
 
 		val decrypted = p2pB.getContent(encKey)
 		assertEquals("Hello Bob through P2P", decrypted.readString())
+		assertFalse(p2pB.isAnyTransferActive(), "Bob should not be transferring after content is retrieved")
 
 		// 3. Now test Whitelist: Enable whitelist on Bob
 		p2pB.setWhitelistEnabled(true)
