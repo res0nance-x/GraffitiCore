@@ -51,6 +51,32 @@ export interface ConnectionEntry {
    relay?: boolean;
 }
 
+export interface NodeStateEntry extends ConnectionEntry {
+   isTransferring?: boolean;
+   isSending?: boolean;
+   isReceiving?: boolean;
+}
+
+export interface AppStateResponse extends ApiOk {
+   version: number;
+   transferring: boolean;
+   encoding: boolean;
+   nodesVersion: number;
+   nodes: NodeStateEntry[];
+   identitiesVersion: number;
+   identities: IdentityEntry[];
+   peersVersion: number;
+   peers: PeerEntry[];
+   messagesVersion: number;
+   messageKeys: string[];
+   relay?: boolean;
+   whitelist?: boolean;
+   server?: {
+      running: boolean;
+      port: number;
+   };
+}
+
 export interface NodeInfo extends ApiOk {
    peerKey: string;
    peerName: string;
@@ -195,6 +221,12 @@ async function download(path: string, params: Record<string, string> = {}): Prom
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export const graffiti = {
+
+   // ── State ─────────────────────────────────────────────────────────────
+
+   getState(): Promise<AppStateResponse> {
+      return get<AppStateResponse>('/api/state');
+   },
 
    // ── Identity ──────────────────────────────────────────────────────────
 

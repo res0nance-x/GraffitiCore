@@ -22,6 +22,7 @@
 	 "messages.ts",
 	 "network.ts",
 	 "peers.ts",
+	 "state.ts",
 	 "storage.ts",
 	 "table.ts",
 	 "theme-init.ts"

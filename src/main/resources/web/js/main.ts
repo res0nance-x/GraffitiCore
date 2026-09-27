@@ -1,5 +1,6 @@
 import {initNav} from './app.js';
 import './storage.js';
+import './state.js';
 
 await import('./network.js');
 initNav('section-network');

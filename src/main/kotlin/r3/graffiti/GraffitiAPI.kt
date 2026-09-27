@@ -29,46 +29,27 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 	private var lastBellPlayedTime: Long = 0L
 	private val settingsFile = File(p2p.graffitiDir, "settings.json")
 
+	val stateManager = StateManager(p2p) { v ->
+		sendToAll(
+			JSONObject()
+				.put("event", "state_changed")
+				.put("version", v)
+		)
+	}
+
 	init {
 		// Wire up p2p event callbacks — p2p is always ready at construction.
-		p2p.onNodeConnected = { node, inbound ->
-			val host = node.remoteAddress.address.hostAddress
-			val port = node.remoteAddress.port
-			sendToAll(
-				JSONObject()
-					.put("event", "node_connected")
-					.put("host", host)
-					.put("port", port)
-					.put("inbound", inbound)
-			)
+		p2p.onNodeConnected = { _, _ ->
+			stateManager.onNodesChanged()
 		}
-		p2p.onNodeDisconnected = { node ->
-			val host = node.remoteAddress.address.hostAddress
-			val port = node.remoteAddress.port
-			sendToAll(
-				JSONObject()
-					.put("event", "node_disconnected")
-					.put("host", host)
-					.put("port", port)
-			)
+		p2p.onNodeDisconnected = { _ ->
+			stateManager.onNodesChanged()
 		}
-		p2p.onNodeIdentified = { node, peer ->
-			sendToAll(
-				JSONObject()
-					.put("event", "node_identified")
-					.put("host", node.remoteAddress.address.hostAddress)
-					.put("port", node.remoteAddress.port)
-					.put("peerKey", peer.key.toString())
-					.put("peerName", peer.key.name)
-					.put("relay", p2p.isNodeRelay(node))
-			)
+		p2p.onNodeIdentified = { _, _ ->
+			stateManager.onNodesChanged()
 		}
-		p2p.onTransferStateChanged = { transferring ->
-			sendToAll(
-				JSONObject()
-					.put("event", "transfer_state")
-					.put("transferring", transferring)
-			)
+		p2p.onTransferStateChanged = { _ ->
+			stateManager.onTransferChanged()
 		}
 		p2p.onMessageReceived = { encKey ->
 			val metaFile = File(p2p.metaDir, "$encKey")
@@ -90,26 +71,12 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 							}
 						}
 					}
-					sendToAll(
-						JSONObject().put("event", "messages_update").put("action", "add")
-							.put("msg", buildMsgJson(eMeta, meta))
-					)
-				} catch (_: Exception) {
-					// Still notify so the UI can fall back to a full refresh.
-					sendToAll(
-						JSONObject().put("event", "messages_update").put("action", "add")
-					)
-				}
+				} catch (_: Exception) {}
 			}
+			stateManager.onMessagesChanged()
 		}
-		p2p.onPeerReceived = { peer ->
-			sendToAll(
-				JSONObject()
-					.put("event", "peers_update")
-					.put("action", "add")
-					.put("peerKey", peer.key.toString())
-					.put("peerName", peer.key.name)
-			)
+		p2p.onPeerReceived = { _ ->
+			stateManager.onPeersChanged()
 		}
 		p2p.setWhitelistEnabled(loadSetting("graffiti:whitelist-enabled") == "true")
 	}
@@ -126,6 +93,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 	private fun dispatch(header: JSONObject, content: Content?): Content? {
 		val path = header.get("path")
 		return when (path) {
+			"/api/state" -> serveState()
 			"/api/avatar" -> serveAvatar(header)
 			"/api/identities" -> listIdentities()
 			"/api/identity/create" -> createIdentity(header, content)
@@ -168,6 +136,10 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/version" -> getVersion()
 			else -> null
 		}
+	}
+
+	private fun serveState(): Content {
+		return JsonContent(stateManager.getStateJson().toString())
 	}
 
 	private fun transferStatus(): Content {
@@ -301,6 +273,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 
 		val session = PackStagingSession(sessionId, idenKey, peerKey, packName, isUrgent, stagingDir)
 		packStagingSessions[sessionId] = session
+		stateManager.setEncoding(true)
 		return ok { put("sessionId", sessionId) }
 	}
 
@@ -354,10 +327,12 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 
 		val iden = p2p.getIdentityByKey(session.identityKey) ?: run {
 			session.stagingDir.deleteRecursively()
+			stateManager.setEncoding(false)
 			return err("No identity found for ${session.identityKey}")
 		}
 		val peer = p2p.getPeerByKey(session.peerKey) ?: p2p.getIdentityByKey(IdentityKey(session.peerKey.arr))?.asPeer() ?: run {
 			session.stagingDir.deleteRecursively()
+			stateManager.setEncoding(false)
 			return err("No peer found for ${session.peerKey}")
 		}
 
@@ -374,17 +349,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			}
 			val encKey = p2p.pkeEncrypt(wrappedContent, iden, peer)
 			p2p.pushNewMessage(encKey)
-			val metaFile = File(p2p.metaDir, "$encKey")
-			try {
-				val eMeta = DataInputStream(metaFile.inputStream()).use { EncryptedContentMetaData.read(it) }
-				val (meta, _) = eMeta.decrypt(iden)
-				sendToAll(
-					JSONObject().put("event", "messages_update").put("action", "add")
-						.put("msg", buildMsgJson(eMeta, meta))
-				)
-			} catch (_: Exception) {
-				sendToAll(JSONObject().put("event", "messages_update").put("action", "add"))
-			}
+			stateManager.onMessagesChanged()
 			return ok { put("key", encKey.toString()) }
 		} catch (e: Exception) {
 			log("Pack creation failed: ${e.message}")
@@ -394,6 +359,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			if (tempPackFile.exists()) {
 				tempPackFile.delete()
 			}
+			stateManager.setEncoding(false)
 		}
 	}
 
@@ -403,6 +369,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			val session = packStagingSessions.remove(sessionId)
 			session?.stagingDir?.deleteRecursively()
 		}
+		stateManager.setEncoding(false)
 		return ok()
 	}
 
@@ -435,17 +402,20 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			}
 		} ?: header.optString("seed", null) ?: return err("Missing 'seed' parameter")
 		val iden = p2p.createIdentity(seed)
-		sendToAll(JSONObject().put("event", "identities_update"))
-		sendToAll(JSONObject().put("event", "messages_reload"))
+		stateManager.onIdentitiesChanged()
+		stateManager.onMessagesChanged()
 		return ok { put("name", iden.key.name).put("key", iden.key) }
 	}
 
 	private fun removeIdentity(header: JSONObject): Content {
 		val keyStr = header.getString("key")
 		val removed = p2p.removeIdentity(IdentityKey(keyStr))
-		sendToAll(JSONObject().put("event", "identities_update"))
-		sendToAll(JSONObject().put("event", "messages_reload"))
-		return if (removed) ok() else err("Identity not found")
+		if (removed) {
+			stateManager.onIdentitiesChanged()
+			stateManager.onMessagesChanged()
+			return ok()
+		}
+		return err("Identity not found")
 	}
 
 	private fun persistIdentity(header: JSONObject): Content {
@@ -454,7 +424,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		val key = IdentityKey(keyStr)
 		val success = p2p.setIdentityPersistence(key, persistent)
 		if (success) {
-			sendToAll(JSONObject().put("event", "identities_update"))
+			stateManager.onIdentitiesChanged()
 			return ok()
 		}
 		return err("Identity not found or failed to set persistence")
@@ -466,13 +436,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		val iden = p2p.getIdentityByKey(IdentityKey(keyStr)) ?: return err("Identity not found for $keyStr")
 		val peer = iden.asPeer()
 		p2p.savePeer(peer)
-		sendToAll(
-			JSONObject()
-				.put("event", "peers_update")
-				.put("action", "add")
-				.put("peerKey", peer.key.toString())
-				.put("peerName", peer.key.name)
-		)
+		stateManager.onPeersChanged()
 		return ok {
 			put("name", peer.key.name)
 			put("key", peer.key.toString())
@@ -484,11 +448,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			val enabled = header.optBoolean("enabled", false) || header.optString("enabled") == "true"
 			p2p.setWhitelistEnabled(enabled)
 			saveSetting("graffiti:whitelist-enabled", enabled.toString())
-			sendToAll(
-				JSONObject()
-					.put("event", "whitelist_update")
-					.put("enabled", enabled)
-			)
+			stateManager.onWhitelistChanged()
 			return ok { put("enabled", enabled) }
 		}
 		return ok { put("enabled", p2p.isWhitelistEnabled()) }
@@ -517,7 +477,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			return err("Invalid peer file: ${e.message}")
 		}
 		p2p.savePeer(peer)
-		sendToAll(JSONObject().put("event", "peers_update"))
+		stateManager.onPeersChanged()
 		return ok { put("name", peer.key.name).put("key", peer.key) }
 	}
 
@@ -525,8 +485,11 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 	private fun removePeer(header: JSONObject): Content {
 		val keyStr = header.getString("key")
 		val removed = p2p.removePeer(PeerKey(keyStr))
-		sendToAll(JSONObject().put("event", "peers_update"))
-		return if (removed) ok() else err("Peer not found")
+		if (removed) {
+			stateManager.onPeersChanged()
+			return ok()
+		}
+		return err("Peer not found")
 	}
 
 	/** GET param: {@code key} — returns the peer file as a download */
@@ -659,11 +622,13 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		val port = header.getInt("port")
 		p2p.startTCPServer(port)
 		val actualPort = p2p.serverPort ?: port
+		stateManager.onServerStatusChanged()
 		return ok { put("port", actualPort) }
 	}
 
 	private fun stopServer(): Content {
 		p2p.stopTCPServer()
+		stateManager.onServerStatusChanged()
 		return ok()
 	}
 
@@ -729,7 +694,9 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			}
 		}
 
-		sendToAll(JSONObject().put("event", "messages_reload"))
+		if (count > 0) {
+			stateManager.onMessagesChanged()
+		}
 
 		return ok {
 			put("purged", count)
@@ -739,9 +706,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 	private fun removeMessage(header: JSONObject): Content {
 		val key = header.getString("key")
 		p2p.deleteMessage(EncryptedMetaKey(key))
-		sendToAll(
-			JSONObject().put("event", "messages_update").put("action", "remove").put("key", key)
-		)
+		stateManager.onMessagesChanged()
 		return ok()
 	}
 
@@ -769,20 +734,15 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		).apply {
 			path = newPath
 		}
-		val encKey = p2p.pkeEncrypt(wrappedContent, iden, peer)
-		p2p.pushNewMessage(encKey)
-		val metaFile = File(p2p.metaDir, "$encKey")
+		stateManager.setEncoding(true)
 		try {
-			val eMeta = DataInputStream(metaFile.inputStream()).use { EncryptedContentMetaData.read(it) }
-			val (meta, _) = eMeta.decrypt(iden)
-			sendToAll(
-				JSONObject().put("event", "messages_update").put("action", "add")
-					.put("msg", buildMsgJson(eMeta, meta))
-			)
-		} catch (_: Exception) {
-			sendToAll(JSONObject().put("event", "messages_update").put("action", "add"))
+			val encKey = p2p.pkeEncrypt(wrappedContent, iden, peer)
+			p2p.pushNewMessage(encKey)
+			stateManager.onMessagesChanged()
+			return ok { put("key", encKey.toString()) }
+		} finally {
+			stateManager.setEncoding(false)
 		}
-		return ok { put("key", encKey.toString()) }
 	}
 
 	private fun resolveSendKeys(header: JSONObject): Pair<IdentityKey, PeerKey>? {
@@ -816,20 +776,15 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		} else {
 			TextContent(text)
 		}
-		val encKey = p2p.pkeEncrypt(textContent, iden, peer)
-		p2p.pushNewMessage(encKey)
-		val metaFile = File(p2p.metaDir, "$encKey")
+		stateManager.setEncoding(true)
 		try {
-			val eMeta = DataInputStream(metaFile.inputStream()).use { EncryptedContentMetaData.read(it) }
-			val (meta, _) = eMeta.decrypt(iden)
-			sendToAll(
-				JSONObject().put("event", "messages_update").put("action", "add")
-					.put("msg", buildMsgJson(eMeta, meta))
-			)
-		} catch (_: Exception) {
-			sendToAll(JSONObject().put("event", "messages_update").put("action", "add"))
+			val encKey = p2p.pkeEncrypt(textContent, iden, peer)
+			p2p.pushNewMessage(encKey)
+			stateManager.onMessagesChanged()
+			return ok { put("key", encKey.toString()) }
+		} finally {
+			stateManager.setEncoding(false)
 		}
-		return ok { put("key", encKey.toString()) }
 	}
 
 	private fun sendFileMessage(header: JSONObject, content: Content?): Content {
@@ -850,20 +805,15 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			path = storedPath
 			ext = originalName.substringAfterLast('.', "").lowercase()
 		}
-		val encKey = p2p.pkeEncrypt(wrappedContent, iden, peer)
-		p2p.pushNewMessage(encKey)
-		val metaFile = File(p2p.metaDir, "$encKey")
+		stateManager.setEncoding(true)
 		try {
-			val eMeta = DataInputStream(metaFile.inputStream()).use { EncryptedContentMetaData.read(it) }
-			val (meta, _) = eMeta.decrypt(iden)
-			sendToAll(
-				JSONObject().put("event", "messages_update").put("action", "add")
-					.put("msg", buildMsgJson(eMeta, meta))
-			)
-		} catch (_: Exception) {
-			sendToAll(JSONObject().put("event", "messages_update").put("action", "add"))
+			val encKey = p2p.pkeEncrypt(wrappedContent, iden, peer)
+			p2p.pushNewMessage(encKey)
+			stateManager.onMessagesChanged()
+			return ok { put("key", encKey.toString()) }
+		} finally {
+			stateManager.setEncoding(false)
 		}
-		return ok { put("key", encKey.toString()) }
 	}
 
 	private fun sendBellMessage(header: JSONObject): Content {
@@ -875,20 +825,15 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			path = "bell"
 			ext = "bell"
 		}
-		val encKey = p2p.pkeEncrypt(wrappedContent, iden, peer)
-		p2p.pushNewMessage(encKey)
-		val metaFile = File(p2p.metaDir, "$encKey")
+		stateManager.setEncoding(true)
 		try {
-			val eMeta = DataInputStream(metaFile.inputStream()).use { EncryptedContentMetaData.read(it) }
-			val (meta, _) = eMeta.decrypt(iden)
-			sendToAll(
-				JSONObject().put("event", "messages_update").put("action", "add")
-					.put("msg", buildMsgJson(eMeta, meta))
-			)
-		} catch (_: Exception) {
-			sendToAll(JSONObject().put("event", "messages_update").put("action", "add"))
+			val encKey = p2p.pkeEncrypt(wrappedContent, iden, peer)
+			p2p.pushNewMessage(encKey)
+			stateManager.onMessagesChanged()
+			return ok { put("key", encKey.toString()) }
+		} finally {
+			stateManager.setEncoding(false)
 		}
-		return ok { put("key", encKey.toString()) }
 	}
 
 	private fun serveAvatar(header: JSONObject): Content {
@@ -982,7 +927,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		if (hasEnabled) {
 			val enabled = header.getBoolean("enabled")
 			p2p.setRelayEnabled(enabled)
-			sendToAll(JSONObject().put("event", "node_relay_update").put("relay", p2p.isRelayEnabled()))
+			stateManager.onRelayChanged()
 		}
 		return ok { put("relay", p2p.isRelayEnabled()) }
 	}

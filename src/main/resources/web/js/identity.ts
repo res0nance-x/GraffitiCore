@@ -145,14 +145,63 @@ whitelistToggle?.addEventListener('change', async () => {
    }
 });
 
-onSectionShow('section-identity', refresh);
-onWsEvent('identities_update', refreshIdentities);
-onWsEvent('peers_update', refreshPeers);
-onWsEvent('whitelist_update', (data: { enabled?: boolean }) => {
-   if (whitelistToggle && typeof data?.enabled === 'boolean') {
-      whitelistToggle.checked = data.enabled;
-   } else {
-      refreshWhitelist();
+export async function applyContactsState(identities: IdentityEntry[], peers: PeerEntry[]): Promise<void> {
+   if (identitiesTable) {
+      try {
+         const node = await graffiti.nodeInfo();
+         buildTable(identitiesTable, identities, {
+            nodeKey: node.peerKey,
+            onAddToPeers: async (item: IdentityEntry) => {
+               try {
+                  await graffiti.identityToPeer(item.key);
+               } catch (err) {
+                  alert(`Add to peers failed: ${(err as Error).message}`);
+               }
+            },
+            onTogglePersist: async (item: IdentityEntry) => {
+               try {
+                  await graffiti.setIdentityPersistence(item.key, !item.persistent);
+               } catch (err) {
+                  alert(`Persistence update failed: ${(err as Error).message}`);
+               }
+            },
+            onRemove: async (item: TableItem) => {
+               const iden = item as IdentityEntry;
+               if (iden.key === node.peerKey) {
+                  alert("Cannot remove the server node identity.");
+                  return;
+               }
+               if (!confirm(`Remove identity "${iden.name}"? This cannot be undone.`)) return;
+               try {
+                  await graffiti.removeIdentity(iden.key);
+               } catch (err) {
+                  alert(`Remove failed: ${(err as Error).message}`);
+               }
+            },
+         });
+      } catch (e) {
+         console.warn('Failed to render identities table:', e);
+      }
    }
-});
-onWsOpen(refresh);
+   if (peersTable) {
+      buildTable(peersTable, peers, {
+         onRemove: async (item: PeerEntry) => {
+            if (!confirm(`Remove peer "${item.name}"?`)) return;
+            try {
+               await graffiti.removePeer(item.key);
+            } catch (err) {
+               alert(`Remove failed: ${(err as Error).message}`);
+            }
+         },
+         onExport: (item: PeerEntry) => graffiti.exportPeer(item.key),
+      });
+   }
+}
+
+export function applyWhitelistState(enabled: boolean): void {
+   if (whitelistToggle) {
+      whitelistToggle.checked = enabled;
+   }
+}
+
+onSectionShow('section-identity', refresh);

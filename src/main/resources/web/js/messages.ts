@@ -28,12 +28,16 @@ const statusEl = document.getElementById('send-status') as HTMLElement | null;
 let isSending = false;
 let isRefreshing = false;
 
-function setSendingState(sending: boolean): void {
-   isSending = sending;
+export function updateMsgIndicator(busy: boolean): void {
    const indicator = document.getElementById('nav-msg-indicator');
    if (indicator) {
-      indicator.classList.toggle('is-active', sending);
+      indicator.classList.toggle('is-active', busy || isSending);
    }
+}
+
+function setSendingState(sending: boolean): void {
+   isSending = sending;
+   updateMsgIndicator(sending);
 }
 
 /** Tracks keys already rendered so WS-triggered refreshes don't duplicate rows. */
@@ -44,6 +48,34 @@ const currentMessages = new Set<string>();
 const nameToKey = new Map<string, string>();
 let knownIdentities: IdentityEntry[] = [];
 let knownPeers: PeerEntry[] = [];
+
+export function applyMessagesContactsState(identities: IdentityEntry[], peers: PeerEntry[]): void {
+   knownIdentities = identities;
+   knownPeers = peers;
+   nameToKey.clear();
+   for (const id of identities) {
+      nameToKey.set(id.name, id.key);
+   }
+   for (const peer of peers) {
+      nameToKey.set(peer.name, peer.key);
+   }
+   void populateSelects();
+}
+
+export function applyMessagesState(messageKeys: string[]): void {
+   let changed = messageKeys.length !== currentMessages.size;
+   if (!changed) {
+      for (const k of messageKeys) {
+         if (!currentMessages.has(k)) {
+            changed = true;
+            break;
+         }
+      }
+   }
+   if (changed) {
+      queueRefreshMessages();
+   }
+}
 
 function isSavedIdentity(key: string, identities: IdentityEntry[]): boolean {
    return identities.some(id => id.key === key && id.persistent === true);
@@ -1593,36 +1625,7 @@ onSectionShow('section-messages', () => {
    void queueRefreshMessages();
 });
 
-onWsOpen(() => {
-   void populateSelects();
-   void queueRefreshMessages();
-});
 
-async function handleForegroundRefresh(): Promise<void> {
-   try {
-      await graffiti.refreshMessages();
-   } catch (e) {
-      console.warn('Foreground refreshMessages error:', e);
-   }
-   await populateSelects();
-   await refreshMessages();
-}
-
-document.addEventListener('visibilitychange', () => {
-   if (document.visibilityState === 'visible') {
-      void handleForegroundRefresh();
-   }
-});
-
-window.addEventListener('focus', () => {
-   void handleForegroundRefresh();
-});
-
-window.addEventListener('pageshow', () => {
-   void handleForegroundRefresh();
-});
-
-queueRefreshMessages();
 
 // ── Notifications ─────────────────────────────────────────────────────────────
 let lastNotificationTime = 0;
@@ -1661,42 +1664,7 @@ if (typeof Notification !== 'undefined' && Notification.permission === 'default'
    document.addEventListener('click', requestPermission, {once: true});
 }
 
-// ── WebSocket hooks ───────────────────────────────────────────────────────────
-onWsEvent('messages_update', async (msg: Record<string, unknown>) => {
-   if (msg.action === 'remove') {
-      const removedKey = msg.key as string;
-      currentMessages.delete(removedKey);
-      evictCachedElement(removedKey);
-      allRawMessages = allRawMessages.filter(m => m.key !== removedKey);
-      updateFilteredMessages();
-      renderMessageList();
-      updateUnreadBadges();
-   } else if (msg.action === 'add') {
-      const m = msg.msg as MessageData | undefined;
-      if (m) {
-         const currentSelected = toField?.value ?? '';
-         if (currentSelected && isMessageInSelectedTopic(m, currentSelected)) {
-            const msgTime = typeof m.fileTime === 'number' && m.fileTime > 0 ? m.fileTime : Number(m.created || 0);
-            markTopicRead(currentSelected, Math.max(Date.now(), msgTime));
-         }
-         if (!currentMessages.has(m.key)) {
-            notifyNewMessage(m);
-         }
-      }
-      queueRefreshMessages();
-   } else {
-      queueRefreshMessages();
-   }
-});
-onWsEvent('identities_update', () => {
-   void populateSelects();
-   void queueRefreshMessages();
-});
-onWsEvent('messages_reload', queueRefreshMessages);
-onWsEvent('peers_update', () => {
-   void populateSelects();
-   void queueRefreshMessages();
-});
+
 
 // ── Unified Media Content Viewer & Zoom Controller ────────────────────────────
 

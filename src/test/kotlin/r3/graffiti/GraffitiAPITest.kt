@@ -236,5 +236,99 @@ class GraffitiAPITest {
 		val tempPackFile = File(p2p.tmpDir, "pack_$sessionId.pack")
 		assertFalse(tempPackFile.exists())
 	}
+
+	@Test
+	fun testStateManagerAndApiStateLifecycle(@TempDir tempDir: File) {
+		val p2p = GraffitiP2P(tempDir)
+		val events = mutableListOf<JSONObject>()
+		val api = GraffitiAPI(p2p) { msg -> events.add(msg) }
+
+		// 1. Initial /api/state call
+		val stateHeader = JSONObject().put("path", "/api/state")
+		val res1 = api.handle(stateHeader, null)
+		assertNotNull(res1)
+		val json1 = JSONObject(res1!!.readString())
+		assertTrue(json1.getBoolean("ok"))
+		val initialVersion = json1.getLong("version")
+		assertTrue(initialVersion >= 1L)
+		assertFalse(json1.getBoolean("transferring"))
+		assertFalse(json1.getBoolean("encoding"))
+		assertTrue(json1.has("nodes"))
+		assertTrue(json1.has("identities"))
+		assertTrue(json1.has("peers"))
+		assertTrue(json1.has("messageKeys"))
+
+		// 2. Identity creation triggers state change notification
+		val createIdHeader = JSONObject().put("path", "/api/identity/create")
+		val createIdRes = api.handle(createIdHeader, TestStringContent(JSONObject().put("seed", "test seed phrase for state manager").toString()))
+		assertNotNull(createIdRes)
+		val createIdJson = JSONObject(createIdRes!!.readString())
+		assertTrue(createIdJson.getBoolean("ok"))
+
+		assertTrue(events.isNotEmpty())
+		val lastEvent = events.last()
+		assertEquals("state_changed", lastEvent.getString("event"))
+		val newVersion = lastEvent.getLong("version")
+		assertTrue(newVersion > initialVersion)
+
+		// 3. /api/state reflects the updated version and identity list
+		val res2 = api.handle(stateHeader, null)
+		assertNotNull(res2)
+		val json2 = JSONObject(res2!!.readString())
+		assertEquals(newVersion, json2.getLong("version"))
+		assertEquals(1, json2.getJSONArray("identities").length())
+
+		// 4. Encoding flag updates version and state snapshot
+		api.stateManager.setEncoding(true)
+		val res3 = api.handle(stateHeader, null)
+		assertNotNull(res3)
+		val json3 = JSONObject(res3!!.readString())
+		assertTrue(json3.getBoolean("encoding"))
+		assertTrue(json3.getLong("version") > newVersion)
+
+		api.stateManager.setEncoding(false)
+		val res4 = api.handle(stateHeader, null)
+		assertNotNull(res4)
+		val json4 = JSONObject(res4!!.readString())
+		assertFalse(json4.getBoolean("encoding"))
+	}
+
+	@Test
+	fun testStartupTempFilesCleanup(@TempDir baseDir: File) {
+		val tmpDir = File(baseDir, "tmp")
+		tmpDir.mkdirs()
+
+		// 1. Create leftover files from previous run: 0-size file, large file, and subfolder
+		val zeroByteFile = File(tmpDir, "r3tmp_0byte.tmp").also { it.createNewFile() }
+		val largeFile = File(tmpDir, "r3tmp_large.tmp").also { it.writeBytes(ByteArray(1024 * 1024)) }
+		val staleDir = File(tmpDir, "pack_stage_12345").also {
+			it.mkdirs()
+			File(it, "stale_payload.bin").writeBytes(ByteArray(512))
+		}
+
+		assertTrue(zeroByteFile.exists())
+		assertTrue(largeFile.exists())
+		assertTrue(staleDir.exists())
+
+		// 2. Starting GraffitiP2P should automatically purge all pre-existing temp files on startup
+		val p2p = GraffitiP2P(baseDir)
+		assertFalse(zeroByteFile.exists())
+		assertFalse(largeFile.exists())
+		assertFalse(staleDir.exists())
+		assertTrue(tmpDir.exists())
+		assertEquals(0, tmpDir.listFiles()?.size ?: 0)
+
+		// 3. Test cleanTempFiles with age threshold for periodic cleanup
+		val recentFile = File(tmpDir, "recent.tmp").also { it.writeBytes("recent".toByteArray()) }
+		val oldFile = File(tmpDir, "old.tmp").also {
+			it.writeBytes("old".toByteArray())
+			it.setLastModified(System.currentTimeMillis() - 3600_000L) // 1 hour old
+		}
+
+		val cleaned = p2p.cleanTempFiles(maxAgeMs = 30 * 60 * 1000L)
+		assertEquals(1, cleaned)
+		assertTrue(recentFile.exists())
+		assertFalse(oldFile.exists())
+	}
 }
 

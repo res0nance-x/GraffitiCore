@@ -170,6 +170,9 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	}
 
 	init {
+		// Clean up all old temporary files from previous runs
+		cleanTempFiles(maxAgeMs = 0L)
+
 		val serverIdenFile = File(graffitiDir, "serverIdentity")
 		serverIdentity = if (serverIdenFile.exists()) {
 			serverIdenFile.toDataInputStream().use { Identity.read(it) }
@@ -1010,6 +1013,17 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		val isRelay: Boolean = false
 	)
 
+	data class ConnectionNodeInfo(
+		val addr: InetSocketAddress,
+		val inbound: Boolean,
+		val peerKey: String? = null,
+		val peerName: String? = null,
+		val isRelay: Boolean = false,
+		val isTransferring: Boolean = false,
+		val isSending: Boolean = false,
+		val isReceiving: Boolean = false
+	)
+
 	fun listConnections(): List<ConnectionInfo> {
 		val result = mutableListOf<ConnectionInfo>()
 		synchronized(connectionMap) {
@@ -1033,6 +1047,47 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 					nodeRelayMap[node] ?: false
 				)
 			)
+		}
+		return result
+	}
+
+	fun listDetailedConnections(): List<ConnectionNodeInfo> {
+		val result = mutableListOf<ConnectionNodeInfo>()
+		synchronized(connectionMap) {
+			connectionMap.forEach { (addr, node) ->
+				if (!node.isClosed()) {
+					val peer = nodePeerMap[node]
+					result.add(
+						ConnectionNodeInfo(
+							addr = addr,
+							inbound = false,
+							peerKey = peer?.key?.toString(),
+							peerName = peer?.key?.name,
+							isRelay = nodeRelayMap[node] ?: false,
+							isTransferring = node.isTransferring(),
+							isSending = node.isSending(),
+							isReceiving = node.isReceiving()
+						)
+					)
+				}
+			}
+		}
+		tcpServer?.nodeList?.forEach { node ->
+			if (!node.isClosed()) {
+				val peer = nodePeerMap[node]
+				result.add(
+					ConnectionNodeInfo(
+						addr = node.remoteAddress,
+						inbound = true,
+						peerKey = peer?.key?.toString(),
+						peerName = peer?.key?.name,
+						isRelay = nodeRelayMap[node] ?: false,
+						isTransferring = node.isTransferring(),
+						isSending = node.isSending(),
+						isReceiving = node.isReceiving()
+					)
+				)
+			}
 		}
 		return result
 	}
@@ -1096,5 +1151,33 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		// Belt-and-suspenders: prune entries that closed without firing their onClose.
 		synchronized(connectionMap) { connectionMap.entries.removeIf { it.value.isClosed() } }
 		tcpServer?.nodeList?.removeIf { it.isClosed() }
+
+		// Clean up orphaned temp files older than 30 minutes
+		cleanTempFiles(maxAgeMs = 30 * 60 * 1000L)
+	}
+
+	fun cleanTempFiles(maxAgeMs: Long = 0L): Int {
+		val now = System.currentTimeMillis()
+		val files = tmpDir.listFiles() ?: return 0
+		var count = 0
+		var bytesFreed = 0L
+		for (file in files) {
+			try {
+				val lastMod = file.lastModified()
+				if (maxAgeMs <= 0L || (now - lastMod > maxAgeMs)) {
+					val len = if (file.isDirectory) file.walkTopDown().sumOf { it.length() } else file.length()
+					if (file.deleteRecursively()) {
+						count++
+						bytesFreed += len
+					}
+				}
+			} catch (e: Exception) {
+				log("Failed to delete temp file ${file.name}: ${e.message}")
+			}
+		}
+		if (count > 0) {
+			log("Cleaned up $count stale temp file(s) ($bytesFreed bytes) from $tmpDir")
+		}
+		return count
 	}
 }

@@ -3,12 +3,12 @@
  */
 
 import {onSectionShow, onWsEvent, onWsOpen} from './app.js';
-import {ConnectionEntry, graffiti} from './graffiti-api.js';
+import {ConnectionEntry, NodeStateEntry, graffiti} from './graffiti-api.js';
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
-interface ConnectionData extends ConnectionEntry {
-   // already has host, port, inbound, peerKey?, peerName?
+interface ConnectionData extends NodeStateEntry {
+   // has host, port, inbound, peerKey?, peerName?, relay?, isTransferring?, isSending?, isReceiving?
 }
 
 interface DiscoveredNode {
@@ -138,7 +138,10 @@ function buildConnectionCard(key: string, c: ConnectionData): HTMLDivElement {
    div.className = 'net-item-card';
    div.dataset.nodeKey = key;
 
-   const dirLabel = c.inbound ? '↓ Inbound' : '↑ Outbound';
+   const transferLabel = c.isSending && c.isReceiving ? ' (transferring ↑↓)' :
+                         c.isSending ? ' (sending ↑)' :
+                         c.isReceiving ? ' (receiving ↓)' : '';
+   const dirLabel = (c.inbound ? '↓ Inbound' : '↑ Outbound') + transferLabel;
    const name = c.peerName ?? '…';
    const avatarKey = c.peerKey ?? null;
    const relayBadgeHtml = c.relay ? ` <span class="badge-relay">Relay</span>` : '';
@@ -302,34 +305,28 @@ async function loadConnections(): Promise<void> {
    }
 }
 
-// ── WebSocket event handlers ──────────────────────────────────────────────────
+// ── State Synchronization ─────────────────────────────────────────────────────
 
-onWsEvent('node_connected', (msg: Record<string, unknown>) => {
-   const key = nodeKey(msg.host as string, msg.port as number);
-   connections.set(key, {host: msg.host as string, port: msg.port as number, inbound: msg.inbound as boolean});
-   upsertConnectionRow(key);
-   refreshDiscoverConnectedState();
-   updateNetworkNavIcon();
-});
-
-onWsEvent('node_disconnected', (msg: Record<string, unknown>) => {
-   const key = nodeKey(msg.host as string, msg.port as number);
-   connections.delete(key);
-   removeConnectionRow(key);
-   refreshDiscoverConnectedState();
-   updateNetworkNavIcon();
-});
-
-onWsEvent('node_identified', (msg: Record<string, unknown>) => {
-   const key = nodeKey(msg.host as string, msg.port as number);
-   const c = connections.get(key);
-   if (c) {
-      c.peerKey = msg.peerKey as string;
-      c.peerName = msg.peerName as string;
-      c.relay = Boolean(msg.relay);
-      upsertConnectionRow(key);
+export function applyNodesState(nodes: NodeStateEntry[]): void {
+   connections.clear();
+   for (const c of nodes) {
+      connections.set(nodeKey(c.host, c.port), c);
    }
-});
+   renderConnections();
+   refreshDiscoverConnectedState();
+}
+
+export function applyRelayState(relay: boolean): void {
+   setRelayUi(relay);
+   setRelayStatus(`Relay mode is ${relay ? 'ON' : 'OFF'}.`);
+}
+
+export function applyServerState(running: boolean, port: number): void {
+   if (running) setServerRunning(port);
+   else setServerStopped();
+}
+
+// ── WebSocket event handlers ──────────────────────────────────────────────────
 
 onWsEvent('discover_result', (msg: Record<string, unknown>) => {
    const d: DiscoveredNode = {
@@ -349,16 +346,6 @@ onWsEvent('discover_done', () => {
    const status = discStatus();
    status.textContent = `Found ${discovered.size} node${discovered.size !== 1 ? 's' : ''}.`;
    status.hidden = false;
-});
-
-onWsEvent('node_relay_update', (msg: Record<string, unknown>) => {
-   const relay = Boolean(msg.relay);
-   setRelayUi(relay);
-   setRelayStatus(`Relay mode is ${relay ? 'ON' : 'OFF'}.`);
-});
-
-onWsEvent('transfer_state', (msg: Record<string, unknown>) => {
-   updateNetTransferIndicator(Boolean(msg.transferring));
 });
 
 
