@@ -695,7 +695,6 @@ async function handleMessageInfo(msg: MessageData): Promise<void> {
          const authorEl = body.querySelector('#msg-info-author');
          const recipientEl = body.querySelector('#msg-info-recipient');
          const fileTimeEl = body.querySelector('#msg-info-filetime');
-         const createdEl = body.querySelector('#msg-info-created');
          const keyEl = body.querySelector('#msg-info-key');
 
          if (nameEl) nameEl.textContent = msg.name || 'Untitled';
@@ -707,11 +706,6 @@ async function handleMessageInfo(msg: MessageData): Promise<void> {
          const fileTime = typeof msg.fileTime === 'number' && msg.fileTime > 0 ? msg.fileTime : null;
          if (fileTimeEl) {
             fileTimeEl.textContent = fileTime ? new Date(fileTime).toLocaleString() : '—';
-         }
-
-         const createdTime = msg.created ? Number(msg.created) : null;
-         if (createdEl) {
-            createdEl.textContent = createdTime && !isNaN(createdTime) ? new Date(createdTime).toLocaleString() : '—';
          }
 
          if (keyEl) keyEl.textContent = msg.key;

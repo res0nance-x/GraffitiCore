@@ -59,7 +59,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	var defaultP2PPort: Int = 0
 
 	companion object {
-		const val PING_INTERVAL_MS = 30_000L  // send a ping every 30 s
+		const val PING_INTERVAL_MS = 60_000L  // send a ping every 30 s
 		const val PING_TIMEOUT_MS = 3 * PING_INTERVAL_MS  // close after 90 s of silence (3 missed pings)
 		const val MAX_STREAM_SIZE = 100 * 1024 * 1024 * 1024L // 100 GB
 		const val SMALL_CONTENT_THRESHOLD_BYTES = 256L
