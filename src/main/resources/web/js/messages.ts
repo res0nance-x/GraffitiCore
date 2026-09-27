@@ -1705,7 +1705,9 @@ let currentRawText: string = '';
 let isRawTextView: boolean = false;
 let currentTextFontSizePercent: number = 100;
 
-// Image zoom & pan state
+// Image zoom & pan state (Canvas-based to preserve 100% full native resolution)
+let loadedViewerImg: HTMLImageElement | null = null;
+let currentImageLoadId = 0;
 let imgScale = 1.0;
 let imgTranslateX = 0;
 let imgTranslateY = 0;
@@ -1715,41 +1717,206 @@ let imgDragStartY = 0;
 let imgInitialPinchDist = 0;
 let imgInitialScale = 1.0;
 let imgLastTapTime = 0;
+let animFrameId: number | null = null;
+let renderScheduled = false;
 
-function applyImageTransform(animate = false): void {
-   const img = document.getElementById('view-content-image') as HTMLImageElement | null;
+function updateZoomBadge(): void {
    const badge = document.getElementById('img-zoom-level');
-   if (!img) return;
-   img.style.transition = animate ? 'transform 0.18s ease-out' : 'none';
-   img.style.transform = `translate(${imgTranslateX}px, ${imgTranslateY}px) scale(${imgScale})`;
    if (badge) {
       badge.textContent = `${Math.round(imgScale * 100)}%`;
    }
 }
 
-function resetImageZoom(): void {
-   imgScale = 1.0;
-   imgTranslateX = 0;
-   imgTranslateY = 0;
-   isImgDragging = false;
-   applyImageTransform(true);
-}
+function clampTranslation(): void {
+   if (!loadedViewerImg) return;
+   const viewport = document.getElementById('view-content-image-viewport');
+   if (!viewport) return;
+   const rect = viewport.getBoundingClientRect();
+   const vw = rect.width;
+   const vh = rect.height;
+   if (vw <= 0 || vh <= 0) return;
 
-function zoomImageIn(): void {
-   imgScale = Math.min(10.0, +(imgScale + 0.25).toFixed(2));
-   applyImageTransform(true);
-}
-
-function zoomImageOut(): void {
-   imgScale = Math.max(0.25, +(imgScale - 0.25).toFixed(2));
    if (imgScale <= 1.0) {
       imgTranslateX = 0;
       imgTranslateY = 0;
+      return;
    }
-   applyImageTransform(true);
+
+   const fitRatio = Math.min(vw / loadedViewerImg.naturalWidth, vh / loadedViewerImg.naturalHeight);
+   const currentW = loadedViewerImg.naturalWidth * fitRatio * imgScale;
+   const currentH = loadedViewerImg.naturalHeight * fitRatio * imgScale;
+
+   const maxPanX = Math.max(0, (currentW - vw) / 2) + vw * 0.4;
+   const maxPanY = Math.max(0, (currentH - vh) / 2) + vh * 0.4;
+
+   imgTranslateX = Math.max(-maxPanX, Math.min(maxPanX, imgTranslateX));
+   imgTranslateY = Math.max(-maxPanY, Math.min(maxPanY, imgTranslateY));
+}
+
+function renderImageCanvas(): void {
+   const canvas = document.getElementById('view-content-image-canvas') as HTMLCanvasElement | null;
+   const viewport = document.getElementById('view-content-image-viewport');
+   if (!canvas || !viewport) return;
+
+   const ctx = canvas.getContext('2d');
+   if (!ctx) return;
+
+   const rect = viewport.getBoundingClientRect();
+   const vw = rect.width;
+   const vh = rect.height;
+
+   if (vw <= 0 || vh <= 0) return;
+
+   const dpr = window.devicePixelRatio || 1;
+   const targetW = Math.round(vw * dpr);
+   const targetH = Math.round(vh * dpr);
+
+   if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW;
+      canvas.height = targetH;
+   }
+
+   ctx.save();
+   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+   ctx.clearRect(0, 0, vw, vh);
+
+   if (!loadedViewerImg || !loadedViewerImg.naturalWidth || !loadedViewerImg.naturalHeight) {
+      ctx.restore();
+      return;
+   }
+
+   const nw = loadedViewerImg.naturalWidth;
+   const nh = loadedViewerImg.naturalHeight;
+   const fitRatio = Math.min(vw / nw, vh / nh);
+   const baseW = nw * fitRatio;
+   const baseH = nh * fitRatio;
+
+   const currentW = baseW * imgScale;
+   const currentH = baseH * imgScale;
+
+   const cx = vw / 2;
+   const cy = vh / 2;
+
+   const drawX = cx - (currentW / 2) + imgTranslateX;
+   const drawY = cy - (currentH / 2) + imgTranslateY;
+
+   ctx.imageSmoothingEnabled = true;
+   ctx.imageSmoothingQuality = 'high';
+   ctx.drawImage(loadedViewerImg, drawX, drawY, currentW, currentH);
+   ctx.restore();
+}
+
+function scheduleImageRender(): void {
+   if (!renderScheduled) {
+      renderScheduled = true;
+      requestAnimationFrame(() => {
+         renderScheduled = false;
+         renderImageCanvas();
+      });
+   }
+}
+
+function animateImageTransform(targetScale: number, targetTx: number, targetTy: number, durationMs = 180): void {
+   if (animFrameId !== null) {
+      cancelAnimationFrame(animFrameId);
+      animFrameId = null;
+   }
+
+   const startScale = imgScale;
+   const startTx = imgTranslateX;
+   const startTy = imgTranslateY;
+   const startTime = performance.now();
+
+   function step(now: number) {
+      const elapsed = now - startTime;
+      const progress = Math.min(1, elapsed / durationMs);
+      const ease = 1 - Math.pow(1 - progress, 3); // cubic ease-out
+
+      imgScale = +(startScale + (targetScale - startScale) * ease).toFixed(3);
+      imgTranslateX = startTx + (targetTx - startTx) * ease;
+      imgTranslateY = startTy + (targetTy - startTy) * ease;
+      clampTranslation();
+      updateZoomBadge();
+      renderImageCanvas();
+
+      if (progress < 1) {
+         animFrameId = requestAnimationFrame(step);
+      } else {
+         imgScale = targetScale;
+         imgTranslateX = targetTx;
+         imgTranslateY = targetTy;
+         clampTranslation();
+         animFrameId = null;
+         updateZoomBadge();
+         renderImageCanvas();
+      }
+   }
+
+   animFrameId = requestAnimationFrame(step);
+}
+
+function resetImageZoom(animate = true): void {
+   if (animFrameId !== null) {
+      cancelAnimationFrame(animFrameId);
+      animFrameId = null;
+   }
+   isImgDragging = false;
+   if (animate) {
+      animateImageTransform(1.0, 0, 0);
+   } else {
+      imgScale = 1.0;
+      imgTranslateX = 0;
+      imgTranslateY = 0;
+      updateZoomBadge();
+      renderImageCanvas();
+   }
+}
+
+function zoomImageIn(): void {
+   const newScale = Math.min(16.0, +(imgScale + 0.25).toFixed(2));
+   if (newScale === imgScale) return;
+   const factor = newScale / imgScale;
+   animateImageTransform(newScale, imgTranslateX * factor, imgTranslateY * factor);
+}
+
+function zoomImageOut(): void {
+   const newScale = Math.max(0.25, +(imgScale - 0.25).toFixed(2));
+   if (newScale === imgScale) return;
+   if (newScale <= 1.0) {
+      animateImageTransform(newScale, 0, 0);
+   } else {
+      const factor = newScale / imgScale;
+      animateImageTransform(newScale, imgTranslateX * factor, imgTranslateY * factor);
+   }
+}
+
+function loadViewerImage(url: string): void {
+   const loadId = ++currentImageLoadId;
+   resetImageZoom(false);
+
+   const img = new Image();
+   img.crossOrigin = 'anonymous';
+   img.onload = () => {
+      if (loadId !== currentImageLoadId) return;
+      loadedViewerImg = img;
+      resetImageZoom(false);
+      renderImageCanvas();
+   };
+   img.onerror = () => {
+      if (loadId !== currentImageLoadId) return;
+      loadedViewerImg = null;
+      renderImageCanvas();
+   };
+   img.src = url;
 }
 
 export function cleanupViewerMedia(): void {
+   currentImageLoadId++;
+   loadedViewerImg = null;
+   if (animFrameId !== null) {
+      cancelAnimationFrame(animFrameId);
+      animFrameId = null;
+   }
    const video = document.getElementById('view-content-video') as HTMLVideoElement | null;
    if (video) {
       video.pause();
@@ -1766,7 +1933,8 @@ export function cleanupViewerMedia(): void {
    if (iframe) {
       iframe.src = 'about:blank';
    }
-   resetImageZoom();
+   resetImageZoom(false);
+   renderImageCanvas();
 }
 
 function initImageZoomController(): void {
@@ -1774,6 +1942,7 @@ function initImageZoomController(): void {
    const zoomInBtn = document.getElementById('btn-img-zoom-in');
    const zoomOutBtn = document.getElementById('btn-img-zoom-out');
    const zoomResetBtn = document.getElementById('btn-img-zoom-reset');
+   const badge = document.getElementById('img-zoom-level');
 
    zoomInBtn?.addEventListener('click', (e) => {
       e.preventDefault();
@@ -1785,8 +1954,20 @@ function initImageZoomController(): void {
    });
    zoomResetBtn?.addEventListener('click', (e) => {
       e.preventDefault();
-      resetImageZoom();
+      resetImageZoom(true);
    });
+   badge?.addEventListener('click', () => {
+      if (imgScale >= 4.0) {
+         resetImageZoom(true);
+      } else if (imgScale >= 2.0) {
+         animateImageTransform(4.0, imgTranslateX * 2, imgTranslateY * 2);
+      } else if (imgScale >= 1.0) {
+         animateImageTransform(2.0, imgTranslateX * 2, imgTranslateY * 2);
+      } else {
+         resetImageZoom(true);
+      }
+   });
+   if (badge) badge.style.cursor = 'pointer';
 
    if (!viewport) return;
 
@@ -1798,15 +1979,20 @@ function initImageZoomController(): void {
          if (now - imgLastTapTime < 320) {
             // Double-tap: toggle 1.0x <-> 2.5x
             if (imgScale > 1.2) {
-               resetImageZoom();
+               resetImageZoom(true);
             } else {
-               imgScale = 2.5;
                const rect = viewport.getBoundingClientRect();
-               const centerX = rect.left + rect.width / 2;
-               const centerY = rect.top + rect.height / 2;
-               imgTranslateX = (centerX - touch.clientX) * 0.75;
-               imgTranslateY = (centerY - touch.clientY) * 0.75;
-               applyImageTransform(true);
+               const mouseX = touch.clientX - rect.left;
+               const mouseY = touch.clientY - rect.top;
+               const cx = rect.width / 2;
+               const cy = rect.height / 2;
+               const targetScale = 2.5;
+               const factor = targetScale / imgScale;
+               const relX = mouseX - (cx + imgTranslateX);
+               const relY = mouseY - (cy + imgTranslateY);
+               const targetTx = mouseX - cx - (relX * factor);
+               const targetTy = mouseY - cy - (relY * factor);
+               animateImageTransform(targetScale, targetTx, targetTy);
             }
             imgLastTapTime = 0;
             return;
@@ -1833,15 +2019,33 @@ function initImageZoomController(): void {
          const t1 = e.touches[0];
          const t2 = e.touches[1];
          const currentDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-         const newScale = Math.min(10.0, Math.max(0.5, +(imgInitialScale * (currentDist / imgInitialPinchDist)).toFixed(2)));
+         const pinchFactor = currentDist / imgInitialPinchDist;
+         const newScale = Math.min(16.0, Math.max(0.25, +(imgInitialScale * pinchFactor).toFixed(2)));
+
+         const rect = viewport.getBoundingClientRect();
+         const midX = (t1.clientX + t2.clientX) / 2 - rect.left;
+         const midY = (t1.clientY + t2.clientY) / 2 - rect.top;
+         const cx = rect.width / 2;
+         const cy = rect.height / 2;
+
+         const factor = newScale / imgScale;
+         const relX = midX - (cx + imgTranslateX);
+         const relY = midY - (cy + imgTranslateY);
+
+         imgTranslateX = midX - cx - (relX * factor);
+         imgTranslateY = midY - cy - (relY * factor);
          imgScale = newScale;
-         applyImageTransform(false);
+
+         clampTranslation();
+         updateZoomBadge();
+         scheduleImageRender();
       } else if (e.touches.length === 1 && isImgDragging && imgScale > 1.0) {
          e.preventDefault();
          const touch = e.touches[0];
          imgTranslateX = touch.clientX - imgDragStartX;
          imgTranslateY = touch.clientY - imgDragStartY;
-         applyImageTransform(false);
+         clampTranslation();
+         scheduleImageRender();
       }
    }, {passive: false});
 
@@ -1850,9 +2054,7 @@ function initImageZoomController(): void {
          isImgDragging = false;
          imgInitialPinchDist = 0;
          if (imgScale <= 1.0) {
-            imgTranslateX = 0;
-            imgTranslateY = 0;
-            applyImageTransform(true);
+            animateImageTransform(1.0, 0, 0);
          }
       } else if (e.touches.length === 1 && imgScale > 1.0) {
          const touch = e.touches[0];
@@ -1876,7 +2078,8 @@ function initImageZoomController(): void {
       if (isImgDragging) {
          imgTranslateX = e.clientX - imgDragStartX;
          imgTranslateY = e.clientY - imgDragStartY;
-         applyImageTransform(false);
+         clampTranslation();
+         scheduleImageRender();
       }
    });
 
@@ -1890,13 +2093,62 @@ function initImageZoomController(): void {
    viewport.addEventListener('wheel', (e: WheelEvent) => {
       e.preventDefault();
       const delta = e.deltaY < 0 ? 0.25 : -0.25;
-      imgScale = Math.min(10.0, Math.max(0.25, +(imgScale + delta).toFixed(2)));
-      if (imgScale <= 1.0) {
-         imgTranslateX = 0;
-         imgTranslateY = 0;
+      const newScale = Math.min(16.0, Math.max(0.25, +(imgScale + delta).toFixed(2)));
+      if (newScale === imgScale) return;
+
+      if (newScale <= 1.0) {
+         animateImageTransform(newScale, 0, 0, 100);
+         return;
       }
-      applyImageTransform(false);
+
+      const rect = viewport.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      const cx = rect.width / 2;
+      const cy = rect.height / 2;
+
+      const factor = newScale / imgScale;
+      const relX = mouseX - (cx + imgTranslateX);
+      const relY = mouseY - (cy + imgTranslateY);
+
+      imgTranslateX = mouseX - cx - (relX * factor);
+      imgTranslateY = mouseY - cy - (relY * factor);
+      imgScale = newScale;
+
+      clampTranslation();
+      updateZoomBadge();
+      scheduleImageRender();
    }, {passive: false});
+
+   viewport.addEventListener('dblclick', (e: MouseEvent) => {
+      e.preventDefault();
+      if (!loadedViewerImg) return;
+      if (imgScale > 1.2) {
+         resetImageZoom(true);
+      } else {
+         const rect = viewport.getBoundingClientRect();
+         const mouseX = e.clientX - rect.left;
+         const mouseY = e.clientY - rect.top;
+         const cx = rect.width / 2;
+         const cy = rect.height / 2;
+         const targetScale = 2.5;
+         const factor = targetScale / imgScale;
+         const relX = mouseX - (cx + imgTranslateX);
+         const relY = mouseY - (cy + imgTranslateY);
+         const targetTx = mouseX - cx - (relX * factor);
+         const targetTy = mouseY - cy - (relY * factor);
+         animateImageTransform(targetScale, targetTx, targetTy);
+      }
+   });
+
+   if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(() => {
+         scheduleImageRender();
+      });
+      ro.observe(viewport);
+   } else {
+      window.addEventListener('resize', () => scheduleImageRender());
+   }
 }
 
 function initTextViewerControls(): void {
@@ -1960,12 +2212,7 @@ export function openFullContentViewer(msg: MessageData, fullText?: string): void
 
    if (isImage(msg.type)) {
       if (imgContainer) imgContainer.style.display = '';
-      const img = document.getElementById('view-content-image') as HTMLImageElement | null;
-      if (img) {
-         img.src = url;
-         img.alt = msg.name || 'Image';
-      }
-      resetImageZoom();
+      loadViewerImage(url);
    } else if (isVideo(msg.type)) {
       if (videoContainer) videoContainer.style.display = '';
       const video = document.getElementById('view-content-video') as HTMLVideoElement | null;
