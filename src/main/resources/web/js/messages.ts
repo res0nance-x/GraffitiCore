@@ -1,6 +1,7 @@
 import {graffiti, IdentityEntry, openPackFile, PeerEntry} from './graffiti-api.js';
 import {onSectionShow, onWsEvent, onWsOpen, showSection} from './app.js';
 import {showDialog, showProgressModal} from './dialog.js';
+import {attachCustomAudioPlayer} from './audio-player.js';
 
 const form = document.getElementById('message-form') as HTMLFormElement | null;
 const fromField = document.getElementById('from-field') as HTMLSelectElement | null;
@@ -27,11 +28,40 @@ const statusEl = document.getElementById('send-status') as HTMLElement | null;
 
 let isSending = false;
 let isRefreshing = false;
+let indicatorMinTimer: number | null = null;
+let indicatorActiveUntil = 0;
 
 export function updateMsgIndicator(busy: boolean): void {
    const indicator = document.getElementById('nav-msg-indicator');
-   if (indicator) {
-      indicator.classList.toggle('is-active', busy || isSending);
+   if (!indicator) return;
+
+   const shouldBeActive = busy || isSending;
+   const now = Date.now();
+
+   if (shouldBeActive) {
+      // Keep green light active for at least 700ms so users clearly perceive the feedback
+      indicatorActiveUntil = Math.max(indicatorActiveUntil, now + 700);
+      indicator.classList.add('is-active');
+
+      if (indicatorMinTimer !== null) {
+         window.clearTimeout(indicatorMinTimer);
+         indicatorMinTimer = null;
+      }
+   } else {
+      if (now < indicatorActiveUntil) {
+         if (indicatorMinTimer === null) {
+            indicatorMinTimer = window.setTimeout(() => {
+               indicatorMinTimer = null;
+               updateMsgIndicator(false);
+            }, indicatorActiveUntil - now);
+         }
+      } else {
+         if (indicatorMinTimer !== null) {
+            window.clearTimeout(indicatorMinTimer);
+            indicatorMinTimer = null;
+         }
+         indicator.classList.remove('is-active');
+      }
    }
 }
 
@@ -437,8 +467,21 @@ export function scrollToBottom(): void {
    });
 }
 
+let pendingRefreshPromise: Promise<void> | null = null;
+
 async function refreshMessages(): Promise<void> {
-   if (isRefreshing) return;
+   if (isRefreshing) {
+      if (!pendingRefreshPromise) {
+         pendingRefreshPromise = (async () => {
+            while (isRefreshing) {
+               await new Promise(r => setTimeout(r, 25));
+            }
+            pendingRefreshPromise = null;
+            await refreshMessages();
+         })();
+      }
+      return pendingRefreshPromise;
+   }
    isRefreshing = true;
    try {
       await refreshNameMaps();
@@ -942,9 +985,11 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
       const fileNameEl = el.querySelector<HTMLElement>('.msg-file-name');
       if (fileNameEl) fileNameEl.textContent = msg.name || '';
       const audio = el.querySelector<HTMLAudioElement>('.msg-media');
+      let playerHandle = null;
       if (audio) {
          audio.preload = 'none';
          if (audio.src !== url) audio.src = url;
+         playerHandle = attachCustomAudioPlayer(audio);
       }
       let viewBtn = el.querySelector<HTMLButtonElement>('.btn-view-media');
       if (!viewBtn) {
@@ -962,7 +1007,8 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
             e.stopPropagation();
             openFullContentViewer(msg);
          };
-         audio?.after(viewBtn);
+         const targetEl = playerHandle?.playerElement || audio;
+         targetEl?.after(viewBtn);
       }
    } else if (isVideo(msg.type)) {
       const fileNameEl = el.querySelector<HTMLElement>('.msg-file-name');
@@ -1528,6 +1574,11 @@ messagesSection?.addEventListener('drop', async (event: DragEvent) => {
       return;
    }
 
+   if (isSending) {
+      setStatus('Send in progress. Only one item can be sent at a time.');
+      return;
+   }
+
    const urgent = urgentCheckbox?.checked ?? false;
 
    // Check if files or folders were dropped
@@ -1563,28 +1614,75 @@ messagesSection?.addEventListener('drop', async (event: DragEvent) => {
    setStatus('Nothing to send from drop.');
 });
 
-// ── Clipboard paste (files / screenshots) ────────────────────────────────────
-messagesSection?.addEventListener('paste', async (event: ClipboardEvent) => {
+// ── Clipboard paste (files / screenshots / text) ─────────────────────────────
+document.addEventListener('paste', async (event: ClipboardEvent) => {
+   const activeSection = document.querySelector('.app-section.is-active');
+   if (!activeSection || activeSection.id !== 'section-messages') return;
+
    if (!event.clipboardData) return;
 
-   const urgent = urgentCheckbox?.checked ?? false;
+   const target = event.target as HTMLElement | null;
+   const isTextInput = target && (target.tagName === 'TEXTAREA' || (target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'text'));
 
-   const dropped = await extractDroppedEntries(event.clipboardData);
-   if (dropped.items.length > 0) {
+   // Extract clipboard files synchronously before any async ticks (DataTransfer protected mode)
+   const clipboardFiles: File[] = [];
+   const dt = event.clipboardData;
+   if (dt.files && dt.files.length > 0) {
+      for (let i = 0; i < dt.files.length; i++) {
+         clipboardFiles.push(dt.files[i]);
+      }
+   } else if (dt.items && dt.items.length > 0) {
+      for (let i = 0; i < dt.items.length; i++) {
+         const item = dt.items[i];
+         if (item.kind === 'file') {
+            const f = item.getAsFile();
+            if (f) clipboardFiles.push(f);
+         }
+      }
+   }
+
+   // If pasting text into an input or textarea, allow browser default handling
+   if (isTextInput && clipboardFiles.length === 0) {
+      return;
+   }
+
+   // If clipboard has files or images (e.g. screenshot or copied files)
+   if (clipboardFiles.length > 0) {
       event.preventDefault();
+      event.stopPropagation();
 
-      if (dropped.items.length === 1 && !dropped.isFolder) {
-         const single = dropped.items[0];
-         await sendPayload({type: 'file', fileName: single.file.name, file: single.file, urgent, ...getEnvelope()});
+      if (isSending) {
+         setStatus('Send in progress. Only one item can be sent at a time.');
          return;
       }
 
-      // Multiple files or folder pasted -> Create Pack
-      const defaultName = dropped.defaultName
-         ? dropped.defaultName
-         : `${dropped.items[0].file.name.replace(/\.[^/.]+$/, '')}_pack`;
+      const urgent = urgentCheckbox?.checked ?? false;
 
-      await promptPackNameAndSend(dropped.items, defaultName, urgent);
+      if (clipboardFiles.length === 1) {
+         const single = clipboardFiles[0];
+         const fileName = single.name || 'clipboard-image.png';
+         await sendPayload({type: 'file', fileName, file: single, urgent, ...getEnvelope()});
+         return;
+      }
+
+      // Multiple files pasted -> Create Pack
+      const items: DroppedItem[] = clipboardFiles.map(file => ({ file, path: file.name }));
+      const defaultName = `${items[0].file.name.replace(/\.[^/.]+$/, '')}_pack`;
+      await promptPackNameAndSend(items, defaultName, urgent);
+      return;
+   }
+
+   // Focus is outside the textarea and user pasted plain text
+   const plain = dt.getData('text/plain');
+   if (plain && !isTextInput) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (messageText) {
+         messageText.value = plain;
+         autoResizeTextarea(messageText);
+         messageText.focus();
+         setStatus('Text pasted into message box. Press Enter or Ctrl+Enter to send.');
+      }
    }
 });
 
@@ -2188,6 +2286,7 @@ export function openFullContentViewer(msg: MessageData, fullText?: string): void
       const audioTitle = document.getElementById('view-content-audio-title');
       if (audioTitle) audioTitle.textContent = msg.name || 'Audio Track';
       if (audio) {
+         attachCustomAudioPlayer(audio);
          audio.src = url;
          audio.load();
       }

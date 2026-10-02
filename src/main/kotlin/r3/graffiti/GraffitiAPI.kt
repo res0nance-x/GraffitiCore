@@ -160,8 +160,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 					if (file.exists()) {
 						java.time.Instant.ofEpochMilli(file.lastModified())
 							.atZone(java.time.ZoneId.systemDefault())
-							.toLocalDate()
-							.toString()
+							.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd:HH"))
 					} else "Unknown"
 				} else "Unknown"
 			} catch (_: Exception) {

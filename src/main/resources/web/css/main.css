@@ -626,9 +626,230 @@ select option {
     margin-right: auto;
 }
 
+.msg-type-audio .message-body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+.msg-type-audio .msg-file-name {
+    text-align: center;
+    width: 100%;
+    margin-bottom: 0.35rem;
+}
+
 .msg-type-audio .msg-media {
     width: 100%;
     margin-top: 0.25rem;
+}
+
+.msg-type-audio .btn-view-media {
+    margin-left: auto;
+    margin-right: auto;
+}
+
+/* ── Custom Touch-Friendly Audio Player ──────────────────────────────────── */
+.custom-audio-player {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: 580px;
+    padding: 0.75rem 1rem;
+    margin: 0.4rem auto 0.25rem;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    box-sizing: border-box;
+    user-select: none;
+    transition: border-color 0.2s, background-color 0.2s;
+}
+
+.custom-audio-player.is-playing {
+    border-color: rgba(110, 231, 183, 0.35);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.custom-audio-player audio {
+    display: none;
+}
+
+.audio-controls-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+}
+
+.audio-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    color: var(--primary, #eee);
+    cursor: pointer;
+    border-radius: 50%;
+    padding: 0;
+    transition: background-color 0.15s, transform 0.1s, color 0.15s;
+    touch-action: manipulation;
+}
+
+.audio-btn:hover {
+    color: var(--accent, #6ee7b7);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.audio-btn:active {
+    transform: scale(0.92);
+}
+
+.audio-btn-play {
+    width: 38px;
+    height: 38px;
+    min-width: 38px;
+    min-height: 38px;
+    background: var(--button, #10b981);
+    color: #000;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.audio-btn-play:hover {
+    background: var(--button-hover, #059669);
+    color: #fff;
+}
+
+.audio-btn-skip {
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+    min-height: 34px;
+    opacity: 0.85;
+}
+
+.audio-btn-skip:hover {
+    opacity: 1;
+}
+
+.audio-time-display {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.82rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--primary, #ddd);
+    opacity: 0.9;
+    margin-left: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    white-space: nowrap;
+}
+
+.audio-time-sep {
+    opacity: 0.5;
+}
+
+.audio-btn-speed {
+    padding: 0.2rem 0.45rem;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--primary, #eee);
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    min-width: 32px;
+    height: 26px;
+    letter-spacing: 0.02em;
+}
+
+.audio-btn-speed:hover {
+    background: var(--button-hover-bg, rgba(16, 185, 129, 0.15));
+    border-color: var(--accent, #6ee7b7);
+    color: var(--accent, #6ee7b7);
+}
+
+.audio-seek-row {
+    width: 100%;
+    margin-top: 0.35rem;
+    display: flex;
+    align-items: center;
+}
+
+/* Full-width touch-friendly range slider */
+.audio-seek-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 32px; /* Fat touch target for mobile thumb/finger */
+    background: transparent;
+    cursor: pointer;
+    margin: 0;
+    padding: 0;
+    touch-action: none;
+}
+
+.audio-seek-slider:focus {
+    outline: none;
+}
+
+/* WebKit (Chrome, Safari, Edge, Android Webview) */
+.audio-seek-slider::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 6px;
+    border-radius: 3px;
+    background: linear-gradient(
+        to right,
+        var(--button, #10b981) var(--seek-pct, 0%),
+        rgba(255, 255, 255, 0.18) var(--seek-pct, 0%)
+    );
+    transition: height 0.15s;
+}
+
+.audio-seek-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #ffffff;
+    margin-top: -5px; /* (6px track - 16px thumb) / 2 */
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+    transition: transform 0.15s, background-color 0.15s;
+}
+
+.audio-seek-slider:hover::-webkit-slider-thumb,
+.audio-seek-slider:active::-webkit-slider-thumb {
+    transform: scale(1.25);
+    background: var(--accent, #6ee7b7);
+}
+
+/* Firefox */
+.audio-seek-slider::-moz-range-track {
+    width: 100%;
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.18);
+}
+
+.audio-seek-slider::-moz-range-progress {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--button, #10b981);
+}
+
+.audio-seek-slider::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border: none;
+    border-radius: 50%;
+    background: #ffffff;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+    transition: transform 0.15s, background-color 0.15s;
+}
+
+.audio-seek-slider:hover::-moz-range-thumb,
+.audio-seek-slider:active::-moz-range-thumb {
+    transform: scale(1.25);
+    background: var(--accent, #6ee7b7);
 }
 
 .msg-type-video .msg-media {
@@ -1380,4 +1601,10 @@ body:has(#section-view-content.is-active) .container > header {
     padding: 2rem 1.25rem;
     text-align: center;
     box-sizing: border-box;
+}
+
+#section-view-content .audio-view-wrapper .custom-audio-player {
+    width: 95%;
+    max-width: 680px;
+    margin: 0 auto;
 }
