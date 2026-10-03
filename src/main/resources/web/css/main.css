@@ -1170,8 +1170,16 @@ input {
 }
 .msg-text-content .msg-para,
 .msg-para {
-    margin: 0.15rem 0;
+    margin: 1em 0;
     line-height: 1.45;
+}
+.msg-text-content .msg-para:first-child,
+.msg-para:first-child {
+    margin-top: 0;
+}
+.msg-text-content .msg-para:last-child,
+.msg-para:last-child {
+    margin-bottom: 0;
 }
 .msg-text-content .msg-spacer,
 .msg-spacer {

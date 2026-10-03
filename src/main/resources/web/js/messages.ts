@@ -2387,12 +2387,16 @@ function inlineFormat(text: string): string {
 export function renderMarkdown(raw: string): string {
    if (!raw) return '';
 
+   // Normalize carriage returns (\r\n and \r -> \n)
+   const cleanRaw = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
    // 1. Stash code blocks and inline code BEFORE general escaping and block processing
    const codeBlocks: string[] = [];
    const inlineCodes: string[] = [];
+   const rawUrls: string[] = [];
 
    // Fenced code blocks with optional language
-   let text = raw.replace(/```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g, (_m, lang, code) => {
+   let text = cleanRaw.replace(/```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g, (_m, lang, code) => {
       const idx = codeBlocks.length;
       const langClass = lang ? ` class="language-${escHtml(lang)}"` : '';
       codeBlocks.push(`<pre class="msg-code-block"><code${langClass}>${escHtml(code.replace(/\n$/, ''))}</code></pre>`);
@@ -2404,6 +2408,19 @@ export function renderMarkdown(raw: string): string {
       const idx = inlineCodes.length;
       inlineCodes.push(`<code>${escHtml(code)}</code>`);
       return `@@@INLINE_CODE_${idx}@@@`;
+   });
+
+   // Raw URLs (full links only, no separate label & URL format)
+   const rawUrlRegex = /\bhttps?:\/\/[^\s<>"'\[\]\(\)]+(?:\([^\s<>"'\[\]\(\)]*\)[^\s<>"'\[\]\(\)]*)*[^\s<>"'`.,:;!?\(\)\[\]\{\}]/g;
+   text = text.replace(rawUrlRegex, (url) => {
+      const clean = sanitizeUrl(url);
+      if (clean !== '#' && (clean.startsWith('http://') || clean.startsWith('https://'))) {
+         const idx = rawUrls.length;
+         const esc = escHtml(clean);
+         rawUrls.push(`<a href="${esc}" class="msg-link msg-external-link" data-url="${esc}" title="Open external link: ${esc}" rel="noopener noreferrer">${esc}</a>`);
+         return `@@@RAWURL${idx}@@@`;
+      }
+      return url;
    });
 
    // 2. Process block elements line-by-line
@@ -2503,13 +2520,78 @@ export function renderMarkdown(raw: string): string {
 
    flushAll();
 
-   // 3. Restore inline code
-   return result.join('').replace(/@@@INLINE_CODE_(\d+)@@@/g, (_m, idx) => inlineCodes[Number(idx)] || '');
+   // 3. Restore inline code and raw URLs
+   return result.join('')
+      .replace(/@@@INLINE_CODE_(\d+)@@@/g, (_m, idx) => inlineCodes[Number(idx)] || '')
+      .replace(/@@@RAWURL(\d+)@@@/g, (_m, idx) => rawUrls[Number(idx)] || '');
+}
+
+async function confirmOpenExternalLink(url: string): Promise<void> {
+   const res = await showDialog({
+      title: 'External Link',
+      templateId: 'tpl-external-link-confirm',
+      confirmLabel: 'Open in Default Browser',
+      init(body) {
+         const urlBox = body.querySelector('#ext-link-url');
+         if (urlBox) {
+            urlBox.textContent = url;
+         }
+         const copyBtn = body.querySelector<HTMLButtonElement>('#btn-copy-ext-link');
+         const copyText = body.querySelector<HTMLElement>('#btn-copy-ext-link-text');
+         if (copyBtn) {
+            copyBtn.addEventListener('click', async () => {
+               try {
+                  if (navigator.clipboard && navigator.clipboard.writeText) {
+                     await navigator.clipboard.writeText(url);
+                  } else {
+                     const ta = document.createElement('textarea');
+                     ta.value = url;
+                     ta.style.position = 'fixed';
+                     ta.style.opacity = '0';
+                     document.body.appendChild(ta);
+                     ta.select();
+                     document.execCommand('copy');
+                     document.body.removeChild(ta);
+                  }
+                  if (copyText) {
+                     const prev = copyText.textContent;
+                     copyText.textContent = 'Copied!';
+                     setTimeout(() => {
+                        copyText.textContent = prev;
+                     }, 1500);
+                  }
+               } catch (err: any) {
+                  setStatus(`Failed to copy link: ${err?.message || err}`);
+               }
+            });
+         }
+      }
+   });
+
+   if (res !== null) {
+      try {
+         await graffiti.openExternalUrl(url);
+         setStatus('Opening link in preferred browser…');
+      } catch (err: any) {
+         setStatus(`Failed to open link: ${err?.message || err}`);
+      }
+   }
 }
 
 document.addEventListener('click', (e: MouseEvent) => {
    const target = e.target as HTMLElement | null;
    if (!target) return;
+
+   const extLink = target.closest<HTMLAnchorElement>('.msg-external-link');
+   if (extLink) {
+      e.preventDefault();
+      e.stopPropagation();
+      const url = extLink.dataset.url || extLink.href;
+      if (url) {
+         void confirmOpenExternalLink(url);
+      }
+      return;
+   }
 
    const viewBtn = target.closest<HTMLButtonElement>('.btn-view-text, .btn-view-media');
    if (viewBtn) {

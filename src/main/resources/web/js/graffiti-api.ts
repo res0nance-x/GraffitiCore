@@ -200,6 +200,19 @@ async function putJson<T extends { ok: boolean; error?: string }>(
    return parseJson<T>(res);
 }
 
+async function postJson<T extends { ok: boolean; error?: string }>(
+   path: string,
+   body: Record<string, any>,
+): Promise<T> {
+   const url = new URL(path, window.location.origin);
+   const res = await fetch(url.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+   });
+   return parseJson<T>(res);
+}
+
 
 async function download(path: string, params: Record<string, string> = {}): Promise<void> {
    const url = new URL(path, window.location.origin);
@@ -506,6 +519,19 @@ export const graffiti = {
       } catch (_) {
          return 'Unknown';
       }
+   },
+
+   // ── External URL ────────────────────────────────────────────────────────
+   openExternalUrl(url: string): Promise<ApiOk> {
+      if ((window as any).Android && typeof (window as any).Android.openUrl === 'function') {
+         try {
+            (window as any).Android.openUrl(url);
+            return Promise.resolve({ ok: true });
+         } catch (_e) {
+            // fallback to service API
+         }
+      }
+      return postJson<ApiOk>('/api/open-url', { url });
    },
 };
 

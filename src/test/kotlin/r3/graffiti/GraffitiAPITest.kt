@@ -330,5 +330,52 @@ class GraffitiAPITest {
 		assertTrue(recentFile.exists())
 		assertFalse(oldFile.exists())
 	}
+
+	@Test
+	fun testOpenUrlApi(@TempDir tempDir: File) {
+		val p2p = GraffitiP2P(tempDir)
+		var openedUrl: String? = null
+		val api = GraffitiAPI(p2p) {}.apply {
+			onOpenUrl = { url ->
+				openedUrl = url
+				true
+			}
+		}
+
+		// 1. Missing URL fails
+		val missingHeader = JSONObject().put("path", "/api/open-url")
+		val missingRes = api.handle(missingHeader, null)
+		assertNotNull(missingRes)
+		val missingJson = JSONObject(missingRes!!.readString())
+		assertFalse(missingJson.getBoolean("ok"))
+		assertTrue(missingJson.getString("error").contains("Missing 'url'"))
+
+		// 2. Dangerous protocols (file:, javascript:, data:) are rejected
+		for (badUrl in listOf("file:///etc/passwd", "javascript:alert(1)", "data:text/html,test")) {
+			val badHeader = JSONObject().put("path", "/api/open-url").put("param", JSONObject().put("url", badUrl))
+			val badRes = api.handle(badHeader, null)
+			assertNotNull(badRes)
+			val badJson = JSONObject(badRes!!.readString())
+			assertFalse(badJson.getBoolean("ok"))
+			assertTrue(badJson.getString("error").contains("Only http and https links are permitted"))
+		}
+
+		// 3. Valid https URL via param
+		val validHttpsHeader = JSONObject().put("path", "/api/open-url").put("param", JSONObject().put("url", "https://github.com/res0nance-x/Graffiti"))
+		val validRes = api.handle(validHttpsHeader, null)
+		assertNotNull(validRes)
+		val validJson = JSONObject(validRes!!.readString())
+		assertTrue(validJson.getBoolean("ok"))
+		assertEquals("https://github.com/res0nance-x/Graffiti", openedUrl)
+
+		// 4. Valid http URL via JSON body content
+		val validBodyHeader = JSONObject().put("path", "/api/open-url")
+		val bodyContent = TestStringContent(JSONObject().put("url", "http://example.org/topic").toString())
+		val validBodyRes = api.handle(validBodyHeader, bodyContent)
+		assertNotNull(validBodyRes)
+		val validBodyJson = JSONObject(validBodyRes!!.readString())
+		assertTrue(validBodyJson.getBoolean("ok"))
+		assertEquals("http://example.org/topic", openedUrl)
+	}
 }
 

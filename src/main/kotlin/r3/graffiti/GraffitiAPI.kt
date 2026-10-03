@@ -134,6 +134,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/pack/create/cancel" -> cancelPackCreation(header)
 			"/api/transfer/status" -> transferStatus()
 			"/api/version" -> getVersion()
+			"/api/open-url" -> openUrlApi(header, content)
 			else -> null
 		}
 	}
@@ -145,6 +146,35 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 	private fun transferStatus(): Content {
 		return ok {
 			put("transferring", p2p.isAnyTransferActive())
+		}
+	}
+
+	// ── Open URL API ─────────────────────────────────────────────────────────
+	var onOpenUrl: ((url: String) -> Boolean)? = null
+
+	private fun openUrlApi(header: JSONObject, content: Content?): Content {
+		val bodyParams = content?.let {
+			try {
+				JSONObject(it.readString())
+			} catch (_: Exception) {
+				null
+			}
+		}
+		val params = bodyParams ?: header.optJSONObject("param")
+		val rawUrl = (params?.optString("url") ?: header.optString("url", "")).trim()
+		if (rawUrl.isEmpty()) {
+			return err("Missing 'url' parameter")
+		}
+		if (!rawUrl.startsWith("http://", ignoreCase = true) && !rawUrl.startsWith("https://", ignoreCase = true)) {
+			return err("Only http and https links are permitted")
+		}
+
+		val handler = onOpenUrl ?: return err("Open URL handler not registered", Status.NOT_IMPLEMENTED)
+		return try {
+			val success = handler(rawUrl)
+			if (success) ok() else err("Failed to open URL")
+		} catch (e: Exception) {
+			err("Failed to open URL: ${e.message}")
 		}
 	}
 
