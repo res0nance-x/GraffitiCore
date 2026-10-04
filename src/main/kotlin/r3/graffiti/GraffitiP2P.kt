@@ -22,7 +22,9 @@ import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
 /*
@@ -72,10 +74,48 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	private val peerCache = ConcurrentHashMap<PeerKey, Peer>()
 	private val metaCache = ConcurrentHashMap<EncryptedMetaKey, EncryptedContentMetaData>()
 	private val metaTimeCache = ConcurrentHashMap<EncryptedMetaKey, Long>()
+	private val decryptedMetaCache = ConcurrentHashMap<EncryptedMetaKey, Pair<ContentMeta, Password256>>()
 	private val smallContentCache = ConcurrentHashMap<EncryptedMetaKey, ByteArray>()
 	private val deletedCache = ConcurrentHashMap.newKeySet<EncryptedMetaKey>()
 	private val contentSenderExecutor = Executors.newCachedThreadPool { r ->
 		Thread(r, "Graffiti-ContentSender").apply { isDaemon = true }
+	}
+	private val metaWarmupExecutor = Executors.newSingleThreadExecutor { r ->
+		Thread(r, "Graffiti-MetaWarmup").apply {
+			isDaemon = true
+			priority = Thread.NORM_PRIORITY - 1
+		}
+	}
+	private val isWarmupActive = AtomicBoolean(false)
+	private val pendingWarmupKeys = AtomicReference<List<EncryptedMetaKey>?>(null)
+
+	fun triggerMetaWarmup(keys: List<EncryptedMetaKey>) {
+		if (keys.isEmpty()) return
+		pendingWarmupKeys.set(keys)
+		scheduleWarmupLoop()
+	}
+
+	private fun scheduleWarmupLoop() {
+		if (isWarmupActive.compareAndSet(false, true)) {
+			metaWarmupExecutor.execute {
+				try {
+					while (true) {
+						val batch = pendingWarmupKeys.getAndSet(null) ?: break
+						for (k in batch) {
+							if (decryptedMetaCache.containsKey(k)) continue
+							try {
+								getDecryptedMeta(k)
+							} catch (_: Exception) {}
+						}
+					}
+				} finally {
+					isWarmupActive.set(false)
+					if (pendingWarmupKeys.get() != null) {
+						scheduleWarmupLoop()
+					}
+				}
+			}
+		}
 	}
 
 	// ── Server identity ───────────────────────────────────────────────────────
@@ -535,8 +575,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 				else -> log("Unknown message type: $type from ${node.remoteAddress}")
 			}
 		} catch (e: Exception) {
-			log("Error in contentHandler: ${e.message}")
-			e.printStackTrace(System.out)
+			log("Error in contentHandler", e)
 		}
 	}
 
@@ -768,6 +807,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 
 		metaCache[eMeta.key] = eMeta
 		metaTimeCache[eMeta.key] = ts
+		decryptedMetaCache[eMeta.key] = Pair(meta, pass)
 		if (fileSize <= SMALL_CONTENT_THRESHOLD_BYTES && smallContentCache.size < MAX_SMALL_CONTENT_ITEMS) {
 			smallContentCache[eMeta.key] = contentFile.readBytes()
 		}
@@ -838,20 +878,36 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	fun getPeerByKey(key: PeerKey): Peer? =
 		peerCache[key]
 
-	fun getContent(key: EncryptedMetaKey): Content {
+	fun getMetaByKey(key: EncryptedMetaKey): EncryptedContentMetaData? =
+		metaCache[key]
+
+	fun getMetaTimeByKey(key: EncryptedMetaKey): Long? =
+		metaTimeCache[key]
+
+	fun getDecryptedMeta(key: EncryptedMetaKey): Pair<ContentMeta, Password256>? {
+		decryptedMetaCache[key]?.let { return it }
 		val eMeta = metaCache[key] ?: run {
 			val metaFile = File(metaDir, "$key").consistentFile()
-			if (!metaFile.exists()) {
-				error("Meta file not found for key: $key")
+			if (!metaFile.exists()) return null
+			try {
+				metaFile.toDataInputStream().use { EncryptedContentMetaData.read(it) }
+			} catch (_: Exception) {
+				return null
 			}
-			metaFile.toDataInputStream().use { EncryptedContentMetaData.read(it) }
 		}
-		val recipientIdentity = getIdentityByKey(eMeta.recipient) ?: error("No Identity found for ${eMeta.recipient}")
-		val (meta, pass) = try {
-			eMeta.decrypt(recipientIdentity)
-		} catch (e: Exception) {
-			error("Failed to decrypt metadata. Wrong identity or corrupted file. ${e.message}")
+		val recipientIdentity = getIdentityByKey(eMeta.recipient) ?: return null
+		return try {
+			val pair = eMeta.decrypt(recipientIdentity)
+			decryptedMetaCache[key] = pair
+			pair
+		} catch (_: Exception) {
+			null
 		}
+	}
+
+	fun getContent(key: EncryptedMetaKey): Content {
+		val (meta, pass) = getDecryptedMeta(key)
+			?: error("Failed to decrypt metadata or meta not found for key: $key")
 		val smallBytes = smallContentCache[key]
 		val contentSource = if (smallBytes != null) {
 			r3.source.BinarySource(smallBytes)
@@ -876,6 +932,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		queryOrderTimestamps.remove(key)
 		val hadMeta = metaCache.containsKey(key) || isMessageDeleted(key) || File(metaDir, "$key").exists()
 		pendingContentRequests.remove(key)
+		decryptedMetaCache.remove(key)
 		metaCache.remove(key)
 		metaTimeCache.remove(key)
 		smallContentCache.remove(key)

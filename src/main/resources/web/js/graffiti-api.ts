@@ -35,11 +35,22 @@ export interface MessageEntry {
    authorKey?: string;
    recipient: string;
    recipientKey?: string;
+   name?: string;
+   size?: number;
+   type?: string;
+   created?: number | string;
+   fileTime?: number;
+   urgent?: boolean;
+}
+
+export interface DecryptedMessageMeta {
+   key: string;
    name: string;
    size: number;
    type: string;
    created: number | string;
    fileTime?: number;
+   urgent?: boolean;
 }
 
 export interface ConnectionEntry {
@@ -298,6 +309,15 @@ export const graffiti = {
 
    listMessages(): Promise<ListMessagesResponse> {
       return get('/api/messages');
+   },
+
+   getMessageMeta(key: string): Promise<{ ok: boolean; meta: DecryptedMessageMeta }> {
+      return putJson('/api/message/meta', { key });
+   },
+
+   getMessagesMeta(keys: string[]): Promise<{ ok: boolean; metas: DecryptedMessageMeta[] }> {
+      if (keys.length === 0) return Promise.resolve({ ok: true, metas: [] });
+      return putJson('/api/messages/meta', { keys });
    },
 
    refreshMessages(): Promise<ApiOk> {

@@ -1,4 +1,4 @@
-import {graffiti, IdentityEntry, openPackFile, PeerEntry} from './graffiti-api.js';
+import {DecryptedMessageMeta, graffiti, IdentityEntry, openPackFile, PeerEntry} from './graffiti-api.js';
 import {onSectionShow, onWsEvent, onWsOpen, showSection} from './app.js';
 import {showDialog, showProgressModal} from './dialog.js';
 import {attachCustomAudioPlayer} from './audio-player.js';
@@ -72,6 +72,8 @@ function setSendingState(sending: boolean): void {
 
 /** Tracks keys already rendered so WS-triggered refreshes don't duplicate rows. */
 const currentMessages = new Set<string>();
+/** Tracks all known message keys on the server to prevent redundant refresh loops. */
+const allKnownMessageKeys = new Set<string>();
 
 // ── Name / avatar lookup map ──────────────────────────────────────────────────
 /** Maps a display-name to its full key string for all known identities + peers. */
@@ -93,10 +95,10 @@ export function applyMessagesContactsState(identities: IdentityEntry[], peers: P
 }
 
 export function applyMessagesState(messageKeys: string[]): void {
-   let changed = messageKeys.length !== currentMessages.size;
+   let changed = messageKeys.length !== allKnownMessageKeys.size;
    if (!changed) {
       for (const k of messageKeys) {
-         if (!currentMessages.has(k)) {
+         if (!allKnownMessageKeys.has(k)) {
             changed = true;
             break;
          }
@@ -170,8 +172,97 @@ let visibleBatchCount = PAGE_BATCH_SIZE;
 let isPrepending = false;
 
 const textContentCache = new Map<string, string>();
+const metaCache = new Map<string, DecryptedMessageMeta>();
 let allRawMessages: MessageData[] = [];
 let allFilteredMessages: MessageData[] = [];
+
+function hydrateMsg(msg: MessageData, meta: DecryptedMessageMeta): void {
+   msg.name = meta.name;
+   msg.size = meta.size;
+   msg.type = meta.type;
+   msg.created = meta.created;
+   msg.urgent = meta.urgent;
+}
+
+const inFlightMetaFetches = new Map<string, Promise<DecryptedMessageMeta | null>>();
+
+async function ensureMetaForSlice(slice: MessageData[]): Promise<void> {
+   const missingKeys: string[] = [];
+   const promisesToWait: Promise<unknown>[] = [];
+
+   for (const m of slice) {
+      if (metaCache.has(m.key) || (m.type !== undefined && m.type !== '')) {
+         continue;
+      }
+      const existingPromise = inFlightMetaFetches.get(m.key);
+      if (existingPromise) {
+         promisesToWait.push(existingPromise);
+      } else {
+         missingKeys.push(m.key);
+      }
+   }
+
+   if (missingKeys.length > 0) {
+      // Chunk missing keys into batches of at most 50 keys for PUT JSON request
+      const BATCH_SIZE = 50;
+      for (let i = 0; i < missingKeys.length; i += BATCH_SIZE) {
+         const chunk = missingKeys.slice(i, i + BATCH_SIZE);
+
+         let resolveBatch!: (metas: DecryptedMessageMeta[]) => void;
+         const batchPromise = new Promise<DecryptedMessageMeta[]>(resolve => {
+            resolveBatch = resolve;
+         });
+
+         for (const k of chunk) {
+            inFlightMetaFetches.set(k, batchPromise.then(metas => metas.find(meta => meta.key === k) || null));
+         }
+
+         const fetchPromise = (async () => {
+            try {
+               const { metas } = await graffiti.getMessagesMeta(chunk);
+               const returnedMetas = metas || [];
+               for (const meta of returnedMetas) {
+                  metaCache.set(meta.key, meta);
+               }
+               // Mark any key the server couldn't decrypt / find so we don't refetch in an infinite loop
+               for (const k of chunk) {
+                  if (!metaCache.has(k)) {
+                     metaCache.set(k, {
+                        key: k,
+                        name: 'Unknown File',
+                        size: 0,
+                        type: 'bin',
+                        created: 0,
+                        fileTime: 0
+                     });
+                  }
+               }
+               resolveBatch(returnedMetas);
+            } catch (e) {
+               console.warn('Failed to fetch message metadata:', e);
+               resolveBatch([]);
+            } finally {
+               for (const k of chunk) {
+                  inFlightMetaFetches.delete(k);
+               }
+            }
+         })();
+
+         promisesToWait.push(fetchPromise);
+      }
+   }
+
+   if (promisesToWait.length > 0) {
+      await Promise.all(promisesToWait);
+   }
+
+   for (const m of slice) {
+      const meta = metaCache.get(m.key);
+      if (meta) {
+         hydrateMsg(m, meta);
+      }
+   }
+}
 
 // ── LRU Message DOM Element Cache ──────────────────────────────────────────
 const MAX_CACHED_ELEMENTS = 300;
@@ -333,9 +424,12 @@ function updateFilteredMessages(): void {
    }
 }
 
-export function applyTopicFilter(shouldScrollToBottom = true): void {
+export async function applyTopicFilter(shouldScrollToBottom = true): Promise<void> {
    visibleBatchCount = PAGE_BATCH_SIZE;
    updateFilteredMessages();
+   const startIndex = Math.max(0, allFilteredMessages.length - visibleBatchCount);
+   const visibleSlice = allFilteredMessages.slice(startIndex);
+   await ensureMetaForSlice(visibleSlice);
    renderMessageList();
    if (shouldScrollToBottom) {
       scrollToBottom();
@@ -370,20 +464,50 @@ export function renderMessageList(): void {
 
    const startIndex = Math.max(0, allFilteredMessages.length - visibleBatchCount);
    const visibleSlice = allFilteredMessages.slice(startIndex);
+   for (const m of visibleSlice) {
+      const meta = metaCache.get(m.key);
+      if (meta) hydrateMsg(m, meta);
+   }
    const visibleElements: HTMLElement[] = [];
 
    for (const msg of visibleSlice) {
+      const expectedTemplateId = pickTemplateId(msg.type);
+      const isHydrated = Boolean(msg.type !== undefined && msg.type !== '');
+
       let el: HTMLElement | null = container.querySelector(`[data-msg-key="${CSS.escape(msg.key)}"]`);
       if (el) {
-         fillHeader(el, msg);
-         getCachedElement(msg.key);
+         const needsRebuild = el.dataset.templateId !== expectedTemplateId || (isHydrated && el.dataset.hydrated !== 'true');
+         if (needsRebuild) {
+            const newEl = createMessageElement(msg);
+            if (newEl) {
+               el.replaceWith(newEl);
+               el = newEl;
+               if (isHydrated) {
+                  putCachedElement(msg.key, newEl);
+               } else {
+                  evictCachedElement(msg.key);
+               }
+            }
+         } else {
+            fillHeader(el, msg);
+            getCachedElement(msg.key);
+         }
       } else {
          el = getCachedElement(msg.key);
          if (el) {
-            fillHeader(el, msg);
+            const needsRebuild = el.dataset.templateId !== expectedTemplateId || (isHydrated && el.dataset.hydrated !== 'true');
+            if (needsRebuild) {
+               evictCachedElement(msg.key);
+               el = createMessageElement(msg);
+               if (el && isHydrated) {
+                  putCachedElement(msg.key, el);
+               }
+            } else {
+               fillHeader(el, msg);
+            }
          } else {
             el = createMessageElement(msg);
-            if (el) {
+            if (el && isHydrated) {
                putCachedElement(msg.key, el);
             }
          }
@@ -429,14 +553,23 @@ function checkAndPrependHistory(): void {
       const prevScrollHeight = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
       const prevScrollY = window.scrollY;
 
-      visibleBatchCount = Math.min(allFilteredMessages.length, visibleBatchCount + PAGE_BATCH_SIZE);
-      renderMessageList();
+      const nextBatchCount = Math.min(allFilteredMessages.length, visibleBatchCount + PAGE_BATCH_SIZE);
+      const startIndex = Math.max(0, allFilteredMessages.length - nextBatchCount);
+      const visibleSlice = allFilteredMessages.slice(startIndex);
 
-      const newScrollHeight = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
-      const heightDelta = newScrollHeight - prevScrollHeight;
-      window.scrollTo(0, prevScrollY + heightDelta);
+      ensureMetaForSlice(visibleSlice).then(() => {
+         visibleBatchCount = nextBatchCount;
+         renderMessageList();
 
-      requestAnimationFrame(() => {
+         const newScrollHeight = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
+         const heightDelta = newScrollHeight - prevScrollHeight;
+         window.scrollTo(0, prevScrollY + heightDelta);
+
+         requestAnimationFrame(() => {
+            isPrepending = false;
+         });
+      }).catch((e) => {
+         console.warn('Failed to prepend history:', e);
          isPrepending = false;
       });
    }
@@ -492,11 +625,18 @@ async function refreshMessages(): Promise<void> {
 
       const wasAtBottom = isNearBottom();
       allRawMessages = messages;
+      allKnownMessageKeys.clear();
+      for (const m of messages) {
+         allKnownMessageKeys.add(m.key);
+      }
       const currentSelected = toField?.value ?? '';
       if (currentSelected) {
          markTopicRead(currentSelected);
       }
       updateFilteredMessages();
+      const startIndex = Math.max(0, allFilteredMessages.length - visibleBatchCount);
+      const visibleSlice = allFilteredMessages.slice(startIndex);
+      await ensureMetaForSlice(visibleSlice);
       renderMessageList();
       updateUnreadBadges();
       if (shouldScrollToBottomOnLoad || shouldScrollToBottomOnSend || wasAtBottom) {
@@ -551,13 +691,14 @@ const audioExtensions = new Set(['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a']);
 const videoExtensions = new Set(['mp4', 'webm', 'mkv', 'avi', 'mov']);
 const htmlExtensions = new Set(['html', 'htm']);
 
-const isImage = (t: string) => imageExtensions.has(t.toLowerCase());
-const isText = (t: string) => textExtensions.has(t.toLowerCase());
-const isAudio = (t: string) => audioExtensions.has(t.toLowerCase());
-const isVideo = (t: string) => videoExtensions.has(t.toLowerCase());
-const isHtml = (t: string) => htmlExtensions.has(t.toLowerCase());
+const isImage = (t?: string) => Boolean(t && imageExtensions.has(t.toLowerCase()));
+const isText = (t?: string) => Boolean(t && textExtensions.has(t.toLowerCase()));
+const isAudio = (t?: string) => Boolean(t && audioExtensions.has(t.toLowerCase()));
+const isVideo = (t?: string) => Boolean(t && videoExtensions.has(t.toLowerCase()));
+const isHtml = (t?: string) => Boolean(t && htmlExtensions.has(t.toLowerCase()));
 
-function pickTemplateId(type: string): string {
+function pickTemplateId(type?: string): string {
+   if (!type) return 'tpl-binary-message';
    if (type === 'bell') return 'tpl-bell-message';
    if (isText(type)) return 'tpl-text-message';
    if (isImage(type)) return 'tpl-image-message';
@@ -575,7 +716,7 @@ interface MessageData {
    recipientKey?: string;
    name?: string;
    size?: number;
-   type: string;
+   type?: string;
    created?: number | string;
    fileTime?: number;
    urgent?: boolean;
@@ -912,12 +1053,16 @@ const handleReply = handleQuote;
 
 function createMessageElement(msg: MessageData): HTMLElement | null {
    const url = graffiti.contentUrl(msg.key);
-   const tpl = document.getElementById(pickTemplateId(msg.type)) as HTMLTemplateElement | null;
+   const tplId = pickTemplateId(msg.type);
+   const tpl = document.getElementById(tplId) as HTMLTemplateElement | null;
    if (!tpl) return null;
 
    const item = tpl.content.cloneNode(true) as DocumentFragment;
    const el = item.firstElementChild as HTMLElement;
    el.dataset.msgKey = msg.key;
+   el.dataset.templateId = tplId;
+   el.dataset.msgType = msg.type || '';
+   el.dataset.hydrated = (msg.type !== undefined && msg.type !== '') ? 'true' : 'false';
    fillHeader(el, msg);
 
    if (isText(msg.type)) {
@@ -1039,13 +1184,13 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
       }
    } else {
       const fileNameEl = el.querySelector<HTMLElement>('.msg-file-name');
-      if (fileNameEl) fileNameEl.textContent = msg.name || 'File';
+      if (fileNameEl) fileNameEl.textContent = msg.name || (msg.type ? 'File' : 'Loading...');
       const link = el.querySelector<HTMLAnchorElement>('.msg-download-link');
       if (link) {
          link.href = url;
          link.download = msg.name || 'download';
          const sizeStr = msg.size ? ` (${formatSize(msg.size)})` : '';
-         link.textContent = `⬇ Download ${msg.name || 'file'}${sizeStr}`;
+         link.textContent = msg.name ? `⬇ Download ${msg.name}${sizeStr}` : (msg.type ? `⬇ Download file${sizeStr}` : 'Loading message...');
       }
 
       const isPackFile = msg.name && (msg.name.toLowerCase().endsWith('.pack') || msg.name.toLowerCase().endsWith('.epack'));
@@ -1080,9 +1225,13 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
 }
 
 function displayMessage(msg: MessageData): void {
+   allRawMessages.push(msg);
+   allKnownMessageKeys.add(msg.key);
    allFilteredMessages.push(msg);
    visibleBatchCount++;
-   renderMessageList();
+   void ensureMetaForSlice([msg]).then(() => {
+      renderMessageList();
+   });
 }
 
 async function populateSelects(): Promise<void> {
@@ -2664,8 +2813,10 @@ msgContextMenu?.addEventListener('click', async (e: MouseEvent) => {
          await graffiti.removeMessage(msg.key);
          currentMessages.delete(msg.key);
          textContentCache.delete(msg.key);
+         metaCache.delete(msg.key);
          evictCachedElement(msg.key);
          allRawMessages = allRawMessages.filter(m => m.key !== msg.key);
+         allKnownMessageKeys.delete(msg.key);
          updateFilteredMessages();
          renderMessageList();
       } catch (err: any) {

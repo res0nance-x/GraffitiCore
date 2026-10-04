@@ -7,6 +7,7 @@ import r3.content.Content
 import r3.org.json.JSONObject
 import r3.pack.BinaryPack
 import r3.pke.EncryptedMetaKey
+import r3.pke.name
 import r3.source.BinarySource
 import r3.source.readString
 import java.io.File
@@ -376,6 +377,106 @@ class GraffitiAPITest {
 		val validBodyJson = JSONObject(validBodyRes!!.readString())
 		assertTrue(validBodyJson.getBoolean("ok"))
 		assertEquals("http://example.org/topic", openedUrl)
+	}
+
+	@Test
+	fun testUnencryptedListMessagesAndMetaEndpoint(@TempDir tempDir: File) {
+		val p2p = GraffitiP2P(tempDir)
+		val api = GraffitiAPI(p2p) {}
+
+		val alice = p2p.createIdentity("alice-seed")
+		val bob = p2p.createIdentity("bob-seed")
+
+		// 1. Alice sends text message to Bob
+		val sendHeader = JSONObject()
+			.put("path", "/api/message/send/text")
+			.put("method", "POST")
+			.put("identityKey", alice.key.toString())
+			.put("peerKey", bob.asPeer().key.toString())
+		val sendRes = api.handle(sendHeader, TestStringContent("Hello Bob without decrypting"))
+		assertNotNull(sendRes)
+		val sendJson = JSONObject(sendRes!!.readString())
+		assertTrue(sendJson.getBoolean("ok"))
+		val msgKeyStr = sendJson.getString("key")
+		val msgKey = EncryptedMetaKey(msgKeyStr)
+
+		// 2. /api/messages returns envelope only (no type, name, size in envelope)
+		val listHeader = JSONObject().put("path", "/api/messages").put("method", "GET")
+		val listRes = api.handle(listHeader, null)
+		assertNotNull(listRes)
+		val listJson = JSONObject(listRes!!.readString())
+		assertTrue(listJson.getBoolean("ok"))
+		val messagesArr = listJson.getJSONArray("messages")
+		assertEquals(1, messagesArr.length())
+		val msgObj = messagesArr.getJSONObject(0)
+		assertEquals(msgKeyStr, msgObj.getString("key"))
+		assertEquals(alice.key.name, msgObj.getString("author"))
+		assertEquals(bob.key.name, msgObj.getString("recipient"))
+		assertTrue(msgObj.has("fileTime"))
+		assertFalse(msgObj.has("type"))
+		assertFalse(msgObj.has("name"))
+		assertFalse(msgObj.has("size"))
+
+		// 3. PUT /api/message/meta with single key in JSON body returns decrypted metadata
+		val metaPutHeader = JSONObject()
+			.put("path", "/api/message/meta")
+			.put("method", "PUT")
+		val metaPutBody = TestStringContent(JSONObject().put("key", msgKeyStr).toString())
+		val metaRes = api.handle(metaPutHeader, metaPutBody)
+		assertNotNull(metaRes)
+		val metaJson = JSONObject(metaRes!!.readString())
+		assertTrue(metaJson.getBoolean("ok"))
+		val metaObj = metaJson.getJSONObject("meta")
+		assertEquals(msgKeyStr, metaObj.getString("key"))
+		assertEquals("txt", metaObj.getString("type"))
+		assertTrue(metaObj.has("size"))
+		assertTrue(metaObj.has("created"))
+		assertFalse(metaObj.getBoolean("urgent"))
+
+		// 4. PUT /api/messages/meta with batch keys in JSON body returns metas array
+		val batchPutHeader = JSONObject()
+			.put("path", "/api/messages/meta")
+			.put("method", "PUT")
+		val batchPutBody = TestStringContent(JSONObject().put("keys", r3.org.json.JSONArray().put(msgKeyStr)).toString())
+		val batchRes = api.handle(batchPutHeader, batchPutBody)
+		assertNotNull(batchRes)
+		val batchJson = JSONObject(batchRes!!.readString())
+		assertTrue(batchJson.getBoolean("ok"))
+		val metasArr = batchJson.getJSONArray("metas")
+		assertEquals(1, metasArr.length())
+		assertEquals(msgKeyStr, metasArr.getJSONObject(0).getString("key"))
+
+		// 5. GET /api/messages/meta with query param keys=... returns metas array
+		val batchGetHeader = JSONObject()
+			.put("path", "/api/messages/meta")
+			.put("method", "GET")
+			.put("keys", msgKeyStr)
+		val batchGetRes = api.handle(batchGetHeader, null)
+		assertNotNull(batchGetRes)
+		val batchGetJson = JSONObject(batchGetRes!!.readString())
+		assertTrue(batchGetJson.getBoolean("ok"))
+		assertEquals(1, batchGetJson.getJSONArray("metas").length())
+
+		// 6. GET /api/message/meta with query param key=... returns single meta
+		val singleGetHeader = JSONObject()
+			.put("path", "/api/message/meta")
+			.put("method", "GET")
+			.put("key", msgKeyStr)
+		val singleGetRes = api.handle(singleGetHeader, null)
+		assertNotNull(singleGetRes)
+		val singleGetJson = JSONObject(singleGetRes!!.readString())
+		assertTrue(singleGetJson.getBoolean("ok"))
+		assertEquals(msgKeyStr, singleGetJson.getJSONObject("meta").getString("key"))
+
+		// 7. Check caching: p2p.getDecryptedMeta returns cached instance
+		val cachedPair1 = p2p.getDecryptedMeta(msgKey)
+		assertNotNull(cachedPair1)
+		val cachedPair2 = p2p.getDecryptedMeta(msgKey)
+		assertSame(cachedPair1, cachedPair2)
+
+		// 8. Delete message evicts from cache
+		assertTrue(p2p.deleteMessage(msgKey))
+		assertNull(p2p.getDecryptedMeta(msgKey))
 	}
 }
 
