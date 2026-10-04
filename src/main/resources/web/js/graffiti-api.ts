@@ -86,6 +86,7 @@ export interface AppStateResponse extends ApiOk {
       running: boolean;
       port: number;
    };
+   activeCommands?: ActiveCommand[];
 }
 
 export interface NodeInfo extends ApiOk {
@@ -132,7 +133,27 @@ export interface ImportPeerResponse extends ApiOk {
 }
 
 export interface SendMessageResponse extends ApiOk {
-   key: string;
+   key?: string;
+   commandId?: string;
+   sentTimestamp?: number;
+}
+
+export interface ActiveCommand {
+   id: string;
+   type: 'SEND_TEXT' | 'SEND_FILE' | 'CREATE_PACK' | 'FORWARD' | 'SEND_BELL';
+   identityKey: string;
+   peerKey: string;
+   urgent: boolean;
+   sentTimestamp: number;
+   status: 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+   progress: number;
+   statusMessage?: string;
+   error?: string;
+   resultKey?: string;
+   fileName?: string;
+   packName?: string;
+   text?: string;
+   createdAt: number;
 }
 
 export interface OpenPackResponse extends ApiOk {
@@ -332,11 +353,12 @@ export const graffiti = {
       return get('/api/message/remove', {key});
    },
 
-   forwardMessage(key: string, identityKey?: string, peerKey?: string, urgent = false): Promise<SendMessageResponse> {
+   forwardMessage(key: string, identityKey?: string, peerKey?: string, urgent = false, async = true): Promise<SendMessageResponse> {
       const params: Record<string, string> = { key };
       if (identityKey) params.identityKey = identityKey;
       if (peerKey) params.peerKey = peerKey;
       if (urgent) params.urgent = 'true';
+      if (async) params.async = 'true';
       return get('/api/message/forward', params);
    },
 
@@ -350,8 +372,8 @@ export const graffiti = {
       return parseJson<SendMessageResponse>(res);
    },
 
-   async sendFile(identityKey: string, peerKey: string, file: File, urgent = false): Promise<SendMessageResponse> {
-      const url = new URL(`/api/message/send/file?identityKey=${encodeURIComponent(identityKey)}&peerKey=${encodeURIComponent(peerKey)}&file=${encodeURIComponent(file.name)}${urgent ? '&urgent=true' : ''}`, window.location.origin);
+   async sendFile(identityKey: string, peerKey: string, file: File, urgent = false, async = true): Promise<SendMessageResponse> {
+      const url = new URL(`/api/message/send/file?identityKey=${encodeURIComponent(identityKey)}&peerKey=${encodeURIComponent(peerKey)}&file=${encodeURIComponent(file.name)}${urgent ? '&urgent=true' : ''}${async ? '&async=true' : ''}`, window.location.origin);
       const res = await fetch(url.toString(), {
          method: 'PUT',
          headers: {
@@ -384,8 +406,8 @@ export const graffiti = {
       return parseJson<ApiOk>(res);
    },
 
-   async createPackFinish(sessionId: string): Promise<SendMessageResponse> {
-      const url = new URL(`/api/pack/create/finish?sessionId=${encodeURIComponent(sessionId)}`, window.location.origin);
+   async createPackFinish(sessionId: string, async = true): Promise<SendMessageResponse> {
+      const url = new URL(`/api/pack/create/finish?sessionId=${encodeURIComponent(sessionId)}${async ? '&async=true' : ''}`, window.location.origin);
       const res = await fetch(url.toString(), {
          method: 'POST'
       });
@@ -410,6 +432,20 @@ export const graffiti = {
 
    refresh(): Promise<ApiOk> {
       return get('/api/messages/refresh');
+   },
+
+   // ── Background Commands ───────────────────────────────────────────────
+
+   listActiveCommands(): Promise<{ ok: boolean, commands: ActiveCommand[] }> {
+      return get('/api/commands/active');
+   },
+
+   getCommandStatus(commandId: string): Promise<{ ok: boolean, command: ActiveCommand }> {
+      return get('/api/command/status', { commandId });
+   },
+
+   cancelCommand(commandId: string): Promise<ApiOk> {
+      return get('/api/command/cancel', { commandId });
    },
 
    // ── Avatar ────────────────────────────────────────────────────────────

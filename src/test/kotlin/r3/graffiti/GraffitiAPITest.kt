@@ -478,5 +478,53 @@ class GraffitiAPITest {
 		assertTrue(p2p.deleteMessage(msgKey))
 		assertNull(p2p.getDecryptedMeta(msgKey))
 	}
+
+	@Test
+	fun testAsyncCommandEndpoints(@TempDir tempDir: File) {
+		val p2p = GraffitiP2P(tempDir)
+		val events = mutableListOf<JSONObject>()
+		val api = GraffitiAPI(p2p) { evt -> events.add(evt) }
+
+		val alice = p2p.createIdentity("async-alice")
+		val bob = p2p.createIdentity("async-bob")
+
+		// 1. Send file asynchronously
+		val sendFileHeader = JSONObject()
+			.put("path", "/api/message/send/file")
+			.put("method", "PUT")
+			.put("identityKey", alice.key.toString())
+			.put("peerKey", bob.asPeer().key.toString())
+			.put("file", "notes.txt")
+			.put("async", true)
+		val sendRes = api.handle(sendFileHeader, TestStringContent("Secret notes for Bob"))
+		assertNotNull(sendRes)
+		val sendJson = JSONObject(sendRes!!.readString())
+		assertTrue(sendJson.getBoolean("ok"))
+		assertTrue(sendJson.has("commandId"))
+		val cmdId = sendJson.getString("commandId")
+
+		// 2. Poll status until completed
+		val deadline = System.currentTimeMillis() + 5000
+		var status = ""
+		while (System.currentTimeMillis() < deadline) {
+			val statusHeader = JSONObject()
+				.put("path", "/api/command/status")
+				.put("commandId", cmdId)
+			val statusRes = api.handle(statusHeader, null)
+			assertNotNull(statusRes)
+			val cmdObj = JSONObject(statusRes!!.readString()).getJSONObject("command")
+			status = cmdObj.getString("status")
+			if (status == "COMPLETED") break
+			Thread.sleep(25)
+		}
+		assertEquals("COMPLETED", status)
+
+		// 3. Verify message listed
+		val listHeader = JSONObject().put("path", "/api/messages").put("method", "GET")
+		val listJson = JSONObject(api.handle(listHeader, null)!!.readString())
+		assertTrue(listJson.getBoolean("ok"))
+		val msgs = listJson.getJSONArray("messages")
+		assertEquals(1, msgs.length())
+	}
 }
 

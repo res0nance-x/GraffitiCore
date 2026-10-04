@@ -18,6 +18,7 @@ class StateManager(
 	private val messagesVersion = AtomicLong(1L)
 
 	private val isEncoding = AtomicBoolean(false)
+	var activeCommandsSupplier: (() -> List<Command>)? = null
 
 	fun currentVersion(): Long = version.get()
 
@@ -27,7 +28,7 @@ class StateManager(
 		}
 	}
 
-	fun isEncoding(): Boolean = isEncoding.get()
+	fun isEncoding(): Boolean = isEncoding.get() || (activeCommandsSupplier?.invoke()?.isNotEmpty() == true)
 
 	fun onTransferChanged() {
 		notifyChanged()
@@ -92,7 +93,10 @@ class StateManager(
 		root.put("ok", true)
 		root.put("version", v)
 		root.put("transferring", p2p.isAnyTransferActive())
-		root.put("encoding", isEncoding.get())
+		root.put("encoding", isEncoding())
+		val activeCmdsArr = JSONArray()
+		activeCommandsSupplier?.invoke().orEmpty().forEach { activeCmdsArr.put(it.toJson()) }
+		root.put("activeCommands", activeCmdsArr)
 
 		// Nodes
 		root.put("nodesVersion", nodesVersion.get())

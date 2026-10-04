@@ -37,7 +37,18 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		)
 	}
 
+	val commandQueue = CommandQueue(p2p, stateManager)
+
 	init {
+		stateManager.activeCommandsSupplier = { commandQueue.listActive() }
+		commandQueue.onCommandUpdated = { cmd ->
+			sendToAll(
+				JSONObject()
+					.put("event", "command_updated")
+					.put("command", cmd.toJson())
+			)
+		}
+
 		// Wire up p2p event callbacks — p2p is always ready at construction.
 		p2p.onNodeConnected = { _, _ ->
 			stateManager.onNodesChanged()
@@ -137,11 +148,34 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/pack/create/file" -> content?.let { uploadPackFile(header, it) } ?: err("No file content provided")
 			"/api/pack/create/finish" -> finishPackCreation(header)
 			"/api/pack/create/cancel" -> cancelPackCreation(header)
+			"/api/commands/active" -> listActiveCommands()
+			"/api/command/status" -> getCommandStatus(header)
+			"/api/command/cancel" -> cancelCommand(header)
 			"/api/transfer/status" -> transferStatus()
 			"/api/version" -> getVersion()
 			"/api/open-url" -> openUrlApi(header, content)
 			else -> null
 		}
+	}
+
+	private fun listActiveCommands(): Content {
+		val arr = JSONArray()
+		commandQueue.listActive().forEach { arr.put(it.toJson()) }
+		return ok { put("commands", arr) }
+	}
+
+	private fun getCommandStatus(header: JSONObject): Content {
+		val id = header.optString("commandId").ifEmpty { header.optString("id") }
+		if (id.isEmpty()) return err("Missing 'commandId' parameter")
+		val cmd = commandQueue.get(id) ?: return err("Command not found")
+		return ok { put("command", cmd.toJson()) }
+	}
+
+	private fun cancelCommand(header: JSONObject): Content {
+		val id = header.optString("commandId").ifEmpty { header.optString("id") }
+		if (id.isEmpty()) return err("Missing 'commandId' parameter")
+		val cancelled = commandQueue.cancel(id)
+		return if (cancelled) ok() else err("Command not found or already finished")
 	}
 
 	private fun serveState(): Content {
@@ -358,6 +392,24 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		val sessionId = header.optString("sessionId")
 		if (sessionId.isEmpty()) return err("Missing 'sessionId' parameter")
 		val session = packStagingSessions.remove(sessionId) ?: return err("Pack staging session not found or expired")
+
+		val isAsync = header.optBoolean("async", false) || header.optString("async") == "true"
+		if (isAsync) {
+			val ts = p2p.nextMonotonicTimestamp()
+			val cmd = Command(
+				type = CommandType.CREATE_PACK,
+				identityKey = session.identityKey,
+				peerKey = session.peerKey,
+				urgent = session.isUrgent,
+				sentTimestamp = ts,
+				payload = CommandPayload.PackPayload(session.stagingDir, session.packName)
+			)
+			commandQueue.submit(cmd)
+			return ok {
+				put("commandId", cmd.id)
+				put("sentTimestamp", ts)
+			}
+		}
 
 		val iden = p2p.getIdentityByKey(session.identityKey) ?: run {
 			session.stagingDir.deleteRecursively()
@@ -847,6 +899,24 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			return err("Failed to read message content: ${e.message}")
 		}
 		val isUrgent = header.optBoolean("urgent", false) || header.optString("urgent") == "true"
+		val isAsync = header.optBoolean("async", false) || header.optString("async") == "true"
+		if (isAsync) {
+			val ts = p2p.nextMonotonicTimestamp()
+			val cmd = Command(
+				type = CommandType.FORWARD,
+				identityKey = idenKey,
+				peerKey = peerKey,
+				urgent = isUrgent,
+				sentTimestamp = ts,
+				payload = CommandPayload.Forward(msgKey)
+			)
+			commandQueue.submit(cmd)
+			return ok {
+				put("commandId", cmd.id)
+				put("sentTimestamp", ts)
+			}
+		}
+
 		val baseName = content.path.removePrefix("urgent:")
 		val newPath = if (isUrgent) "urgent:$baseName" else baseName
 		val wrappedContent = MutableMetaDataContent(
@@ -892,6 +962,24 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		val iden = p2p.getIdentityByKey(idenKey) ?: return err("No identity found for $idenKey")
 		val peer = p2p.getPeerByKey(peerKey) ?: p2p.getIdentityByKey(IdentityKey(peerKey.arr))?.asPeer() ?: return err("No peer found for $peerKey")
 		val isUrgent = header.optBoolean("urgent", false) || header.optString("urgent") == "true"
+		val isAsync = header.optBoolean("async", false) || header.optString("async") == "true"
+		if (isAsync) {
+			val ts = p2p.nextMonotonicTimestamp()
+			val cmd = Command(
+				type = CommandType.SEND_TEXT,
+				identityKey = idenKey,
+				peerKey = peerKey,
+				urgent = isUrgent,
+				sentTimestamp = ts,
+				payload = CommandPayload.Text(text)
+			)
+			commandQueue.submit(cmd)
+			return ok {
+				put("commandId", cmd.id)
+				put("sentTimestamp", ts)
+			}
+		}
+
 		val textContent = if (isUrgent) {
 			MutableMetaDataContent(BinaryContent(text.toByteArray(), "urgent:text", "txt"))
 		} else {
@@ -921,6 +1009,35 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		val iden = p2p.getIdentityByKey(idenKey) ?: return err("No identity found for $idenKey")
 		val peer = p2p.getPeerByKey(peerKey) ?: p2p.getIdentityByKey(IdentityKey(peerKey.arr))?.asPeer() ?: return err("No peer found for $peerKey")
 		val isUrgent = header.optBoolean("urgent", false) || header.optString("urgent") == "true"
+		val isAsync = header.optBoolean("async", false) || header.optString("async") == "true"
+		if (isAsync) {
+			val stagedFile = File(p2p.tmpDir, "upload_${UUID.randomUUID()}.tmp")
+			try {
+				stagedFile.outputStream().use { out ->
+					content.createInputStream().use { inp ->
+						inp.copyTo(out)
+					}
+				}
+			} catch (e: Exception) {
+				if (stagedFile.exists()) stagedFile.delete()
+				return err("Failed to stage uploaded file: ${e.message}")
+			}
+			val ts = p2p.nextMonotonicTimestamp()
+			val cmd = Command(
+				type = CommandType.SEND_FILE,
+				identityKey = idenKey,
+				peerKey = peerKey,
+				urgent = isUrgent,
+				sentTimestamp = ts,
+				payload = CommandPayload.FilePayload(stagedFile, originalName)
+			)
+			commandQueue.submit(cmd)
+			return ok {
+				put("commandId", cmd.id)
+				put("sentTimestamp", ts)
+			}
+		}
+
 		val storedPath = if (isUrgent) "urgent:$originalName" else originalName
 		val wrappedContent = MutableMetaDataContent(content).apply {
 			path = storedPath

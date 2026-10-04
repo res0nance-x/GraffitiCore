@@ -134,6 +134,8 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		}
 	}
 
+	var activeWatermarkSupplier: (() -> Long?)? = null
+
 	@Volatile
 	private var relayEnabled = relayEnabledAtStartup
 
@@ -280,7 +282,8 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 				QueryMessage.type -> {
 					val msg = QueryMessage.read(rawHead.toDataInputStream())
 					nodeQueryMap[node] = msg
-					val serverTime = nextMonotonicTimestamp()
+					val currentTs = nextMonotonicTimestamp()
+					val serverTime = activeWatermarkSupplier?.invoke()?.let { minOf(it, currentTs) } ?: currentTs
 					val metaList = mutableListOf<EncryptedContentMetaData>()
 					metaCache.values.forEach { eMeta ->
 						val msgTime = metaTimeCache[eMeta.key] ?: File(metaDir, "${eMeta.key}").lastModified()
@@ -791,7 +794,12 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		}
 	}
 
-	fun pkeEncrypt(content: Content, authorIdentity: Identity, recipientPeer: Peer): EncryptedMetaKey {
+	fun pkeEncrypt(
+		content: Content,
+		authorIdentity: Identity,
+		recipientPeer: Peer,
+		timestamp: Long = nextMonotonicTimestamp()
+	): EncryptedMetaKey {
 		val contentKey = ContentKey(content.hash256())
 		val meta = ContentMeta(content)
 		val pass = Password256.createPassword()
@@ -802,7 +810,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		totalContentSize.addAndGet(fileSize)
 		val metaDest = File(metaDir, eMeta.key.toString()).consistentFile()
 		metaDest.writeBytes(eMeta.serialize())
-		val ts = nextMonotonicTimestamp()
+		val ts = timestamp
 		metaDest.setLastModified(ts)
 
 		metaCache[eMeta.key] = eMeta

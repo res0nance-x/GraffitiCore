@@ -2,7 +2,7 @@ import {graffiti} from './graffiti-api.js';
 import {onWsEvent, onWsOpen} from './app.js';
 import {applyNodesState, applyRelayState, applyServerState, updateNetTransferIndicator} from './network.js';
 import {applyContactsState, applyWhitelistState} from './identity.js';
-import {applyMessagesContactsState, applyMessagesState, updateMsgIndicator} from './messages.js';
+import {applyActiveCommandsState, applyMessagesContactsState, applyMessagesState, updateMsgIndicator} from './messages.js';
 
 let currentVersion = -1;
 let lastNodesVersion = -1;
@@ -28,9 +28,12 @@ export async function syncState(forced = false): Promise<void> {
       }
       currentVersion = state.version;
 
-      // 1. Indicators (always update)
+      // 1. Indicators & Active Background Commands (always update)
       updateNetTransferIndicator(Boolean(state.transferring));
       updateMsgIndicator(Boolean(state.encoding));
+      if (state.activeCommands) {
+         applyActiveCommandsState(state.activeCommands);
+      }
 
       // 2. Nodes
       if (forced || state.nodesVersion !== lastNodesVersion) {

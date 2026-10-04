@@ -1,4 +1,4 @@
-import {DecryptedMessageMeta, graffiti, IdentityEntry, openPackFile, PeerEntry} from './graffiti-api.js';
+import {ActiveCommand, DecryptedMessageMeta, graffiti, IdentityEntry, openPackFile, PeerEntry} from './graffiti-api.js';
 import {onSectionShow, onWsEvent, onWsOpen, showSection} from './app.js';
 import {showDialog, showProgressModal} from './dialog.js';
 import {attachCustomAudioPlayer} from './audio-player.js';
@@ -31,11 +31,129 @@ let isRefreshing = false;
 let indicatorMinTimer: number | null = null;
 let indicatorActiveUntil = 0;
 
+// ── Background Active Commands State ─────────────────────────────────────────
+const activeCommandsMap = new Map<string, ActiveCommand>();
+
+export function applyActiveCommandsState(commands: ActiveCommand[]): void {
+   activeCommandsMap.clear();
+   for (const cmd of commands) {
+      if (cmd.status !== 'COMPLETED' && cmd.status !== 'FAILED' && cmd.status !== 'CANCELLED') {
+         activeCommandsMap.set(cmd.id, cmd);
+      }
+   }
+   renderActiveTasks();
+   updateMsgIndicator(activeCommandsMap.size > 0);
+}
+
+export function handleCommandUpdate(cmd: ActiveCommand): void {
+   if (cmd.status === 'COMPLETED' || cmd.status === 'FAILED' || cmd.status === 'CANCELLED') {
+      activeCommandsMap.delete(cmd.id);
+      evictCachedElement(`pending-${cmd.id}`);
+      queueRefreshMessages();
+   } else {
+      activeCommandsMap.set(cmd.id, cmd);
+      const container = document.getElementById('messages');
+      const pendingEl = container?.querySelector(`[data-msg-key="pending-${cmd.id}"]`);
+      if (pendingEl) {
+         const statusSpan = pendingEl.querySelector('.pending-status-text');
+         if (statusSpan) statusSpan.textContent = cmd.statusMessage || `${cmd.progress}%`;
+         const fill = pendingEl.querySelector<HTMLElement>('.pending-progress-bar');
+         if (fill) fill.style.width = `${Math.max(5, cmd.progress)}%`;
+      } else {
+         void applyTopicFilter(false);
+      }
+   }
+   renderActiveTasks();
+   updateMsgIndicator(activeCommandsMap.size > 0);
+}
+
+onWsEvent('command_updated', (msg: Record<string, unknown>) => {
+   if (msg.command) {
+      handleCommandUpdate(msg.command as unknown as ActiveCommand);
+   }
+});
+
+function renderActiveTasks(): void {
+   let container = document.getElementById('active-tasks-container');
+   if (!container) {
+      const composer = document.querySelector('.composer') || document.getElementById('message-form');
+      if (composer && composer.parentNode) {
+         container = document.createElement('div');
+         container.id = 'active-tasks-container';
+         composer.parentNode.insertBefore(container, composer);
+      }
+   }
+   if (!container) return;
+
+   if (activeCommandsMap.size === 0) {
+      container.style.display = 'none';
+      container.innerHTML = '';
+      return;
+   }
+
+   container.style.display = 'flex';
+   container.style.flexDirection = 'column';
+   container.style.gap = '0.35rem';
+   container.style.marginBottom = '0.5rem';
+   container.style.padding = '0.4rem 0.6rem';
+   container.style.background = 'rgba(0,0,0,0.15)';
+   container.style.borderRadius = '6px';
+   container.style.border = '1px solid rgba(255,255,255,0.08)';
+
+   container.innerHTML = '';
+   for (const cmd of activeCommandsMap.values()) {
+      const row = document.createElement('div');
+      row.style.display = 'flex';
+      row.style.alignItems = 'center';
+      row.style.justifyContent = 'space-between';
+      row.style.gap = '0.75rem';
+      row.style.fontSize = '0.82rem';
+
+      const left = document.createElement('div');
+      left.style.display = 'flex';
+      left.style.alignItems = 'center';
+      left.style.gap = '0.4rem';
+      left.style.overflow = 'hidden';
+      left.style.textOverflow = 'ellipsis';
+      left.style.whiteSpace = 'nowrap';
+
+      const icon = document.createElement('span');
+      icon.className = 'nav-indicator-dot is-active';
+      icon.style.display = 'inline-block';
+      icon.style.flexShrink = '0';
+
+      const label = document.createElement('span');
+      const name = cmd.fileName || cmd.packName || cmd.type;
+      const statusMsg = cmd.statusMessage || `${cmd.progress}%`;
+      label.textContent = `${name}: ${statusMsg}`;
+
+      left.append(icon, label);
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.textContent = '✕';
+      cancelBtn.title = 'Cancel task';
+      cancelBtn.style.padding = '0.1rem 0.35rem';
+      cancelBtn.style.fontSize = '0.75rem';
+      cancelBtn.style.background = 'transparent';
+      cancelBtn.style.border = 'none';
+      cancelBtn.style.cursor = 'pointer';
+      cancelBtn.style.opacity = '0.6';
+      cancelBtn.addEventListener('click', async () => {
+         cancelBtn.disabled = true;
+         await graffiti.cancelCommand(cmd.id);
+      });
+
+      row.append(left, cancelBtn);
+      container.append(row);
+   }
+}
+
 export function updateMsgIndicator(busy: boolean): void {
    const indicator = document.getElementById('nav-msg-indicator');
    if (!indicator) return;
 
-   const shouldBeActive = busy || isSending;
+   const shouldBeActive = busy || isSending || activeCommandsMap.size > 0;
    const now = Date.now();
 
    if (shouldBeActive) {
@@ -191,7 +309,7 @@ async function ensureMetaForSlice(slice: MessageData[]): Promise<void> {
    const promisesToWait: Promise<unknown>[] = [];
 
    for (const m of slice) {
-      if (metaCache.has(m.key) || (m.type !== undefined && m.type !== '')) {
+      if (m.isPending || metaCache.has(m.key) || (m.type !== undefined && m.type !== '')) {
          continue;
       }
       const existingPromise = inFlightMetaFetches.get(m.key);
@@ -419,9 +537,60 @@ function updateFilteredMessages(): void {
    const selectedTo = toField?.value ?? '';
    if (!selectedTo) {
       allFilteredMessages = [];
-   } else {
-      allFilteredMessages = allRawMessages.filter(m => isMessageInSelectedTopic(m, selectedTo));
+      return;
    }
+   const raw = allRawMessages.filter(m => isMessageInSelectedTopic(m, selectedTo));
+
+   const pending: MessageData[] = [];
+   for (const cmd of activeCommandsMap.values()) {
+      if (cmd.status === 'COMPLETED' || cmd.status === 'FAILED' || cmd.status === 'CANCELLED') continue;
+      if (cmd.resultKey && allRawMessages.some(m => m.key === cmd.resultKey)) continue;
+
+      const authorLabel = knownIdentities.find(id => id.key === cmd.identityKey)?.name || 'Me';
+      const recipientLabel = knownPeers.find(p => p.key === cmd.peerKey)?.name
+         || knownIdentities.find(id => id.key === cmd.peerKey || id.peerKey === cmd.peerKey)?.name
+         || 'Recipient';
+
+      let type = 'binary';
+      let name = cmd.fileName || 'file';
+      if (cmd.type === 'SEND_TEXT') {
+         type = 'text';
+         name = 'text';
+      } else if (cmd.type === 'CREATE_PACK') {
+         type = 'pack';
+         name = cmd.packName || 'archive.pack';
+      } else if (cmd.type === 'SEND_BELL') {
+         type = 'bell';
+         name = 'bell';
+      } else if (cmd.fileName) {
+         const dotIdx = cmd.fileName.lastIndexOf('.');
+         const ext = dotIdx >= 0 ? cmd.fileName.substring(dotIdx + 1).toLowerCase() : '';
+         type = ext || 'binary';
+      }
+
+      const pMsg: MessageData = {
+         key: `pending-${cmd.id}`,
+         author: authorLabel,
+         authorKey: cmd.identityKey,
+         recipient: recipientLabel,
+         recipientKey: cmd.peerKey,
+         fileTime: cmd.sentTimestamp,
+         created: cmd.sentTimestamp,
+         name: name,
+         type: type,
+         urgent: cmd.urgent,
+         isPending: true,
+         pendingCommandId: cmd.id,
+         progress: cmd.progress,
+         statusMessage: cmd.statusMessage || 'Processing...'
+      };
+
+      if (isMessageInSelectedTopic(pMsg, selectedTo) || cmd.peerKey === selectedTo) {
+         pending.push(pMsg);
+      }
+   }
+
+   allFilteredMessages = [...raw, ...pending].sort((a, b) => (a.fileTime || 0) - (b.fileTime || 0));
 }
 
 export async function applyTopicFilter(shouldScrollToBottom = true): Promise<void> {
@@ -472,7 +641,7 @@ export function renderMessageList(): void {
 
    for (const msg of visibleSlice) {
       const expectedTemplateId = pickTemplateId(msg.type);
-      const isHydrated = Boolean(msg.type !== undefined && msg.type !== '');
+      const isHydrated = Boolean(!msg.isPending && msg.type !== undefined && msg.type !== '');
 
       let el: HTMLElement | null = container.querySelector(`[data-msg-key="${CSS.escape(msg.key)}"]`);
       if (el) {
@@ -720,6 +889,10 @@ interface MessageData {
    created?: number | string;
    fileTime?: number;
    urgent?: boolean;
+   isPending?: boolean;
+   pendingCommandId?: string;
+   progress?: number;
+   statusMessage?: string;
 }
 
 function fillHeader(item: HTMLElement, msg: MessageData): void {
@@ -790,7 +963,7 @@ function fillHeader(item: HTMLElement, msg: MessageData): void {
 let activeContextMsg: MessageData | null = null;
 
 function openContextMenu(x: number, y: number, msg: MessageData): void {
-   if (!msgContextMenu) return;
+   if (!msgContextMenu || msg.isPending) return;
    activeContextMsg = msg;
 
    const copyBtn = msgContextMenu.querySelector<HTMLButtonElement>('[data-action="copy"]');
@@ -1062,8 +1235,108 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
    el.dataset.msgKey = msg.key;
    el.dataset.templateId = tplId;
    el.dataset.msgType = msg.type || '';
-   el.dataset.hydrated = (msg.type !== undefined && msg.type !== '') ? 'true' : 'false';
+   el.dataset.hydrated = (!msg.isPending && msg.type !== undefined && msg.type !== '') ? 'true' : 'false';
    fillHeader(el, msg);
+
+   if (msg.isPending) {
+      el.classList.add('msg-pending');
+      el.style.opacity = '0.8';
+      const body = el.querySelector('.message-body');
+      if (body) {
+         body.innerHTML = '';
+         const box = document.createElement('div');
+         box.className = 'msg-pending-box';
+         box.style.display = 'flex';
+         box.style.flexDirection = 'column';
+         box.style.gap = '0.35rem';
+         box.style.padding = '0.35rem 0.5rem';
+         box.style.borderRadius = '4px';
+         box.style.background = 'rgba(0,0,0,0.12)';
+
+         const row = document.createElement('div');
+         row.style.display = 'flex';
+         row.style.alignItems = 'center';
+         row.style.justifyContent = 'space-between';
+         row.style.gap = '0.5rem';
+         row.style.fontSize = '0.88rem';
+
+         const left = document.createElement('span');
+         left.style.fontWeight = '600';
+         left.style.display = 'inline-flex';
+         left.style.alignItems = 'center';
+         left.style.gap = '0.4rem';
+         left.style.overflow = 'hidden';
+         left.style.textOverflow = 'ellipsis';
+         left.style.whiteSpace = 'nowrap';
+
+         const dot = document.createElement('span');
+         dot.className = 'nav-indicator-dot is-active';
+         dot.style.width = '8px';
+         dot.style.height = '8px';
+         dot.style.display = 'inline-block';
+         dot.style.flexShrink = '0';
+
+         const titleSpan = document.createElement('span');
+         titleSpan.textContent = msg.name || 'Sending...';
+
+         left.append(dot, titleSpan);
+
+         const right = document.createElement('div');
+         right.style.display = 'flex';
+         right.style.alignItems = 'center';
+         right.style.gap = '0.5rem';
+
+         const statusSpan = document.createElement('span');
+         statusSpan.className = 'pending-status-text';
+         statusSpan.style.fontSize = '0.8rem';
+         statusSpan.style.opacity = '0.8';
+         statusSpan.style.flexShrink = '0';
+         statusSpan.textContent = msg.statusMessage || `${msg.progress || 0}%`;
+
+         right.append(statusSpan);
+
+         if (msg.pendingCommandId) {
+            const cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.textContent = '✕';
+            cancelBtn.title = 'Cancel sending';
+            cancelBtn.style.padding = '0.1rem 0.35rem';
+            cancelBtn.style.fontSize = '0.75rem';
+            cancelBtn.style.background = 'transparent';
+            cancelBtn.style.border = 'none';
+            cancelBtn.style.cursor = 'pointer';
+            cancelBtn.style.opacity = '0.6';
+            const cmdId = msg.pendingCommandId;
+            cancelBtn.addEventListener('click', async (e: MouseEvent) => {
+               e.stopPropagation();
+               cancelBtn.disabled = true;
+               await graffiti.cancelCommand(cmdId);
+            });
+            right.append(cancelBtn);
+         }
+
+         row.append(left, right);
+
+         const track = document.createElement('div');
+         track.style.width = '100%';
+         track.style.height = '4px';
+         track.style.background = 'rgba(128,128,128,0.25)';
+         track.style.borderRadius = '2px';
+         track.style.overflow = 'hidden';
+
+         const fill = document.createElement('div');
+         fill.className = 'pending-progress-bar';
+         fill.style.width = `${Math.max(5, msg.progress || 5)}%`;
+         fill.style.height = '100%';
+         fill.style.background = 'var(--accent, #4caf50)';
+         fill.style.transition = 'width 0.25s ease';
+
+         track.append(fill);
+         box.append(row, track);
+         body.append(box);
+      }
+      return el;
+   }
 
    if (isText(msg.type)) {
       const pre = el.querySelector<HTMLPreElement>('.msg-text-content');
@@ -1372,29 +1645,49 @@ type Payload =
 };
 
 async function sendPayload(payload: Payload): Promise<void> {
-   if (isSending) {
-      setStatus('Send in progress. Only one item can be sent at a time.');
+   const {identityKey, peerKey} = payload;
+   if (!identityKey || !peerKey) {
+      setStatus('Select a sender and recipient first.');
       return;
    }
-   setSendingState(true);
-   setStatus(`Sending ${payload.type}`);
+   setStatus(`Sending ${payload.type}...`);
    try {
-      const {identityKey, peerKey} = payload;
-      if (!identityKey || !peerKey) throw new Error('Select a sender and recipient first.');
       if (payload.type === 'text') {
          await graffiti.sendText(identityKey, peerKey, payload.text, !!payload.urgent);
+         resetUrgentCheckbox();
+         setStatus('Text sent.');
+         shouldScrollToBottomOnSend = true;
+         await refreshMessages();
+         scrollToBottom();
       } else {
-         await graffiti.sendFile(identityKey, peerKey, payload.file, !!payload.urgent);
+         setStatus(`Staging ${payload.fileName}...`);
+         const res = await graffiti.sendFile(identityKey, peerKey, payload.file, !!payload.urgent, true);
+         resetUrgentCheckbox();
+         if (res.commandId) {
+            const ts = res.sentTimestamp || Date.now();
+            handleCommandUpdate({
+               id: res.commandId,
+               type: 'SEND_FILE',
+               identityKey,
+               peerKey,
+               urgent: !!payload.urgent,
+               sentTimestamp: ts,
+               status: 'QUEUED',
+               progress: 10,
+               fileName: payload.fileName,
+               statusMessage: 'Queued on server...',
+               createdAt: ts
+            });
+            setStatus(`Queued in background: ${payload.fileName}`);
+         } else {
+            setStatus(`File sent: ${payload.fileName}`);
+         }
+         shouldScrollToBottomOnSend = true;
+         await refreshMessages();
+         scrollToBottom();
       }
-      resetUrgentCheckbox();
-      setStatus(`${payload.type} sent.`);
-      shouldScrollToBottomOnSend = true;
-      await refreshMessages();
-      scrollToBottom();
    } catch (err) {
       setStatus(`Failed: ${(err as Error).message}`);
-   } finally {
-      setSendingState(false);
    }
 }
 
@@ -1422,12 +1715,12 @@ form?.addEventListener('submit', async (event: SubmitEvent) => {
       return;
    }
    const urgent = urgentCheckbox?.checked ?? false;
-   await sendPayload({type: 'text', text, urgent, ...getEnvelope()});
-   if (!isSending && messageText) {
+   if (messageText) {
       messageText.value = '';
       autoResizeTextarea(messageText);
-      scrollToBottom();
    }
+   await sendPayload({type: 'text', text, urgent, ...getEnvelope()});
+   scrollToBottom();
 });
 
 messageText?.addEventListener('input', () => autoResizeTextarea(messageText));
@@ -1567,10 +1860,6 @@ async function sendPackPipeline(
    urgent: boolean,
    envelope: { identityKey: string, peerKey: string }
 ): Promise<void> {
-   if (isSending) {
-      setStatus('Send in progress. Only one item can be sent at a time.');
-      return;
-   }
    if (!envelope.identityKey || !envelope.peerKey) {
       setStatus('Select a sender and recipient first.');
       return;
@@ -1580,10 +1869,9 @@ async function sendPackPipeline(
       return;
    }
 
-   setSendingState(true);
    setStatus(`Preparing pack: ${packName}...`);
 
-   const progress = showProgressModal('Creating Pack Archive', `Starting upload for ${packName}...`);
+   const progress = showProgressModal('Creating Pack Archive', `Uploading files for ${packName}...`);
    let sessionId: string | null = null;
 
    try {
@@ -1596,7 +1884,7 @@ async function sendPackPipeline(
          const item = fileList[i];
          const pct = Math.round((i / total) * 100);
          progress.update(
-            `Staging file ${i + 1} of ${total} (${pct}%)`,
+            `Uploading file ${i + 1} of ${total} (${pct}%)`,
             pct,
             item.path
          );
@@ -1604,13 +1892,27 @@ async function sendPackPipeline(
          await graffiti.uploadPackFile(sessionId, item.path, item.file);
       }
 
-      progress.update('Compiling pack archive on server...', 100, 'Writing pack index and entries');
-      setStatus('Compiling pack archive...');
+      progress.update('Queued for background compilation and encryption!', 100);
+      setStatus(`Pack queued for background processing: ${packName}`);
 
-      await graffiti.createPackFinish(sessionId);
-
-      progress.update('Pack sent successfully!', 100);
-      setStatus('Pack sent.');
+      const res = await graffiti.createPackFinish(sessionId, true);
+      if (res.commandId) {
+         const ts = res.sentTimestamp || Date.now();
+         handleCommandUpdate({
+            id: res.commandId,
+            type: 'CREATE_PACK',
+            identityKey: envelope.identityKey,
+            peerKey: envelope.peerKey,
+            urgent: urgent,
+            sentTimestamp: ts,
+            status: 'QUEUED',
+            progress: 10,
+            packName: packName,
+            statusMessage: 'Queued on server...',
+            createdAt: ts
+         });
+         setStatus(`Pack queued: ${packName}`);
+      }
       resetUrgentCheckbox();
       shouldScrollToBottomOnSend = true;
       await refreshMessages();
@@ -1623,7 +1925,6 @@ async function sendPackPipeline(
       }
       alert(`Pack creation error: ${errMsg}`);
    } finally {
-      setSendingState(false);
       progress.close();
    }
 }
@@ -1723,11 +2024,6 @@ messagesSection?.addEventListener('drop', async (event: DragEvent) => {
       return;
    }
 
-   if (isSending) {
-      setStatus('Send in progress. Only one item can be sent at a time.');
-      return;
-   }
-
    const urgent = urgentCheckbox?.checked ?? false;
 
    // Check if files or folders were dropped
@@ -1799,11 +2095,6 @@ document.addEventListener('paste', async (event: ClipboardEvent) => {
    if (clipboardFiles.length > 0) {
       event.preventDefault();
       event.stopPropagation();
-
-      if (isSending) {
-         setStatus('Send in progress. Only one item can be sent at a time.');
-         return;
-      }
 
       const urgent = urgentCheckbox?.checked ?? false;
 
