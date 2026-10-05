@@ -122,15 +122,15 @@ Network
 				<!-- ── Manual Connect ───────────────────────────────────────────── -->
 				<section class="net-card">
 					<h3>Manually Connect to Peer</h3>
-					<div class="toolbar" style="border-bottom: none">
-						<label>Host
-							<input id="manual-connect-host" placeholder="192.168.1.x or hostname" style="width:18ch"
+					<div class="toolbar" style="border-bottom: none; display: flex; align-items: center; gap: 0.75rem;">
+						<label style="display: flex; align-items: center; gap: 0.5rem; flex: 1; min-width: 0;">Host
+							<input id="manual-connect-host" placeholder="192.168.1.x or hostname" style="flex: 1; min-width: 0;"
 								type="text">
 						</label>
-						<label>Port
-							<input id="manual-connect-port" max="65535" min="1" style="width:6ch" type="number" value="38214">
+						<label style="display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0;">Port
+							<input id="manual-connect-port" max="65535" min="1" style="width: 7.5ch;" type="number" value="38214">
 						</label>
-						<button id="btn-manual-connect" type="button">Connect</button>
+						<button id="btn-manual-connect" style="flex-shrink: 0;" type="button">Connect</button>
 					</div>
 					<p class="status-text" hidden id="manual-connect-status"></p>
 				</section>
@@ -606,8 +606,14 @@ Settings
 	<template id="tpl-identity-create">
 		<div class="dialog-field">
 			<label for="dlg-iden-seed">Seed phrase <small>(required)</small></label>
-			<input autocomplete="off" id="dlg-iden-seed" name="seed" placeholder="Deterministic key generation" required
-				type="text">
+			<div class="password-input-group">
+				<input autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+					id="dlg-iden-seed" name="seed" placeholder="Deterministic key generation" required
+					type="password">
+				<button type="button" class="password-toggle-btn" id="toggle-seed-visibility" title="Show seed phrase" aria-label="Show seed phrase">
+					<span class="material-symbols-outlined">visibility</span>
+				</button>
+			</div>
 			<small>The same seed always produces the same identity.</small>
 		</div>
 		<div class="dialog-field" style="margin-top: 0.25rem;">

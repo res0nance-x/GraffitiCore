@@ -75,6 +75,22 @@ document.getElementById('create-identity')?.addEventListener('click', async () =
       title: 'Create Identity',
       templateId: 'tpl-identity-create',
       confirmLabel: 'Create',
+      init: (body) => {
+         const seedInput = body.querySelector<HTMLInputElement>('#dlg-iden-seed');
+         const toggleBtn = body.querySelector<HTMLButtonElement>('#toggle-seed-visibility');
+         const toggleIcon = toggleBtn?.querySelector<HTMLSpanElement>('.material-symbols-outlined');
+         if (seedInput && toggleBtn && toggleIcon) {
+            toggleBtn.addEventListener('click', () => {
+               const isPassword = seedInput.type === 'password';
+               seedInput.type = isPassword ? 'text' : 'password';
+               toggleIcon.textContent = isPassword ? 'visibility_off' : 'visibility';
+               const label = isPassword ? 'Hide seed phrase' : 'Show seed phrase';
+               toggleBtn.title = label;
+               toggleBtn.setAttribute('aria-label', label);
+               seedInput.focus();
+            });
+         }
+      },
    });
    if (!data) return;
    const rawSeed = data.seed || '';

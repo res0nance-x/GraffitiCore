@@ -390,7 +390,9 @@ function wireButtons(): void {
       }
    }).catch(e => console.error('Failed to load manual connection settings:', e));
 
-   document.getElementById('btn-manual-connect')!.addEventListener('click', async () => {
+   let activeConnectTarget: string | null = null;
+
+   const performConnect = async () => {
       const host = (document.getElementById('manual-connect-host') as HTMLInputElement).value.trim();
       const port = parseInt((document.getElementById('manual-connect-port') as HTMLInputElement).value, 10);
       const statusEl = document.getElementById('manual-connect-status') as HTMLElement;
@@ -404,24 +406,44 @@ function wireButtons(): void {
          statusEl.hidden = false;
          return;
       }
-      const btn = document.getElementById('btn-manual-connect') as HTMLButtonElement;
-      btn.disabled = true;
-      btn.textContent = 'Connecting…';
-      statusEl.hidden = true;
+
+      const target = `${host}:${port}`;
+      if (activeConnectTarget === target) {
+         return;
+      }
+
+      activeConnectTarget = target;
+      statusEl.textContent = `Connecting to ${target}…`;
+      statusEl.hidden = false;
+
       try {
          await graffiti.connect(host, port);
-         statusEl.textContent = `Connected to ${host}:${port}.`;
-         statusEl.hidden = false;
-         await graffiti.setStore('graffiti:last-connect-host', host);
-         await graffiti.setStore('graffiti:last-connect-port', String(port));
+         if (activeConnectTarget === target) {
+            activeConnectTarget = null;
+            statusEl.textContent = `Connected to ${target}.`;
+            statusEl.hidden = false;
+            await graffiti.setStore('graffiti:last-connect-host', host);
+            await graffiti.setStore('graffiti:last-connect-port', String(port));
+         }
       } catch (e) {
-         statusEl.textContent = `Failed: ${(e as Error).message}`;
-         statusEl.hidden = false;
-      } finally {
-         btn.disabled = false;
-         btn.textContent = 'Connect';
+         if (activeConnectTarget === target) {
+            activeConnectTarget = null;
+            statusEl.textContent = `Failed: ${(e as Error).message}`;
+            statusEl.hidden = false;
+         }
       }
-   });
+   };
+
+   document.getElementById('btn-manual-connect')!.addEventListener('click', performConnect);
+
+   const onConnectKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') {
+         e.preventDefault();
+         void performConnect();
+      }
+   };
+   document.getElementById('manual-connect-host')?.addEventListener('keydown', onConnectKeyDown);
+   document.getElementById('manual-connect-port')?.addEventListener('keydown', onConnectKeyDown);
 
    document.getElementById('btn-discover')!.addEventListener('click', () => {
       void triggerDiscovery(true);
