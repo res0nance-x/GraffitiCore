@@ -128,6 +128,7 @@ class StateManager(
 					.put("key", iden.key.toString())
 					.put("peerKey", iden.asPeer().key.toString())
 					.put("persistent", p2p.isIdentityPersistent(iden.key))
+					.put("ignored", p2p.isIdentityIgnored(iden.key))
 			)
 		}
 		root.put("identities", idenArr)

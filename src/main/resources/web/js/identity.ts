@@ -30,6 +30,14 @@ export async function refreshIdentities(): Promise<void> {
             alert(`Persistence update failed: ${(err as Error).message}`);
          }
       },
+      onToggleIgnore: async (item: IdentityEntry) => {
+         try {
+            await graffiti.setIdentityIgnored(item.key, !item.ignored);
+            await refreshIdentities();
+         } catch (err) {
+            alert(`Ignore update failed: ${(err as Error).message}`);
+         }
+      },
       onRemove: async (item: TableItem) => {
          const iden = item as IdentityEntry;
          if (iden.key === node.peerKey) {
@@ -179,6 +187,13 @@ export async function applyContactsState(identities: IdentityEntry[], peers: Pee
                   await graffiti.setIdentityPersistence(item.key, !item.persistent);
                } catch (err) {
                   alert(`Persistence update failed: ${(err as Error).message}`);
+               }
+            },
+            onToggleIgnore: async (item: IdentityEntry) => {
+               try {
+                  await graffiti.setIdentityIgnored(item.key, !item.ignored);
+               } catch (err) {
+                  alert(`Ignore update failed: ${(err as Error).message}`);
                }
             },
             onRemove: async (item: TableItem) => {

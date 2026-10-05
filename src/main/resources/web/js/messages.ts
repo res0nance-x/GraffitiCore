@@ -300,6 +300,9 @@ function hydrateMsg(msg: MessageData, meta: DecryptedMessageMeta): void {
    msg.type = meta.type;
    msg.created = meta.created;
    msg.urgent = meta.urgent;
+   if (typeof meta.ignored === 'boolean') {
+      msg.ignored = meta.ignored;
+   }
 }
 
 const inFlightMetaFetches = new Map<string, Promise<DecryptedMessageMeta | null>>();
@@ -889,6 +892,7 @@ interface MessageData {
    created?: number | string;
    fileTime?: number;
    urgent?: boolean;
+   ignored?: boolean;
    isPending?: boolean;
    pendingCommandId?: string;
    progress?: number;
@@ -957,6 +961,27 @@ function fillHeader(item: HTMLElement, msg: MessageData): void {
       item.classList.remove('urgent-message');
       item.querySelector('.msg-urgent-badge')?.remove();
    }
+
+   if (msg.ignored) {
+      if (!item.querySelector('.msg-ignored-badge')) {
+         const badge = document.createElement('span');
+         badge.className = 'badge-session msg-ignored-badge';
+         badge.style.background = '#444';
+         badge.style.color = '#bbb';
+         badge.style.marginLeft = '4px';
+         badge.style.fontSize = '0.75rem';
+         badge.textContent = 'Ignored';
+         badge.title = 'Ignored for relays';
+         const header = item.querySelector('.message-header');
+         if (header && timeEl) {
+            header.insertBefore(badge, timeEl);
+         } else if (header) {
+            header.appendChild(badge);
+         }
+      }
+   } else {
+      item.querySelector('.msg-ignored-badge')?.remove();
+   }
 }
 
 // ── Message context menu & Quote ──────────────────────────────────────────────
@@ -969,6 +994,15 @@ function openContextMenu(x: number, y: number, msg: MessageData): void {
    const copyBtn = msgContextMenu.querySelector<HTMLButtonElement>('[data-action="copy"]');
    if (copyBtn) {
       copyBtn.hidden = !isText(msg.type);
+   }
+
+   const ignoreBtn = msgContextMenu.querySelector<HTMLButtonElement>('[data-action="toggle-ignore"]');
+   if (ignoreBtn) {
+      const isIgnored = Boolean(msg.ignored);
+      const icon = ignoreBtn.querySelector('.material-symbols-outlined');
+      const label = ignoreBtn.querySelector('.ignore-label') || ignoreBtn.querySelector('span:not(.material-symbols-outlined)');
+      if (icon) icon.textContent = isIgnored ? 'visibility' : 'visibility_off';
+      if (label) label.textContent = isIgnored ? 'Watch' : 'Ignore';
    }
 
    msgContextMenu.hidden = false;
@@ -3120,6 +3154,17 @@ msgContextMenu?.addEventListener('click', async (e: MouseEvent) => {
       await handleCopy(msg);
    } else if (action === 'download') {
       handleDownload(msg);
+   } else if (action === 'toggle-ignore') {
+      try {
+         const newIgnored = !msg.ignored;
+         await graffiti.setMessageIgnored(msg.key, newIgnored);
+         msg.ignored = newIgnored;
+         const cachedMeta = metaCache.get(msg.key);
+         if (cachedMeta) cachedMeta.ignored = newIgnored;
+         renderMessageList();
+      } catch (err: any) {
+         setStatus(`Failed to update ignore status: ${err?.message || err}`);
+      }
    } else if (action === 'info') {
       void handleMessageInfo(msg);
    }

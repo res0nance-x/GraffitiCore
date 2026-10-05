@@ -112,6 +112,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/identities" -> listIdentities()
 			"/api/identity/create" -> createIdentity(header, content)
 			"/api/identity/persist" -> persistIdentity(header)
+			"/api/identity/ignore" -> ignoreIdentity(header)
 			"/api/identity/remove" -> removeIdentity(header)
 			"/api/identity/to-peer" -> identityToPeer(header)
 			"/api/whitelist" -> handleWhitelist(header)
@@ -124,6 +125,8 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/messages/meta" -> getMessageMeta(header, content)
 			"/api/messages/refresh" -> refreshMessages(header)
 			"/api/message/remove" -> removeMessage(header)
+			"/api/message/ignore" -> ignoreMessage(header)
+			"/api/content/ignore" -> ignoreMessage(header)
 			"/api/message/forward" -> forwardMessage(header)
 			"/api/message/send/text" -> content?.let { sendTextMessage(header, it) }
 			"/api/message/send/file" -> content?.let { sendFileMessage(header, it) }
@@ -474,6 +477,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 						.put("key", keyStr)
 						.put("peerKey", iden.asPeer().key.toString())
 						.put("persistent", p2p.isIdentityPersistent(iden.key))
+						.put("ignored", p2p.isIdentityIgnored(iden.key))
 				)
 			}
 		return ok { put("identities", arr) }
@@ -514,6 +518,16 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			return ok()
 		}
 		return err("Identity not found or failed to set persistence")
+	}
+
+	private fun ignoreIdentity(header: JSONObject): Content {
+		val keyStr = header.optString("key")
+		if (keyStr.isEmpty()) return err("Missing key parameter")
+		val key = IdentityKey(keyStr)
+		val ignored = if (header.has("ignored")) header.getBoolean("ignored") else !p2p.isIdentityIgnored(key)
+		p2p.setIdentityIgnored(key, ignored)
+		stateManager.onIdentitiesChanged()
+		return ok { put("ignored", ignored) }
 	}
 
 	private fun identityToPeer(header: JSONObject): Content {
@@ -611,6 +625,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			.put("created", meta.created)
 			.put("fileTime", effectiveFileTime)
 			.put("urgent", isUrgent)
+			.put("ignored", p2p.isContentIgnored(eMeta.key))
 	}
 
 	private fun listMessages(): Content {
@@ -633,6 +648,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 					.put("recipient", eMeta.recipient.name)
 					.put("recipientKey", eMeta.recipient.toString())
 					.put("fileTime", fileTime)
+					.put("ignored", p2p.isContentIgnored(key))
 				entries.add(Entry(fileTime, key, obj))
 			} catch (_: Exception) { /* skip unreadable meta files */
 			}
@@ -690,6 +706,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 									.put("created", meta.created)
 									.put("fileTime", fileTime)
 									.put("urgent", isUrgent)
+									.put("ignored", p2p.isContentIgnored(k))
 							)
 						}
 					} catch (_: Exception) {}
@@ -714,6 +731,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 					.put("created", meta.created)
 					.put("fileTime", fileTime)
 					.put("urgent", isUrgent)
+					.put("ignored", p2p.isContentIgnored(k))
 				return ok { put("meta", obj) }
 			}
 
@@ -881,6 +899,15 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		p2p.deleteMessage(EncryptedMetaKey(key))
 		stateManager.onMessagesChanged()
 		return ok()
+	}
+
+	private fun ignoreMessage(header: JSONObject): Content {
+		val keyStr = header.optString("key").takeIf { it.isNotEmpty() } ?: return err("Missing 'key' parameter")
+		val key = EncryptedMetaKey(keyStr)
+		val ignored = if (header.has("ignored")) header.getBoolean("ignored") else !p2p.isContentIgnored(key)
+		p2p.setContentIgnored(key, ignored)
+		stateManager.onMessagesChanged()
+		return ok { put("ignored", ignored) }
 	}
 
 	private fun forwardMessage(header: JSONObject): Content {

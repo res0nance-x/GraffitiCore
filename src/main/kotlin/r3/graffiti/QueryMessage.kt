@@ -31,6 +31,8 @@ class QueryMessage(
 		return authorSet.matches(author) && recipientSet.matches(recipient)
 	}
 
+	fun isAskingAllRecipients(): Boolean = recipientSet.isAll()
+
 	companion object {
 		val type = "query"
 		fun read(dis: DataInputStream): QueryMessage {

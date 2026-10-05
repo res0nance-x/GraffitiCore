@@ -6,6 +6,7 @@ export interface TableOptions {
    onRemove?: (item: TableItem) => void | Promise<void>;
    onExport?: (item: TableItem) => void | Promise<void>;
    onTogglePersist?: (item: IdentityEntry) => void | Promise<void>;
+   onToggleIgnore?: (item: IdentityEntry) => void | Promise<void>;
    onAddToPeers?: (item: IdentityEntry) => void | Promise<void>;
    nodeKey?: string;
 }
@@ -16,7 +17,7 @@ export interface TableOptions {
 export function buildTable(
    table: HTMLTableElement,
    items: TableItem[],
-   {onRemove, onExport, onTogglePersist, onAddToPeers, nodeKey}: TableOptions = {},
+   {onRemove, onExport, onTogglePersist, onToggleIgnore, onAddToPeers, nodeKey}: TableOptions = {},
 ): void {
    const tbody = table.tBodies[0] ?? table.createTBody();
    tbody.replaceChildren();
@@ -65,6 +66,15 @@ export function buildTable(
             badge.className = isPersistent ? 'badge-relay' : 'badge-session';
             badge.textContent = isPersistent ? 'Saved' : 'Session';
             figcaption.appendChild(badge);
+            if ((item as IdentityEntry).ignored) {
+               const ignoredBadge = document.createElement('span');
+               ignoredBadge.className = 'badge-session';
+               ignoredBadge.style.background = '#444';
+               ignoredBadge.style.color = '#bbb';
+               ignoredBadge.style.marginLeft = '4px';
+               ignoredBadge.textContent = 'Ignored';
+               figcaption.appendChild(ignoredBadge);
+            }
          }
       }
 
@@ -87,6 +97,15 @@ export function buildTable(
             badge.className = isPersistent ? 'badge-relay' : 'badge-session';
             badge.textContent = isPersistent ? 'Saved' : 'Session';
             storageCell.appendChild(badge);
+            if ((item as IdentityEntry).ignored) {
+               const ignoredBadge = document.createElement('span');
+               ignoredBadge.className = 'badge-session';
+               ignoredBadge.style.background = '#444';
+               ignoredBadge.style.color = '#bbb';
+               ignoredBadge.style.marginLeft = '4px';
+               ignoredBadge.textContent = 'Ignored';
+               storageCell.appendChild(ignoredBadge);
+            }
          } else {
             storageCell.textContent = '—';
          }
@@ -110,6 +129,16 @@ export function buildTable(
          persistBtn.style.marginRight = '8px';
          persistBtn.addEventListener('click', () => onTogglePersist(item as IdentityEntry));
          actionsCell.append(persistBtn);
+      }
+
+      if (onToggleIgnore && 'persistent' in item) {
+         const ignoreBtn = document.createElement('button');
+         const isIgnored = Boolean((item as IdentityEntry).ignored);
+         ignoreBtn.textContent = isIgnored ? 'Watch' : 'Ignore';
+         ignoreBtn.title = isIgnored ? 'Watch identity (resume uploading to relays)' : 'Ignore identity (do not upload to relays)';
+         ignoreBtn.style.marginRight = '8px';
+         ignoreBtn.addEventListener('click', () => onToggleIgnore(item as IdentityEntry));
+         actionsCell.append(ignoreBtn);
       }
 
       if (onRemove && item.key !== nodeKey) {

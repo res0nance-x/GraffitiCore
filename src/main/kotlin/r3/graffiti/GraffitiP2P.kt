@@ -57,6 +57,8 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	val metaDir = File(graffitiDir, "meta").also { it.mkdirs() }
 	val contentDir = File(graffitiDir, "content").also { it.mkdirs() }
 	val deletedDir = File(graffitiDir, "deleted").also { it.mkdirs() }
+	val ignoredIdentitiesDir = File(graffitiDir, "ignored_identities").also { it.mkdirs() }
+	val ignoredContentDir = File(graffitiDir, "ignored_content").also { it.mkdirs() }
 	val tmpDir = File(graffitiDir, "tmp").also { it.mkdirs() }
 	var defaultP2PPort: Int = 0
 
@@ -77,6 +79,8 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	private val decryptedMetaCache = ConcurrentHashMap<EncryptedMetaKey, Pair<ContentMeta, Password256>>()
 	private val smallContentCache = ConcurrentHashMap<EncryptedMetaKey, ByteArray>()
 	private val deletedCache = ConcurrentHashMap.newKeySet<EncryptedMetaKey>()
+	private val ignoredIdentitiesCache = ConcurrentHashMap.newKeySet<IdentityKey>()
+	private val ignoredContentCache = ConcurrentHashMap.newKeySet<EncryptedMetaKey>()
 	private val contentSenderExecutor = Executors.newCachedThreadPool { r ->
 		Thread(r, "Graffiti-ContentSender").apply { isDaemon = true }
 	}
@@ -258,6 +262,14 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		deletedDir.listFiles { f -> f.isFile }?.forEach { file ->
 			runCatching { deletedCache.add(EncryptedMetaKey(file.name)) }
 		}
+		// Populate ignoredIdentitiesCache from disk
+		ignoredIdentitiesDir.listFiles { f -> f.isFile }?.forEach { file ->
+			runCatching { ignoredIdentitiesCache.add(IdentityKey(file.name)) }
+		}
+		// Populate ignoredContentCache from disk
+		ignoredContentDir.listFiles { f -> f.isFile }?.forEach { file ->
+			runCatching { ignoredContentCache.add(EncryptedMetaKey(file.name)) }
+		}
 		// Initialize totalContentSize cache
 		totalContentSize.set(contentDir.listFiles().orEmpty().sumOf { it.length() })
 		loadQuota()
@@ -282,12 +294,14 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 				QueryMessage.type -> {
 					val msg = QueryMessage.read(rawHead.toDataInputStream())
 					nodeQueryMap[node] = msg
+					val isAskingAll = msg.isAskingAllRecipients()
 					val currentTs = nextMonotonicTimestamp()
 					val serverTime = activeWatermarkSupplier?.invoke()?.let { minOf(it, currentTs) } ?: currentTs
 					val metaList = mutableListOf<EncryptedContentMetaData>()
 					metaCache.values.forEach { eMeta ->
 						val msgTime = metaTimeCache[eMeta.key] ?: File(metaDir, "${eMeta.key}").lastModified()
 						if (msg.queryTime > 0L && msgTime <= msg.queryTime) return@forEach
+						if (isAskingAll && isIgnoredForRelay(eMeta)) return@forEach
 						if (!msg.matches(eMeta)) return@forEach
 						val contentExists =
 							smallContentCache.containsKey(eMeta.key) || File(contentDir, "${eMeta.key}").exists()
@@ -378,6 +392,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 					log("Received ContentRequest from ${node.remoteAddress}: ${req.keys.joinToString { it.name }}")
 					contentSenderExecutor.execute {
 						try {
+							val isAskingAll = nodeQueryMap[node]?.isAskingAllRecipients() == true
 							req.keys.forEach { key ->
 								if (node.isClosed()) return@forEach
 								if (isMessageDeleted(key)) return@forEach
@@ -386,6 +401,10 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 									if (metaFile.exists()) {
 										metaFile.toDataInputStream().use { EncryptedContentMetaData.read(it) }
 									} else null
+								}
+								if (isAskingAll && eMeta != null && isIgnoredForRelay(eMeta)) {
+									log("Skipping sending ignored content ${key.name} to ${node.remoteAddress}")
+									return@forEach
 								}
 								val smallBytes = smallContentCache[key]
 								if (eMeta != null) {
@@ -710,6 +729,10 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		val body = ListWritable(listOf(eMeta.toHeader())).serialize()
 		allNodes.filter { !it.isClosed() && it != excludeNode }.forEach { node ->
 			val query = nodeQueryMap[node]
+			val isAskingAll = query?.isAskingAllRecipients() == true
+			if (isAskingAll && isIgnoredForRelay(eMeta)) {
+				return@forEach
+			}
 			val isRelay = nodeRelayMap[node] ?: false
 			if (isRelay || (query != null && query.matches(eMeta))) {
 				node.send(header, body)
@@ -763,6 +786,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	}
 
 	fun removeIdentity(key: IdentityKey): Boolean {
+		setIdentityIgnored(key, false)
 		identityCache.remove(key)
 		val removedEphemeral = ephemeralIdentities.removeIf { it.key == key }
 		val targetFile = File(identityDir, "$key")
@@ -937,6 +961,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 
 	@Synchronized
 	fun deleteMessage(key: EncryptedMetaKey): Boolean {
+		setContentIgnored(key, false)
 		queryOrderTimestamps.remove(key)
 		val hadMeta = metaCache.containsKey(key) || isMessageDeleted(key) || File(metaDir, "$key").exists()
 		pendingContentRequests.remove(key)
@@ -972,6 +997,70 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			}
 		}
 		return hadMeta
+	}
+
+	fun isIgnoredForRelay(eMeta: EncryptedContentMetaData): Boolean {
+		if (isContentIgnored(eMeta.key)) return true
+		if (isIdentityIgnored(eMeta.recipient)) return true
+		if (isIdentityIgnored(IdentityKey(eMeta.author.arr))) return true
+		return false
+	}
+
+	fun isIgnoredForRelay(header: EncryptedContentHeader): Boolean {
+		if (isContentIgnored(header.key)) return true
+		if (isIdentityIgnored(header.recipient)) return true
+		if (isIdentityIgnored(IdentityKey(header.author.arr))) return true
+		return false
+	}
+
+	fun isIdentityIgnored(key: IdentityKey): Boolean = ignoredIdentitiesCache.contains(key)
+
+	fun setIdentityIgnored(key: IdentityKey, ignored: Boolean): Boolean {
+		val file = File(ignoredIdentitiesDir, "$key")
+		val changed = if (ignored) {
+			val added = ignoredIdentitiesCache.add(key)
+			runCatching { file.createNewFile() }
+			added
+		} else {
+			val removed = ignoredIdentitiesCache.remove(key)
+			runCatching { if (file.exists()) file.delete() }
+			removed
+		}
+		if (!ignored) {
+			pushMessagesForIdentity(key)
+		}
+		return changed
+	}
+
+	fun isContentIgnored(key: EncryptedMetaKey): Boolean = ignoredContentCache.contains(key)
+
+	fun setContentIgnored(key: EncryptedMetaKey, ignored: Boolean): Boolean {
+		val file = File(ignoredContentDir, "$key")
+		val changed = if (ignored) {
+			val added = ignoredContentCache.add(key)
+			runCatching { file.createNewFile() }
+			added
+		} else {
+			val removed = ignoredContentCache.remove(key)
+			runCatching { if (file.exists()) file.delete() }
+			removed
+		}
+		if (!ignored) {
+			pushNewMessage(key)
+		}
+		return changed
+	}
+
+	fun listIgnoredIdentities(): Set<IdentityKey> = ignoredIdentitiesCache.toSet()
+
+	fun listIgnoredContent(): Set<EncryptedMetaKey> = ignoredContentCache.toSet()
+
+	private fun pushMessagesForIdentity(key: IdentityKey) {
+		metaCache.values.filter {
+			(it.recipient == key || it.author.arr.contentEquals(key.arr)) && !isIgnoredForRelay(it)
+		}.forEach { eMeta ->
+			pushNewMessage(eMeta.key)
+		}
 	}
 
 	// Session-only (ephemeral) identities — held in RAM, never written to disk.

@@ -22,6 +22,7 @@ export interface IdentityEntry {
    /** The Peer key derived from this identity — used as the recipient key when sending. */
    peerKey: string;
    persistent?: boolean;
+   ignored?: boolean;
 }
 
 export interface PeerEntry {
@@ -41,6 +42,7 @@ export interface MessageEntry {
    created?: number | string;
    fileTime?: number;
    urgent?: boolean;
+   ignored?: boolean;
 }
 
 export interface DecryptedMessageMeta {
@@ -51,6 +53,7 @@ export interface DecryptedMessageMeta {
    created: number | string;
    fileTime?: number;
    urgent?: boolean;
+   ignored?: boolean;
 }
 
 export interface ConnectionEntry {
@@ -291,6 +294,12 @@ export const graffiti = {
       return get('/api/identity/persist', {key, persistent: String(persistent)});
    },
 
+   setIdentityIgnored(key: string, ignored?: boolean): Promise<ApiOk & { ignored?: boolean }> {
+      const params: Record<string, string> = { key };
+      if (typeof ignored === 'boolean') params.ignored = String(ignored);
+      return get('/api/identity/ignore', params);
+   },
+
    identityToPeer(key: string): Promise<ApiOk & { name?: string; key?: string }> {
       return get('/api/identity/to-peer', {key});
    },
@@ -351,6 +360,12 @@ export const graffiti = {
 
    removeMessage(key: string): Promise<ApiOk> {
       return get('/api/message/remove', {key});
+   },
+
+   setMessageIgnored(key: string, ignored?: boolean): Promise<ApiOk & { ignored?: boolean }> {
+      const params: Record<string, string> = { key };
+      if (typeof ignored === 'boolean') params.ignored = String(ignored);
+      return get('/api/message/ignore', params);
    },
 
    forwardMessage(key: string, identityKey?: string, peerKey?: string, urgent = false, async = true): Promise<SendMessageResponse> {

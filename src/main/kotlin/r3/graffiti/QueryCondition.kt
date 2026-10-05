@@ -19,6 +19,8 @@ class QueryCondition(val set: Set<Key256>, val conditionType: ConditionType) : W
 		}
 	}
 
+	fun isAll(): Boolean = conditionType == ConditionType.Exclude && set.isEmpty()
+
 	override fun write(dos: DataOutputStream) {
 		dos.writeInt(conditionType.ordinal)
 		ListWritable(set.toList()).write(dos)
