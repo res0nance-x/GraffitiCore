@@ -312,7 +312,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 						QueryResponseMessage(serverTime).serialize(),
 						ListWritable(metaList.map { it.toHeader() }).serialize()
 					)
-					log("Query from ${node.remoteAddress} (since=${msg.queryTime}): returning ${metaList.size} metadata items (out of ${metaCache.size})")
+					debug("Query from ${node.remoteAddress} (since=${msg.queryTime}): returning ${metaList.size} metadata items (out of ${metaCache.size})")
 				}
 				// Response to our earlier QueryMessage: a list of EncryptedContentMetaData from the peer.
 				// We save any new meta addressed to us, then request the actual content for those keys.
@@ -330,11 +330,11 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 						val myPeerKeys = listPeers().map { it.key }.toSet()
 						val wantContent = mutableListOf<EncryptedMetaKey>()
 						val wantPeers = mutableSetOf<PeerKey>()
-						log("Received QueryResponse from ${node.remoteAddress}: ${headerList.size} header item(s)")
+						debug("Received QueryResponse from ${node.remoteAddress}: ${headerList.size} header item(s)")
 						headerList.forEach { msgHeader ->
 							if (isMessageDeleted(msgHeader.key)) return@forEach
 							if (msgHeader.author.arr.contentEquals(msgHeader.recipient.arr)) {
-								log("Ignoring header ${msgHeader.key.name} from ${node.remoteAddress}: author and recipient are the same")
+								debug("Ignoring header ${msgHeader.key.name} from ${node.remoteAddress}: author and recipient are the same")
 								return@forEach
 							}
 							// Non-relay mode: ignore meta not addressed to us or our direct friends
@@ -343,12 +343,12 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 								msgHeader.recipient !in myIdentityKeys &&
 								PeerKey(msgHeader.recipient) !in myPeerKeys
 							) {
-								log("Ignoring off-recipient meta ${msgHeader.key.name} from ${node.remoteAddress}")
+								debug("Ignoring off-recipient meta ${msgHeader.key.name} from ${node.remoteAddress}")
 								return@forEach
 							}
 							// Whitelist mode: only accept messages from known peers
 							if (whitelistEnabled && !relayEnabled && msgHeader.author !in myPeerKeys) {
-								log("Ignoring meta ${msgHeader.key.name} from ${node.remoteAddress}: author ${msgHeader.author.name} not in whitelist")
+								debug("Ignoring meta ${msgHeader.key.name} from ${node.remoteAddress}: author ${msgHeader.author.name} not in whitelist")
 								return@forEach
 							}
 							val metaExists = metaCache.containsKey(msgHeader.key) || File(metaDir, "${msgHeader.key}").exists()
@@ -375,12 +375,12 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 						}
 						if (wantPeers.isNotEmpty()) {
 							node.send(PeerRequestMessage(wantPeers.toList()).serialize())
-							log("Requested ${wantPeers.size} peer(s) from ${node.remoteAddress}")
+							debug("Requested ${wantPeers.size} peer(s) from ${node.remoteAddress}")
 						}
 						if (wantContent.isNotEmpty()) {
 							node.send(ContentRequestMessage(wantContent).serialize())
 						} else if (wantPeers.isEmpty()) {
-							log("No content requests needed from ${node.remoteAddress} after QueryResponse")
+							debug("No content requests needed from ${node.remoteAddress} after QueryResponse")
 						}
 					}
 				}
@@ -389,7 +389,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 				// Offloaded to a background executor so the TCP receive loop is never blocked during file transfer.
 				ContentRequestMessage.type -> {
 					val req = ContentRequestMessage.read(rawHead.toDataInputStream())
-					log("Received ContentRequest from ${node.remoteAddress}: ${req.keys.joinToString { it.name }}")
+					debug("Received ContentRequest from ${node.remoteAddress}: ${req.keys.joinToString { it.name }}")
 					contentSenderExecutor.execute {
 						try {
 							val isAskingAll = nodeQueryMap[node]?.isAskingAllRecipients() == true
@@ -403,7 +403,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 									} else null
 								}
 								if (isAskingAll && eMeta != null && isIgnoredForRelay(eMeta)) {
-									log("Skipping sending ignored content ${key.name} to ${node.remoteAddress}")
+									debug("Skipping sending ignored content ${key.name} to ${node.remoteAddress}")
 									return@forEach
 								}
 								val smallBytes = smallContentCache[key]
@@ -411,17 +411,18 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 									val contentFile = if (smallBytes == null) File(contentDir, "$key") else null
 									val hasContent = smallBytes != null || (contentFile?.exists() == true)
 									if (hasContent) {
+										val fileSize = smallBytes?.size?.toLong() ?: contentFile?.length() ?: 0L
 										if (smallBytes != null) {
 											node.send(EncryptedContentMessage(eMeta).serialize(), smallBytes)
 										} else if (contentFile != null) {
 											node.send(EncryptedContentMessage(eMeta).serialize(), contentFile)
 										}
+										logOutgoing(node, key.name, fileSize)
 									}
 								}
 							}
-							log("ContentRequest from ${node.remoteAddress}: served ${req.keys.size} keys")
 						} catch (e: Exception) {
-							log("Error serving ContentRequest to ${node.remoteAddress}: ${e.message}")
+							logNodeError(node, "Error serving ContentRequest: ${e.message}")
 						}
 					}
 				}
@@ -432,15 +433,15 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 					if (file != null) {
 						if (isMessageDeleted(eMeta.key)) {
 							file.delete()
-							log("Ignoring content ${eMeta.key.name} from ${node.remoteAddress}: key is deleted")
+							debug("Ignoring content ${eMeta.key.name} from ${node.remoteAddress}: key is deleted")
 						} else if (eMeta.author.arr.contentEquals(eMeta.recipient.arr)) {
 							file.delete()
-							log("Ignoring content ${eMeta.key.name} from ${node.remoteAddress}: author and recipient are the same")
+							debug("Ignoring content ${eMeta.key.name} from ${node.remoteAddress}: author and recipient are the same")
 						} else {
 							val peer = getPeerByKey(eMeta.author)
 							if (peer == null) {
 								file.delete()
-								log("Rejecting content ${eMeta.key.name} from ${node.remoteAddress}: author peer ${eMeta.author.name} not found")
+								logNodeError(node, "Author peer ${eMeta.author.name} not found for content ${eMeta.key.name}")
 								return@contentHandler
 							}
 							val identity = getIdentityByKey(eMeta.recipient)
@@ -453,7 +454,8 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 							}
 							if (!valid) {
 								file.delete()
-								error("Invalid Content Message: signature or content hash mismatch")
+								logNodeError(node, "Invalid content: signature or hash mismatch for ${eMeta.key.name}")
+								return@contentHandler
 							}
 							var contentStored = false
 							val destFile = File(contentDir, "${eMeta.key}").consistentFile()
@@ -466,7 +468,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 									file.delete()
 									true
 								} catch (e: Exception) {
-									log("Failed to move content file to content directory: ${e.message}")
+									logNodeError(node, "Failed to move content file for ${eMeta.key.name}: ${e.message}")
 									false
 								}
 							}
@@ -479,6 +481,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 								contentStored = true
 							}
 							if (contentStored) {
+								logIncoming(node, eMeta.key.name, fileSize)
 								pendingContentRequests.remove(eMeta.key)
 								metaCache[eMeta.key] = eMeta
 								val metaFile = File(metaDir, eMeta.key.toString())
@@ -499,7 +502,6 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 							}
 						}
 					}
-					log("Received content ${eMeta.key.name} from ${node.remoteAddress}")
 				}
 				// Keepalive ping — respond immediately with high-priority pong so the sender resets our activity timer.
 				PingMessage.type -> node.sendPriority(StringWritable(PongMessage.type).serialize())
@@ -519,7 +521,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 							).serialize()
 						)
 					} catch (e: Exception) {
-						log("Challenge response to ${node.remoteAddress} failed: ${e.message}")
+						logNodeError(node, "Challenge response failed: ${e.message}")
 					}
 				}
 				// Peer's response to our challenge. Verify their signature against the nonce we sent;
@@ -535,12 +537,12 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 							peerQueryTimeMap.putIfAbsent(msg.peer.key, addrTime)
 						}
 						onNodeIdentified?.invoke(node, msg.peer)
-						log("Auth OK: ${node.remoteAddress} → ${msg.peer.key.name}")
+						logConnected(node, msg.peer.key.name)
 						if (node !in nodesWithoutAutoSync) {
 							syncNode(node)
 						}
 					} else {
-						log("Auth FAILED from ${node.remoteAddress} (nonce=${ourNonce != null}) — closing")
+						logNodeError(node, "Auth failed")
 						node.close()
 					}
 				}
@@ -555,17 +557,17 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 					}
 					if (foundPeers.isNotEmpty()) {
 						node.send(PeerResponseMessage(foundPeers).serialize())
-						log("PeerRequest from ${node.remoteAddress}: served ${foundPeers.size} peer(s)")
+						debug("PeerRequest from ${node.remoteAddress}: served ${foundPeers.size} peer(s)")
 					}
 				}
 				// Response to our earlier PeerRequestMessage: a list of Peer instances.
 				PeerResponseMessage.type -> {
 					val resp = PeerResponseMessage.read(rawHead.toDataInputStream())
-					log("Received PeerResponse from ${node.remoteAddress}: ${resp.peers.size} peer(s)")
+					debug("Received PeerResponse from ${node.remoteAddress}: ${resp.peers.size} peer(s)")
 					resp.peers.forEach { peer ->
 						val expectedKey = PeerKey(peer.mx.toByteArray().hash256())
 						if (expectedKey != peer.key) {
-							log("Rejecting spoofed peer ${peer.key.name} from ${node.remoteAddress}: hash mismatch")
+							logNodeError(node, "Rejecting spoofed peer ${peer.key.name}: hash mismatch")
 							return@forEach
 						}
 						savePeer(peer, resetQueryTimes = false)
@@ -587,17 +589,17 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 							nodeKeys.forEach { (targetNode, keys) ->
 								if (keys.isNotEmpty()) {
 									targetNode.send(ContentRequestMessage(keys).serialize())
-									log("Requested ${keys.size} content item(s) from ${targetNode.remoteAddress} after peer resolved")
+									debug("Requested ${keys.size} content item(s) from ${targetNode.remoteAddress} after peer resolved")
 								}
 							}
 						}
 					}
 				}
 
-				else -> log("Unknown message type: $type from ${node.remoteAddress}")
+				else -> debug("Unknown message type: $type from ${node.remoteAddress}")
 			}
 		} catch (e: Exception) {
-			log("Error in contentHandler", e)
+			logNodeError(node, "Error in contentHandler: ${e.message}")
 		}
 	}
 
@@ -608,7 +610,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			nodeChallengeMap[node] = nonce
 			node.send(ChallengeMessage(nonce).serialize())
 		} catch (e: Exception) {
-			log("sendChallenge to ${node.remoteAddress} failed: ${e.message}")
+			logNodeError(node, "sendChallenge failed: ${e.message}")
 		}
 	}
 
@@ -623,6 +625,8 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		val newNode = TCPNode(socket, tmpDir, contentHandler, maxStreamSize = MAX_STREAM_SIZE)
 		newNode.onTransferStateChanged = { checkAndNotifyTransferState() }
 		newNode.onClose = {
+			val alias = nodePeerMap[newNode]?.key?.name ?: "unknown"
+			logDisconnected(newNode, alias)
 			connectionMap.remove(addr)
 			nodePeerMap.remove(newNode)
 			nodeRelayMap.remove(newNode)
@@ -661,7 +665,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		}
 		val peerLabel = nodePeerMap[node]?.key?.name ?: node.remoteAddress.toString()
 		val queryTime = getPeerQueryTime(node)
-		log("Syncing with ${node.remoteAddress} (since=$queryTime, ${if (relayEnabled) "relay/all recipients" else "recipient filter ${myIdentityKeys.joinToString { it.name }}"})")
+		debug("Syncing with ${node.remoteAddress} (since=$queryTime, ${if (relayEnabled) "relay/all recipients" else "recipient filter ${myIdentityKeys.joinToString { it.name }}"})")
 		node.send(
 			QueryMessage(
 				authorFilter,
@@ -720,7 +724,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			if (!metaFile.exists()) return
 			metaFile.toDataInputStream().use { EncryptedContentMetaData.read(it) }
 		} catch (e: Exception) {
-			log("pushNewMessage: failed to read meta for ${metaKey.name}: ${e.message}")
+			debug("pushNewMessage: failed to read meta for ${metaKey.name}: ${e.message}")
 			return
 		}
 		val contentExists = smallContentCache.containsKey(metaKey) || File(contentDir, "$metaKey").exists()
@@ -860,6 +864,8 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			onAccept = { node ->
 				node.onTransferStateChanged = { checkAndNotifyTransferState() }
 				node.onClose = {
+					val alias = nodePeerMap[node]?.key?.name ?: "unknown"
+					logDisconnected(node, alias)
 					nodeList.remove(node)
 					nodePeerMap.remove(node)
 					nodeRelayMap.remove(node)
@@ -1054,6 +1060,32 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	fun listIgnoredIdentities(): Set<IdentityKey> = ignoredIdentitiesCache.toSet()
 
 	fun listIgnoredContent(): Set<EncryptedMetaKey> = ignoredContentCache.toSet()
+
+	fun getNodeAlias(node: TCPNode): String =
+		nodePeerMap[node]?.key?.name ?: node.remoteAddress.address?.hostAddress ?: node.remoteAddress.hostString
+
+	fun getNodeIp(node: TCPNode): String =
+		node.remoteAddress.address?.hostAddress ?: node.remoteAddress.hostString
+
+	fun logConnected(node: TCPNode, alias: String = getNodeAlias(node)) {
+		log("[connected, ${getNodeIp(node)}, $alias]")
+	}
+
+	fun logDisconnected(node: TCPNode, alias: String = getNodeAlias(node)) {
+		log("[disconnected, ${getNodeIp(node)}, $alias]")
+	}
+
+	fun logIncoming(node: TCPNode, contentAlias: String, fileSize: Long) {
+		log("[incoming, ${getNodeAlias(node)}, $contentAlias, $fileSize]")
+	}
+
+	fun logOutgoing(node: TCPNode, contentAlias: String, fileSize: Long) {
+		log("[outgoing, ${getNodeAlias(node)}, $contentAlias, $fileSize]")
+	}
+
+	fun logNodeError(node: TCPNode, error: String) {
+		log("[${getNodeAlias(node)}, $error]")
+	}
 
 	private fun pushMessagesForIdentity(key: IdentityKey) {
 		metaCache.values.filter {
@@ -1289,9 +1321,9 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			if (!node.isClosed()) {
 				if (now - node.lastActivityMs > PING_TIMEOUT_MS) {
 					if (node.isTransferring()) {
-						log("Node ${node.remoteAddress} silent on read for ${(now - node.lastActivityMs) / 1000}s but actively transferring — skipping timeout")
+						debug("Node ${node.remoteAddress} silent on read for ${(now - node.lastActivityMs) / 1000}s but actively transferring — skipping timeout")
 					} else {
-						log("Closing stale node ${node.remoteAddress} (silent for ${(now - node.lastActivityMs) / 1000}s)")
+						logNodeError(node, "Silent for ${(now - node.lastActivityMs) / 1000}s, closing")
 						node.close()   // fires onClose → onNodeDisconnected + map removal
 					}
 				} else {
