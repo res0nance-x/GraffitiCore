@@ -6,6 +6,7 @@ import org.junit.jupiter.api.io.TempDir
 import r3.content.Content
 import r3.org.json.JSONObject
 import r3.pack.BinaryPack
+import r3.pack.PackMap
 import r3.pke.EncryptedMetaKey
 import r3.pke.name
 import r3.source.BinarySource
@@ -225,9 +226,9 @@ class GraffitiAPITest {
 		assertEquals("pack", packContent.ext)
 
 		// 5. Open the pack with BinaryPack and verify entries
-		val binaryPack = BinaryPack(packContent)
-		assertTrue(binaryPack.keys.contains("image1.txt"))
-		assertTrue(binaryPack.keys.contains("nested/folder/image2.txt"))
+		val binaryPack = PackMap(BinaryPack(packContent))
+		assertTrue(binaryPack["image1.txt"]!=null)
+		assertTrue(binaryPack["nested/folder/image2.txt"]!=null)
 		assertEquals("Contents of image 1", binaryPack["image1.txt"]!!.readString())
 		assertEquals("Contents of nested image 2", binaryPack["nested/folder/image2.txt"]!!.readString())
 
