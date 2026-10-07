@@ -1192,7 +1192,7 @@ function handleDownload(msg: MessageData): void {
 
    if ((window as any).Android && (window as any).Android.download) {
       const fullUrl = new URL(url, window.location.origin).toString();
-      (window as any).Android.download(fullUrl);
+      (window as any).Android.download(fullUrl, filename);
       return;
    }
 
