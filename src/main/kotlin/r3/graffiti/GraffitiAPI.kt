@@ -25,8 +25,6 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : ContentHandler {
-	@Deprecated("Urgent/bell notifications removed")
-	var onBellReceived: ((author: Key256, sound: String) -> Unit)? = null
 	private val settingsFile = File(p2p.graffitiDir, "settings.json")
 
 	val stateManager = StateManager(p2p) { v ->
