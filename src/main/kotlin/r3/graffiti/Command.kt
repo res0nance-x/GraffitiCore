@@ -11,8 +11,7 @@ enum class CommandType {
 	SEND_TEXT,
 	SEND_FILE,
 	CREATE_PACK,
-	FORWARD,
-	SEND_BELL
+	FORWARD
 }
 
 enum class CommandStatus {
@@ -31,7 +30,6 @@ sealed interface CommandPayload {
 	data class FilePayload(val stagedFile: File, val originalFileName: String) : CommandPayload
 	data class PackPayload(val stagingDir: File, val packName: String) : CommandPayload
 	data class Forward(val sourceMessageKey: EncryptedMetaKey) : CommandPayload
-	object Bell : CommandPayload
 }
 
 data class Command(
@@ -39,7 +37,6 @@ data class Command(
 	val type: CommandType,
 	val identityKey: IdentityKey,
 	val peerKey: PeerKey,
-	val urgent: Boolean = false,
 	val sentTimestamp: Long,
 	val payload: CommandPayload,
 	@Volatile var status: CommandStatus = CommandStatus.QUEUED,
@@ -54,7 +51,6 @@ data class Command(
 		put("type", type.name)
 		put("identityKey", identityKey.toString())
 		put("peerKey", peerKey.toString())
-		put("urgent", urgent)
 		put("sentTimestamp", sentTimestamp)
 		put("status", status.name)
 		put("progress", progress)
@@ -67,7 +63,6 @@ data class Command(
 			is CommandPayload.FilePayload -> put("fileName", payload.originalFileName)
 			is CommandPayload.PackPayload -> put("packName", payload.packName)
 			is CommandPayload.Forward -> put("sourceMessageKey", payload.sourceMessageKey.toString())
-			is CommandPayload.Bell -> put("bell", true)
 		}
 	}
 }

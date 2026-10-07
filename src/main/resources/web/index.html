@@ -177,15 +177,6 @@ Messages
 								<path d="M8.5 11.5a.5.5 0 0 1-1 0V7.707L6.354 8.854a.5.5 0 1 1-.708-.708l2-2a.5.5 0 0 1 .708 0l2 2a.5.5 0 0 1-.708.708L8.5 7.707z"/>
 								<path d="M14 14V4.5L9.5 0H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2M9.5 3A1.5 1.5 0 0 0 11 4.5h2V14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h5.5z"/>
 							</svg></button>
-							<label class="urgent-toggle" title="Send as urgent message (plays notification chime for recipient)">
-								<input id="urgent-checkbox" type="checkbox">
-								<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-bell" viewBox="0 0 16 16">
-									<path d="M8 16a2 2 0 0 0 2-2H6a2 2 0 0 0 2 2M8 1.918l-.797.161A4 4 0 0 0 4 6c0 .628-.134 2.197-.459 3.742-.16.767-.376 1.566-.663 2.258h10.244c-.287-.692-.502-1.49-.663-2.258C12.134 8.197 12 6.628 12 6a4 4 0 0 0-3.203-3.92zM14.22 12c.223.447.481.801.78 1H1c.299-.199.557-.553.78-1C2.68 10.2 3 6.88 3 6c0-2.42 1.72-4.44 4.005-4.901a1 1 0 1 1 1.99 0A5 5 0 0 1 13 6c0 .88.32 4.2 1.22 6"/>
-								</svg>
-								<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="orange" class="bi bi-bell-fill" viewBox="0 0 16 16">
-									<path d="M8 16a2 2 0 0 0 2-2H6a2 2 0 0 0 2 2m.995-14.901a1 1 0 1 0-1.99 0A5 5 0 0 0 3 6c0 1.098-.5 6-2 7h14c-1.5-1-2-5.902-2-7 0-2.42-1.72-4.44-4.005-4.901"/>
-								</svg>
-							</label>
 							<input hidden id="file-input" type="file" multiple>
 							<span aria-live="polite" class="send-status" id="send-status">Ready</span>
 						</div>
@@ -321,35 +312,6 @@ Settings
 					</div>
 				</section>
 
-				<!-- ── Notifications ────────────────────────────────────── -->
-				<section class="net-card">
-					<h3>Notifications</h3>
-					<p style="font-size:0.88rem; opacity:0.7; margin:0 0 0.75rem">
-						Choose the sound played when you receive an urgent notification.
-					</p>
-					<div style="display:flex; flex-direction:column; gap:1rem;">
-						<div style="display:flex; flex-wrap:wrap; gap:1.5rem; align-items:flex-end;">
-							<label style="display:flex; flex-direction:column; gap:0.35rem; font-size:0.88rem; font-weight:600;">
-								Notification Sound
-								<select id="settings-bell-sound"
-									style="padding:0.4rem 0.6rem; border-radius:4px; background:var(--background); color:var(--primary); border:1px solid var(--button);">
-									<option selected value="chime">Chime (Default)</option>
-									<option value="knock">Knock</option>
-									<option value="ping">Ping</option>
-									<option value="harp">Harp</option>
-									<option value="mute">Mute (Silent)</option>
-								</select>
-							</label>
-							<button id="btn-preview-bell" style="padding:0.4rem 0.8rem; border-radius:4px; display:inline-flex; align-items:center; gap:0.35rem;" type="button">
-								<span style="font-size:1.05rem;">▶</span> Preview Sound
-							</button>
-						</div>
-						<label style="display:inline-flex; align-items:center; gap:0.5rem; font-size:0.88rem; font-weight:600; cursor:pointer;">
-							<input id="settings-ignore-urgent" type="checkbox" style="cursor:pointer;">
-							<span>Ignore urgent messages (never play sound)</span>
-						</label>
-					</div>
-				</section>
 
 
 				<!-- ── Help & Documentation Link ───────────────────────── -->
@@ -473,26 +435,6 @@ Settings
  Message templates
  ══════════════════════════════════════════════════════════════════════ -->
 
-	<template id="tpl-bell-message">
-		<article class="message-item message-bell-item">
-			<header class="message-header">
-				<figure class="msg-author">
-					<img alt="" class="msg-author-avatar msg-avatar">
-					<figcaption class="msg-author-name msg-name"></figcaption>
-				</figure>
-				<span aria-hidden="true" class="msg-arrow">→</span>
-				<figure class="msg-recipient">
-					<img alt="" class="msg-recipient-avatar msg-avatar">
-					<figcaption class="msg-recipient-name msg-name"></figcaption>
-				</figure>
-				<time class="msg-time"></time>
-			</header>
-			<div class="message-body message-bell-body" style="display:flex; align-items:center; gap:0.5rem; padding: 0.6rem 0.85rem; font-style: italic; opacity: 0.95;">
-				<span style="font-size: 1.25rem;">🔔</span>
-				<span class="bell-notice-text">Rang the bell</span>
-			</div>
-		</article>
-	</template>
 
 	<template id="tpl-text-message">
 		<article class="message-item">

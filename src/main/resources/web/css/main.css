@@ -276,96 +276,6 @@ select option {
     color: var(--button-hover-text, #ffffff);
 }
 
-.urgent-toggle {
-    position: relative;
-    display: inline-grid;
-    place-items: center;
-    grid-template-areas: "bell";
-    padding: 0.35rem 0.75rem;
-    border-radius: var(--radius-control, 0.4rem);
-    border: 1px solid var(--button);
-    background: var(--background);
-    cursor: pointer;
-    user-select: none;
-    box-sizing: border-box;
-    transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
-}
-
-.urgent-toggle:hover {
-    background: var(--button-hover-bg);
-    border-color: var(--accent-hover);
-}
-
-.urgent-toggle:has(input[type="checkbox"]:focus-visible) {
-    outline: 2px solid var(--accent);
-    outline-offset: 1px;
-}
-
-.urgent-toggle input[type="checkbox"] {
-    position: absolute;
-    opacity: 0;
-    width: 0;
-    height: 0;
-    pointer-events: none;
-    margin: 0;
-}
-
-.urgent-toggle svg {
-    grid-area: bell;
-    width: 16px;
-    height: 16px;
-    display: block;
-    transition: opacity 0.2s ease, transform 0.2s ease;
-}
-
-.urgent-toggle .bi-bell {
-    opacity: 1;
-    transform: scale(1);
-    color: #ffffff;
-    fill: currentColor;
-}
-
-.urgent-toggle .bi-bell-fill {
-    opacity: 0;
-    transform: scale(0.75);
-    color: orange;
-    fill: orange;
-    pointer-events: none;
-}
-
-/* Checked / pushed-in state */
-.urgent-toggle:has(input[type="checkbox"]:checked),
-.urgent-toggle.is-active,
-.urgent-toggle.is-checked {
-    border-color: orange;
-    background: rgba(255, 165, 0, 0.15);
-    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6), inset 0 1px 2px rgba(0, 0, 0, 0.4), 0 0 6px rgba(255, 165, 0, 0.35);
-    transform: translateY(1px);
-}
-
-.urgent-toggle:has(input[type="checkbox"]:checked):hover,
-.urgent-toggle.is-active:hover,
-.urgent-toggle.is-checked:hover {
-    background: rgba(255, 165, 0, 0.22);
-    border-color: #ffb74d;
-}
-
-.urgent-toggle input[type="checkbox"]:checked ~ .bi-bell,
-.urgent-toggle.is-active .bi-bell,
-.urgent-toggle.is-checked .bi-bell {
-    opacity: 0;
-    transform: scale(0.75);
-    pointer-events: none;
-}
-
-.urgent-toggle input[type="checkbox"]:checked ~ .bi-bell-fill,
-.urgent-toggle.is-active .bi-bell-fill,
-.urgent-toggle.is-checked .bi-bell-fill {
-    opacity: 1;
-    transform: scale(1);
-    pointer-events: auto;
-}
-
 /* Subtle outline shown only while a drag is in progress over the messages section */
 #section-messages.is-dragover {
     outline: 2px dashed var(--button);
@@ -419,25 +329,6 @@ select option {
     transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.message-item.urgent-message {
-    border-color: #e53935;
-    box-shadow: 0 0 6px rgba(229, 57, 53, 0.3);
-}
-
-.msg-urgent-badge {
-    background: #e53935;
-    color: #ffffff;
-    font-size: 0.72rem;
-    font-weight: 700;
-    padding: 0.1rem 0.45rem;
-    border-radius: 3px;
-    margin-left: 0.35rem;
-    letter-spacing: 0.03em;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.2rem;
-    flex-shrink: 0;
-}
 
 /* Disable text selection and word highlighting only on touch/mobile devices so PC desktop mouse selection is unaffected */
 @media (pointer: coarse) {

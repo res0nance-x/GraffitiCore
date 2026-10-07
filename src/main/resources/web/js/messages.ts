@@ -8,18 +8,7 @@ const fromField = document.getElementById('from-field') as HTMLSelectElement | n
 const toField = document.getElementById('to-field') as HTMLSelectElement | null;
 const messageText = document.getElementById('message-text') as HTMLTextAreaElement | null;
 const sendFileButton = document.getElementById('send-file') as HTMLButtonElement | null;
-const urgentCheckbox = document.getElementById('urgent-checkbox') as HTMLInputElement | null;
 
-function resetUrgentCheckbox(): void {
-   if (urgentCheckbox) {
-      urgentCheckbox.checked = false;
-      urgentCheckbox.closest('.urgent-toggle')?.classList.remove('is-active');
-   }
-}
-
-urgentCheckbox?.addEventListener('change', () => {
-   urgentCheckbox.closest('.urgent-toggle')?.classList.toggle('is-active', urgentCheckbox.checked);
-});
 const fileInput = document.getElementById('file-input') as HTMLInputElement | null;
 const messagesSection = document.getElementById('section-messages') as HTMLElement | null;
 const messagesContainer = document.getElementById('messages') as HTMLElement | null;
@@ -299,7 +288,6 @@ function hydrateMsg(msg: MessageData, meta: DecryptedMessageMeta): void {
    msg.size = meta.size;
    msg.type = meta.type;
    msg.created = meta.created;
-   msg.urgent = meta.urgent;
    if (typeof meta.ignored === 'boolean') {
       msg.ignored = meta.ignored;
    }
@@ -562,9 +550,6 @@ function updateFilteredMessages(): void {
       } else if (cmd.type === 'CREATE_PACK') {
          type = 'pack';
          name = cmd.packName || 'archive.pack';
-      } else if (cmd.type === 'SEND_BELL') {
-         type = 'bell';
-         name = 'bell';
       } else if (cmd.fileName) {
          const dotIdx = cmd.fileName.lastIndexOf('.');
          const ext = dotIdx >= 0 ? cmd.fileName.substring(dotIdx + 1).toLowerCase() : '';
@@ -581,7 +566,6 @@ function updateFilteredMessages(): void {
          created: cmd.sentTimestamp,
          name: name,
          type: type,
-         urgent: cmd.urgent,
          isPending: true,
          pendingCommandId: cmd.id,
          progress: cmd.progress,
@@ -871,7 +855,6 @@ const isHtml = (t?: string) => Boolean(t && htmlExtensions.has(t.toLowerCase()))
 
 function pickTemplateId(type?: string): string {
    if (!type) return 'tpl-binary-message';
-   if (type === 'bell') return 'tpl-bell-message';
    if (isText(type)) return 'tpl-text-message';
    if (isImage(type)) return 'tpl-image-message';
    if (isAudio(type)) return 'tpl-audio-message';
@@ -891,7 +874,6 @@ interface MessageData {
    type?: string;
    created?: number | string;
    fileTime?: number;
-   urgent?: boolean;
    ignored?: boolean;
    isPending?: boolean;
    pendingCommandId?: string;
@@ -944,23 +926,7 @@ function fillHeader(item: HTMLElement, msg: MessageData): void {
       }
    }
 
-   if (msg.urgent) {
-      item.classList.add('urgent-message');
-      if (!item.querySelector('.msg-urgent-badge')) {
-         const badge = document.createElement('span');
-         badge.className = 'msg-urgent-badge';
-         badge.textContent = '⚠️ Urgent';
-         const header = item.querySelector('.message-header');
-         if (header && timeEl) {
-            header.insertBefore(badge, timeEl);
-         } else if (header) {
-            header.appendChild(badge);
-         }
-      }
-   } else {
-      item.classList.remove('urgent-message');
-      item.querySelector('.msg-urgent-badge')?.remove();
-   }
+
 
    if (msg.ignored) {
       if (!item.querySelector('.msg-ignored-badge')) {
@@ -1161,11 +1127,9 @@ async function handleForward(msg: MessageData): Promise<void> {
    if (!data || !data.targetPeer) return;
    const destKey = data.targetPeer;
 
-   const isUrgent = urgentCheckbox?.checked ?? false;
    setStatus('Forwarding message…');
    try {
-      await graffiti.forwardMessage(msg.key, fromKey, destKey, isUrgent);
-      resetUrgentCheckbox();
+      await graffiti.forwardMessage(msg.key, fromKey, destKey);
       setStatus('Message forwarded.');
       if (toField) {
          const prevKey = activeToKey;
@@ -1667,7 +1631,7 @@ function getEnvelope(): { identityKey: string; peerKey: string } {
 }
 
 type Payload =
-   | { type: 'text'; text: string; identityKey: string; peerKey: string; urgent?: boolean }
+   | { type: 'text'; text: string; identityKey: string; peerKey: string }
    | {
    type: 'file';
    fileName: string;
@@ -1675,7 +1639,6 @@ type Payload =
    identityKey: string;
    peerKey: string;
    source?: string;
-   urgent?: boolean
 };
 
 async function sendPayload(payload: Payload): Promise<void> {
@@ -1687,16 +1650,14 @@ async function sendPayload(payload: Payload): Promise<void> {
    setStatus(`Sending ${payload.type}...`);
    try {
       if (payload.type === 'text') {
-         await graffiti.sendText(identityKey, peerKey, payload.text, !!payload.urgent);
-         resetUrgentCheckbox();
+         await graffiti.sendText(identityKey, peerKey, payload.text);
          setStatus('Text sent.');
          shouldScrollToBottomOnSend = true;
          await refreshMessages();
          scrollToBottom();
       } else {
          setStatus(`Staging ${payload.fileName}...`);
-         const res = await graffiti.sendFile(identityKey, peerKey, payload.file, !!payload.urgent, true);
-         resetUrgentCheckbox();
+         const res = await graffiti.sendFile(identityKey, peerKey, payload.file, true);
          if (res.commandId) {
             const ts = res.sentTimestamp || Date.now();
             handleCommandUpdate({
@@ -1704,7 +1665,6 @@ async function sendPayload(payload: Payload): Promise<void> {
                type: 'SEND_FILE',
                identityKey,
                peerKey,
-               urgent: !!payload.urgent,
                sentTimestamp: ts,
                status: 'QUEUED',
                progress: 10,
@@ -1748,12 +1708,11 @@ form?.addEventListener('submit', async (event: SubmitEvent) => {
       setStatus('Type a message before sending.');
       return;
    }
-   const urgent = urgentCheckbox?.checked ?? false;
    if (messageText) {
       messageText.value = '';
       autoResizeTextarea(messageText);
    }
-   await sendPayload({type: 'text', text, urgent, ...getEnvelope()});
+   await sendPayload({type: 'text', text, ...getEnvelope()});
    scrollToBottom();
 });
 
@@ -1891,7 +1850,6 @@ async function extractDroppedEntries(dataTransfer: DataTransfer): Promise<{ item
 async function sendPackPipeline(
    fileList: DroppedItem[],
    packName: string,
-   urgent: boolean,
    envelope: { identityKey: string, peerKey: string }
 ): Promise<void> {
    if (!envelope.identityKey || !envelope.peerKey) {
@@ -1910,7 +1868,7 @@ async function sendPackPipeline(
 
    try {
       progress.update(`Starting pack session: ${packName}...`, 0);
-      const beginRes = await graffiti.createPackBegin(envelope.identityKey, envelope.peerKey, packName, urgent);
+      const beginRes = await graffiti.createPackBegin(envelope.identityKey, envelope.peerKey, packName);
       sessionId = beginRes.sessionId;
 
       const total = fileList.length;
@@ -1937,7 +1895,6 @@ async function sendPackPipeline(
             type: 'CREATE_PACK',
             identityKey: envelope.identityKey,
             peerKey: envelope.peerKey,
-            urgent: urgent,
             sentTimestamp: ts,
             status: 'QUEUED',
             progress: 10,
@@ -1947,7 +1904,6 @@ async function sendPackPipeline(
          });
          setStatus(`Pack queued: ${packName}`);
       }
-      resetUrgentCheckbox();
       shouldScrollToBottomOnSend = true;
       await refreshMessages();
       scrollToBottom();
@@ -1965,8 +1921,7 @@ async function sendPackPipeline(
 
 async function promptPackNameAndSend(
    fileList: DroppedItem[],
-   defaultName: string,
-   urgent: boolean
+   defaultName: string
 ): Promise<void> {
    const envelope = getEnvelope();
    if (!envelope.identityKey || !envelope.peerKey) {
@@ -1999,17 +1954,16 @@ async function promptPackNameAndSend(
       packName += '.pack';
    }
 
-   await sendPackPipeline(fileList, packName, urgent, envelope);
+   await sendPackPipeline(fileList, packName, envelope);
 }
 
 fileInput?.addEventListener('change', async () => {
    const files = fileInput?.files;
    if (!files || files.length === 0) return;
-   const urgent = urgentCheckbox?.checked ?? false;
 
    if (files.length === 1) {
       const file = files[0];
-      await sendPayload({type: 'file', fileName: file.name, file, urgent, ...getEnvelope()});
+      await sendPayload({type: 'file', fileName: file.name, file, ...getEnvelope()});
       if (fileInput) fileInput.value = '';
       scrollToBottom();
       return;
@@ -2025,7 +1979,7 @@ fileInput?.addEventListener('change', async () => {
    const defaultName = `${firstBase}_pack.pack`;
 
    if (fileInput) fileInput.value = '';
-   await promptPackNameAndSend(items, defaultName, urgent);
+   await promptPackNameAndSend(items, defaultName);
 });
 
 // ── Drag-and-drop ─────────────────────────────────────────────────────────────
@@ -2058,14 +2012,12 @@ messagesSection?.addEventListener('drop', async (event: DragEvent) => {
       return;
    }
 
-   const urgent = urgentCheckbox?.checked ?? false;
-
    // Check if files or folders were dropped
    const dropped = await extractDroppedEntries(event.dataTransfer);
    if (dropped.items.length > 0) {
       if (dropped.items.length === 1 && !dropped.isFolder) {
          const single = dropped.items[0];
-         await sendPayload({type: 'file', fileName: single.file.name, file: single.file, urgent, ...getEnvelope()});
+         await sendPayload({type: 'file', fileName: single.file.name, file: single.file, ...getEnvelope()});
          return;
       }
 
@@ -2074,19 +2026,19 @@ messagesSection?.addEventListener('drop', async (event: DragEvent) => {
          ? dropped.defaultName
          : `${dropped.items[0].file.name.replace(/\.[^/.]+$/, '')}_pack`;
 
-      await promptPackNameAndSend(dropped.items, defaultName, urgent);
+      await promptPackNameAndSend(dropped.items, defaultName);
       return;
    }
 
    // Plain text or HTML fallback
    const plain = event.dataTransfer.getData('text/plain');
    if (plain) {
-      await sendPayload({type: 'text', text: plain, urgent, ...getEnvelope()});
+      await sendPayload({type: 'text', text: plain, ...getEnvelope()});
       return;
    }
    const html = event.dataTransfer.getData('text/html');
    if (html) {
-      await sendPayload({type: 'text', text: html, urgent, ...getEnvelope()});
+      await sendPayload({type: 'text', text: html, ...getEnvelope()});
       return;
    }
 
@@ -2130,19 +2082,17 @@ document.addEventListener('paste', async (event: ClipboardEvent) => {
       event.preventDefault();
       event.stopPropagation();
 
-      const urgent = urgentCheckbox?.checked ?? false;
-
       if (clipboardFiles.length === 1) {
          const single = clipboardFiles[0];
          const fileName = single.name || 'clipboard-image.png';
-         await sendPayload({type: 'file', fileName, file: single, urgent, ...getEnvelope()});
+         await sendPayload({type: 'file', fileName, file: single, ...getEnvelope()});
          return;
       }
 
       // Multiple files pasted -> Create Pack
       const items: DroppedItem[] = clipboardFiles.map(file => ({ file, path: file.name }));
       const defaultName = `${items[0].file.name.replace(/\.[^/.]+$/, '')}_pack`;
-      await promptPackNameAndSend(items, defaultName, urgent);
+      await promptPackNameAndSend(items, defaultName);
       return;
    }
 
@@ -2205,7 +2155,6 @@ function getMessageTypeText(type: string): string {
 }
 
 function notifyNewMessage(msg: MessageData): void {
-   if (msg.type === 'bell') return;
    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
       if (document.hidden || !document.hasFocus()) {
          const now = Date.now();

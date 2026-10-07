@@ -24,7 +24,6 @@ class CommandQueueTest {
 			type = CommandType.SEND_FILE,
 			identityKey = alice.key,
 			peerKey = bob.asPeer().key,
-			urgent = false,
 			sentTimestamp = ts1,
 			payload = CommandPayload.FilePayload(stagedFile1, "test1.txt")
 		)
@@ -34,7 +33,6 @@ class CommandQueueTest {
 			type = CommandType.SEND_TEXT,
 			identityKey = alice.key,
 			peerKey = bob.asPeer().key,
-			urgent = false,
 			sentTimestamp = ts2,
 			payload = CommandPayload.Text("Text for command 2")
 		)

@@ -432,7 +432,6 @@ class GraffitiAPITest {
 		assertEquals("txt", metaObj.getString("type"))
 		assertTrue(metaObj.has("size"))
 		assertTrue(metaObj.has("created"))
-		assertFalse(metaObj.getBoolean("urgent"))
 
 		// 4. PUT /api/messages/meta with batch keys in JSON body returns metas array
 		val batchPutHeader = JSONObject()

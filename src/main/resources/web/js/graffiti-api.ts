@@ -41,7 +41,6 @@ export interface MessageEntry {
    type?: string;
    created?: number | string;
    fileTime?: number;
-   urgent?: boolean;
    ignored?: boolean;
 }
 
@@ -52,7 +51,6 @@ export interface DecryptedMessageMeta {
    type: string;
    created: number | string;
    fileTime?: number;
-   urgent?: boolean;
    ignored?: boolean;
 }
 
@@ -143,10 +141,9 @@ export interface SendMessageResponse extends ApiOk {
 
 export interface ActiveCommand {
    id: string;
-   type: 'SEND_TEXT' | 'SEND_FILE' | 'CREATE_PACK' | 'FORWARD' | 'SEND_BELL';
+   type: 'SEND_TEXT' | 'SEND_FILE' | 'CREATE_PACK' | 'FORWARD';
    identityKey: string;
    peerKey: string;
-   urgent: boolean;
    sentTimestamp: number;
    status: 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
    progress: number;
@@ -369,17 +366,16 @@ export const graffiti = {
       return get('/api/message/ignore', params);
    },
 
-   forwardMessage(key: string, identityKey?: string, peerKey?: string, urgent = false, async = true): Promise<SendMessageResponse> {
+   forwardMessage(key: string, identityKey?: string, peerKey?: string, async = true): Promise<SendMessageResponse> {
       const params: Record<string, string> = { key };
       if (identityKey) params.identityKey = identityKey;
       if (peerKey) params.peerKey = peerKey;
-      if (urgent) params.urgent = 'true';
       if (async) params.async = 'true';
       return get('/api/message/forward', params);
    },
 
-   async sendText(identityKey: string, peerKey: string, text: string, urgent = false): Promise<SendMessageResponse> {
-      const url = new URL(`/api/message/send/text?identityKey=${encodeURIComponent(identityKey)}&peerKey=${encodeURIComponent(peerKey)}${urgent ? '&urgent=true' : ''}`, window.location.origin);
+   async sendText(identityKey: string, peerKey: string, text: string): Promise<SendMessageResponse> {
+      const url = new URL(`/api/message/send/text?identityKey=${encodeURIComponent(identityKey)}&peerKey=${encodeURIComponent(peerKey)}`, window.location.origin);
       const res = await fetch(url.toString(), {
          method: 'PUT',
          headers: {'Content-Type': 'text/plain'},
@@ -388,8 +384,8 @@ export const graffiti = {
       return parseJson<SendMessageResponse>(res);
    },
 
-   async sendFile(identityKey: string, peerKey: string, file: File, urgent = false, async = true): Promise<SendMessageResponse> {
-      const url = new URL(`/api/message/send/file?identityKey=${encodeURIComponent(identityKey)}&peerKey=${encodeURIComponent(peerKey)}&file=${encodeURIComponent(file.name)}${urgent ? '&urgent=true' : ''}${async ? '&async=true' : ''}`, window.location.origin);
+   async sendFile(identityKey: string, peerKey: string, file: File, async = true): Promise<SendMessageResponse> {
+      const url = new URL(`/api/message/send/file?identityKey=${encodeURIComponent(identityKey)}&peerKey=${encodeURIComponent(peerKey)}&file=${encodeURIComponent(file.name)}${async ? '&async=true' : ''}`, window.location.origin);
       const res = await fetch(url.toString(), {
          method: 'PUT',
          headers: {
@@ -401,8 +397,8 @@ export const graffiti = {
       return parseJson<SendMessageResponse>(res);
    },
 
-   async createPackBegin(identityKey: string, peerKey: string, packName: string, urgent = false): Promise<CreatePackBeginResponse> {
-      const url = new URL(`/api/pack/create/begin?identityKey=${encodeURIComponent(identityKey)}&peerKey=${encodeURIComponent(peerKey)}&name=${encodeURIComponent(packName)}${urgent ? '&urgent=true' : ''}`, window.location.origin);
+   async createPackBegin(identityKey: string, peerKey: string, packName: string): Promise<CreatePackBeginResponse> {
+      const url = new URL(`/api/pack/create/begin?identityKey=${encodeURIComponent(identityKey)}&peerKey=${encodeURIComponent(peerKey)}&name=${encodeURIComponent(packName)}`, window.location.origin);
       const res = await fetch(url.toString(), {
          method: 'PUT'
       });
@@ -436,14 +432,6 @@ export const graffiti = {
          method: 'POST'
       });
       return parseJson<ApiOk>(res);
-   },
-
-   async sendBell(identityKey: string, peerKey: string): Promise<SendMessageResponse> {
-      const url = new URL(`/api/message/send/bell?identityKey=${encodeURIComponent(identityKey)}&peerKey=${encodeURIComponent(peerKey)}`, window.location.origin);
-      const res = await fetch(url.toString(), {
-         method: 'PUT'
-      });
-      return parseJson<SendMessageResponse>(res);
    },
 
    refresh(): Promise<ApiOk> {

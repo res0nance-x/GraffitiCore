@@ -25,8 +25,8 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : ContentHandler {
+	@Deprecated("Urgent/bell notifications removed")
 	var onBellReceived: ((author: Key256, sound: String) -> Unit)? = null
-	private var lastBellPlayedTime: Long = 0L
 	private val settingsFile = File(p2p.graffitiDir, "settings.json")
 
 	val stateManager = StateManager(p2p) { v ->
@@ -62,31 +62,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		p2p.onTransferStateChanged = { _ ->
 			stateManager.onTransferChanged()
 		}
-		p2p.onMessageReceived = { encKey ->
-			if (p2p.hasContent(encKey)) {
-				try {
-					val pair = p2p.getDecryptedMeta(encKey)
-					if (pair != null) {
-						val (meta, _) = pair
-						val isUrgent = meta.name.startsWith("urgent:") || meta.type.equals("bell", ignoreCase = true)
-						if (isUrgent) {
-							val ignoreUrgent = loadSetting("graffiti:ignore-urgent") == "true"
-							val ageMs = System.currentTimeMillis() - meta.created
-							val now = System.currentTimeMillis()
-							if (!ignoreUrgent && ageMs < 90_000 && (now - lastBellPlayedTime) > 5_000) {
-								lastBellPlayedTime = now
-								val soundSetting = loadSetting("graffiti:bell-sound").takeIf { it.isNotEmpty() } ?: "chime"
-								if (soundSetting != "mute") {
-									val eMeta = p2p.getMetaByKey(encKey)
-									if (eMeta != null) {
-										onBellReceived?.invoke(eMeta.author, soundSetting)
-									}
-								}
-							}
-						}
-					}
-				} catch (_: Exception) {}
-			}
+		p2p.onMessageReceived = { _ ->
 			stateManager.onMessagesChanged()
 		}
 		p2p.onPeerReceived = { _ ->
@@ -130,7 +106,6 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/message/forward" -> forwardMessage(header)
 			"/api/message/send/text" -> content?.let { sendTextMessage(header, it) }
 			"/api/message/send/file" -> content?.let { sendFileMessage(header, it) }
-			"/api/message/send/bell" -> sendBellMessage(header)
 			"/api/content" -> getContent(header)
 			"/api/storage" -> getStorageInfo()
 			"/api/storage/purge" -> purgeStorage(header)
@@ -263,7 +238,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 				try {
 					val key = EncryptedMetaKey(encKey)
 					val content = p2p.getContent(key)
-					Pair(content, content.path.removePrefix("urgent:"))
+					Pair(content, content.path)
 				} catch (e: Exception) {
 					return err("Failed to retrieve pack content: ${e.message}")
 				}
@@ -307,7 +282,6 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		val identityKey: IdentityKey,
 		val peerKey: PeerKey,
 		val packName: String,
-		val isUrgent: Boolean,
 		val stagingDir: File,
 		val createdAt: Long = System.currentTimeMillis()
 	)
@@ -334,7 +308,6 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			fileParam
 		}
 		val packName = if (decodedName.endsWith(".pack", ignoreCase = true)) decodedName else "$decodedName.pack"
-		val isUrgent = header.optBoolean("urgent", false) || header.optString("urgent") == "true"
 
 		val sessionId = UUID.randomUUID().toString()
 		val stagingDir = File(p2p.tmpDir, "pack_stage_$sessionId")
@@ -342,7 +315,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			return err("Failed to create staging directory")
 		}
 
-		val session = PackStagingSession(sessionId, idenKey, peerKey, packName, isUrgent, stagingDir)
+		val session = PackStagingSession(sessionId, idenKey, peerKey, packName, stagingDir)
 		packStagingSessions[sessionId] = session
 		stateManager.setEncoding(true)
 		return ok { put("sessionId", sessionId) }
@@ -403,7 +376,6 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 				type = CommandType.CREATE_PACK,
 				identityKey = session.identityKey,
 				peerKey = session.peerKey,
-				urgent = session.isUrgent,
 				sentTimestamp = ts,
 				payload = CommandPayload.PackPayload(session.stagingDir, session.packName)
 			)
@@ -431,9 +403,8 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			val sink = FileSink(tempPackFile, append = false)
 			BinaryPack.create(dirPack, sink)
 
-			val storedPath = if (session.isUrgent) "urgent:${session.packName}" else session.packName
 			val wrappedContent = MutableMetaDataContent(FileContent(tempPackFile)).apply {
-				path = storedPath
+				path = session.packName
 				ext = "pack"
 			}
 			val encKey = p2p.pkeEncrypt(wrappedContent, iden, peer)
@@ -608,8 +579,6 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 // ── Message ───────────────────────────────────────────────────────────────
 	/** Builds the display JSON for a single message. Shared by listMessages and WS push. */
 	private fun buildMsgJson(eMeta: EncryptedContentMetaData, meta: ContentMeta, fileTime: Long? = null): JSONObject {
-		val isUrgent = meta.name.startsWith("urgent:")
-		val displayName = if (isUrgent) meta.name.removePrefix("urgent:") else meta.name
 		val effectiveFileTime = fileTime
 			?: File(p2p.metaDir, "${eMeta.key}").lastModified().takeIf { it > 0 }
 			?: System.currentTimeMillis()
@@ -619,12 +588,11 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			.put("authorKey", eMeta.author.toString())
 			.put("recipient", eMeta.recipient.name)
 			.put("recipientKey", eMeta.recipient.toString())
-			.put("name", displayName)
+			.put("name", meta.name)
 			.put("size", meta.length)
 			.put("type", meta.type)
 			.put("created", meta.created)
 			.put("fileTime", effectiveFileTime)
-			.put("urgent", isUrgent)
 			.put("ignored", p2p.isContentIgnored(eMeta.key))
 	}
 
@@ -692,20 +660,17 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 						val pair = p2p.getDecryptedMeta(k)
 						if (pair != null) {
 							val (meta, _) = pair
-							val isUrgent = meta.name.startsWith("urgent:")
-							val displayName = if (isUrgent) meta.name.removePrefix("urgent:") else meta.name
 							val fileTime = p2p.getMetaTimeByKey(k)
 								?: File(p2p.metaDir, "$k").lastModified().takeIf { it > 0 }
 								?: meta.created
 							metasArr.put(
 								JSONObject()
 									.put("key", k.toString())
-									.put("name", displayName)
+									.put("name", meta.name)
 									.put("size", meta.length)
 									.put("type", meta.type)
 									.put("created", meta.created)
 									.put("fileTime", fileTime)
-									.put("urgent", isUrgent)
 									.put("ignored", p2p.isContentIgnored(k))
 							)
 						}
@@ -718,19 +683,16 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 				val k = EncryptedMetaKey(singleKey)
 				val pair = p2p.getDecryptedMeta(k) ?: return err("Metadata not found or cannot decrypt")
 				val (meta, _) = pair
-				val isUrgent = meta.name.startsWith("urgent:")
-				val displayName = if (isUrgent) meta.name.removePrefix("urgent:") else meta.name
 				val fileTime = p2p.getMetaTimeByKey(k)
 					?: File(p2p.metaDir, "$k").lastModified().takeIf { it > 0 }
 					?: meta.created
 				val obj = JSONObject()
 					.put("key", k.toString())
-					.put("name", displayName)
+					.put("name", meta.name)
 					.put("size", meta.length)
 					.put("type", meta.type)
 					.put("created", meta.created)
 					.put("fileTime", fileTime)
-					.put("urgent", isUrgent)
 					.put("ignored", p2p.isContentIgnored(k))
 				return ok { put("meta", obj) }
 			}
@@ -752,12 +714,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 	private fun getContent(header: JSONObject): Content {
 		val keyStr = header.getString("key")
 		val key = EncryptedMetaKey(keyStr)
-		val content = p2p.getContent(key)
-		return if (content.path.startsWith("urgent:")) {
-			MutableMetaDataContent(content, path = content.path.removePrefix("urgent:"))
-		} else {
-			content
-		}
+		return p2p.getContent(key)
 	}
 
 	private fun getStorageInfo(): Content {
@@ -925,7 +882,6 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		} catch (e: Exception) {
 			return err("Failed to read message content: ${e.message}")
 		}
-		val isUrgent = header.optBoolean("urgent", false) || header.optString("urgent") == "true"
 		val isAsync = header.optBoolean("async", false) || header.optString("async") == "true"
 		if (isAsync) {
 			val ts = p2p.nextMonotonicTimestamp()
@@ -933,7 +889,6 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 				type = CommandType.FORWARD,
 				identityKey = idenKey,
 				peerKey = peerKey,
-				urgent = isUrgent,
 				sentTimestamp = ts,
 				payload = CommandPayload.Forward(msgKey)
 			)
@@ -944,14 +899,10 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			}
 		}
 
-		val baseName = content.path.removePrefix("urgent:")
-		val newPath = if (isUrgent) "urgent:$baseName" else baseName
 		val wrappedContent = MutableMetaDataContent(
 			content,
 			lastModified = System.currentTimeMillis()
-		).apply {
-			path = newPath
-		}
+		)
 		stateManager.setEncoding(true)
 		try {
 			val encKey = p2p.pkeEncrypt(wrappedContent, iden, peer)
@@ -988,7 +939,6 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		val text = content.readString()
 		val iden = p2p.getIdentityByKey(idenKey) ?: return err("No identity found for $idenKey")
 		val peer = p2p.getPeerByKey(peerKey) ?: p2p.getIdentityByKey(IdentityKey(peerKey.arr))?.asPeer() ?: return err("No peer found for $peerKey")
-		val isUrgent = header.optBoolean("urgent", false) || header.optString("urgent") == "true"
 		val isAsync = header.optBoolean("async", false) || header.optString("async") == "true"
 		if (isAsync) {
 			val ts = p2p.nextMonotonicTimestamp()
@@ -996,7 +946,6 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 				type = CommandType.SEND_TEXT,
 				identityKey = idenKey,
 				peerKey = peerKey,
-				urgent = isUrgent,
 				sentTimestamp = ts,
 				payload = CommandPayload.Text(text)
 			)
@@ -1007,11 +956,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			}
 		}
 
-		val textContent = if (isUrgent) {
-			MutableMetaDataContent(BinaryContent(text.toByteArray(), "urgent:text", "txt"))
-		} else {
-			TextContent(text)
-		}
+		val textContent = TextContent(text)
 		stateManager.setEncoding(true)
 		try {
 			val encKey = p2p.pkeEncrypt(textContent, iden, peer)
@@ -1035,7 +980,6 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		}
 		val iden = p2p.getIdentityByKey(idenKey) ?: return err("No identity found for $idenKey")
 		val peer = p2p.getPeerByKey(peerKey) ?: p2p.getIdentityByKey(IdentityKey(peerKey.arr))?.asPeer() ?: return err("No peer found for $peerKey")
-		val isUrgent = header.optBoolean("urgent", false) || header.optString("urgent") == "true"
 		val isAsync = header.optBoolean("async", false) || header.optString("async") == "true"
 		if (isAsync) {
 			val stagedFile = File(p2p.tmpDir, "upload_${UUID.randomUUID()}.tmp")
@@ -1054,7 +998,6 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 				type = CommandType.SEND_FILE,
 				identityKey = idenKey,
 				peerKey = peerKey,
-				urgent = isUrgent,
 				sentTimestamp = ts,
 				payload = CommandPayload.FilePayload(stagedFile, originalName)
 			)
@@ -1065,30 +1008,9 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			}
 		}
 
-		val storedPath = if (isUrgent) "urgent:$originalName" else originalName
 		val wrappedContent = MutableMetaDataContent(content).apply {
-			path = storedPath
+			path = originalName
 			ext = originalName.substringAfterLast('.', "").lowercase()
-		}
-		stateManager.setEncoding(true)
-		try {
-			val encKey = p2p.pkeEncrypt(wrappedContent, iden, peer)
-			p2p.pushNewMessage(encKey)
-			stateManager.onMessagesChanged()
-			return ok { put("key", encKey.toString()) }
-		} finally {
-			stateManager.setEncoding(false)
-		}
-	}
-
-	private fun sendBellMessage(header: JSONObject): Content {
-		val keys = resolveSendKeys(header) ?: return err("Select a sender and recipient first")
-		val (idenKey, peerKey) = keys
-		val iden = p2p.getIdentityByKey(idenKey) ?: return err("No identity found for $idenKey")
-		val peer = p2p.getPeerByKey(peerKey) ?: p2p.getIdentityByKey(IdentityKey(peerKey.arr))?.asPeer() ?: return err("No peer found for $peerKey")
-		val wrappedContent = MutableMetaDataContent(BinaryContent(ByteArray(0), "bell", "bell")).apply {
-			path = "bell"
-			ext = "bell"
 		}
 		stateManager.setEncoding(true)
 		try {

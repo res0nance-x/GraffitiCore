@@ -86,11 +86,7 @@ class CommandQueue(
 					command.statusMessage = "Encrypting message..."
 					onCommandUpdated?.invoke(command)
 
-					val textContent = if (command.urgent) {
-						MutableMetaDataContent(BinaryContent(payload.text.toByteArray(), "urgent:text", "txt"))
-					} else {
-						TextContent(payload.text)
-					}
+					val textContent = TextContent(payload.text)
 					p2p.pkeEncrypt(textContent, iden, peer, timestamp = command.sentTimestamp)
 				}
 
@@ -100,9 +96,8 @@ class CommandQueue(
 					onCommandUpdated?.invoke(command)
 
 					val originalName = payload.originalFileName
-					val storedPath = if (command.urgent) "urgent:$originalName" else originalName
 					val wrappedContent = MutableMetaDataContent(FileContent(payload.stagedFile)).apply {
-						path = storedPath
+						path = originalName
 						ext = originalName.substringAfterLast('.', "").lowercase()
 					}
 					try {
@@ -129,9 +124,8 @@ class CommandQueue(
 						command.statusMessage = "Encrypting pack archive..."
 						onCommandUpdated?.invoke(command)
 
-						val storedPath = if (command.urgent) "urgent:${payload.packName}" else payload.packName
 						val wrappedContent = MutableMetaDataContent(FileContent(tempPackFile)).apply {
-							path = storedPath
+							path = payload.packName
 							ext = "pack"
 						}
 						p2p.pkeEncrypt(wrappedContent, iden, peer, timestamp = command.sentTimestamp)
@@ -152,31 +146,15 @@ class CommandQueue(
 						throw IllegalStateException("Message content is not available locally for ${payload.sourceMessageKey}")
 					}
 					val content = p2p.getContent(payload.sourceMessageKey)
-					val baseName = content.path.removePrefix("urgent:")
-					val newPath = if (command.urgent) "urgent:$baseName" else baseName
 					val wrappedContent = MutableMetaDataContent(
 						content,
 						lastModified = command.sentTimestamp
-					).apply {
-						path = newPath
-					}
+					)
 
 					command.progress = 60
 					command.statusMessage = "Encrypting forward message..."
 					onCommandUpdated?.invoke(command)
 
-					p2p.pkeEncrypt(wrappedContent, iden, peer, timestamp = command.sentTimestamp)
-				}
-
-				is CommandPayload.Bell -> {
-					command.progress = 30
-					command.statusMessage = "Sending bell..."
-					onCommandUpdated?.invoke(command)
-
-					val wrappedContent = MutableMetaDataContent(BinaryContent(ByteArray(0), "bell", "bell")).apply {
-						path = "bell"
-						ext = "bell"
-					}
 					p2p.pkeEncrypt(wrappedContent, iden, peer, timestamp = command.sentTimestamp)
 				}
 			}
