@@ -199,15 +199,18 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 	private fun getVersion(): Content {
 		val ver = onGetVersion?.invoke()?.takeIf { it.isNotBlank() } ?: run {
 			try {
-				val location = GraffitiAPI::class.java.protectionDomain?.codeSource?.location
-				if (location != null) {
-					val file = File(location.toURI())
-					if (file.exists()) {
-						java.time.Instant.ofEpochMilli(file.lastModified())
-							.atZone(java.time.ZoneId.systemDefault())
-							.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd:HH"))
+				val stream = GraffitiAPI::class.java.getResourceAsStream("/web/build-date.txt")
+				stream?.bufferedReader()?.use { it.readText().trim() }?.takeIf { it.isNotBlank() } ?: run {
+					val location = GraffitiAPI::class.java.protectionDomain?.codeSource?.location
+					if (location != null) {
+						val file = File(location.toURI())
+						if (file.exists()) {
+							java.time.Instant.ofEpochMilli(file.lastModified())
+								.atZone(java.time.ZoneId.systemDefault())
+								.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd:HH"))
+						} else "Unknown"
 					} else "Unknown"
-				} else "Unknown"
+				}
 			} catch (_: Exception) {
 				"Unknown"
 			}

@@ -36,6 +36,7 @@ kotlin-js-store/
 /src/main/resources/web/js/*.js
 /src/main/resources/web/js/*.js.map
 /src/main/resources/web/js/*.d.ts
+/src/main/resources/web/build-date.txt
 
 # Logs & Temp files
 *.log

@@ -312,7 +312,31 @@ Settings
 					</div>
 				</section>
 
-
+				<!-- ── Notifications ────────────────────────────────────── -->
+				<section class="net-card">
+					<h3>Notifications</h3>
+					<p style="font-size:0.88rem; opacity:0.7; margin:0 0 0.75rem">
+						Choose the sound played when a message arrives while the app is in the background.
+					</p>
+					<div style="display:flex; flex-direction:column; gap:1rem;">
+						<div style="display:flex; flex-wrap:wrap; gap:1.5rem; align-items:flex-end;">
+							<label style="display:flex; flex-direction:column; gap:0.35rem; font-size:0.88rem; font-weight:600;">
+								Notification Sound
+								<select id="settings-bell-sound"
+									style="padding:0.4rem 0.6rem; border-radius:4px; background:var(--background); color:var(--primary); border:1px solid var(--button);">
+									<option selected value="chime">Chime (Default)</option>
+									<option value="knock">Knock</option>
+									<option value="ping">Ping</option>
+									<option value="harp">Harp</option>
+									<option value="mute">Mute (Silent)</option>
+								</select>
+							</label>
+							<button id="btn-preview-bell" style="padding:0.4rem 0.8rem; border-radius:4px; display:inline-flex; align-items:center; gap:0.35rem;" type="button">
+								<span style="font-size:1.05rem;">▶</span> Preview Sound
+							</button>
+						</div>
+					</div>
+				</section>
 
 				<!-- ── Help & Documentation Link ───────────────────────── -->
 				<section class="net-card">
