@@ -48,22 +48,22 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		}
 
 		// Wire up p2p event callbacks — p2p is always ready at construction.
-		p2p.onNodeConnected = { _, _ ->
+		p2p.addOnNodeConnectedListener { _, _ ->
 			stateManager.onNodesChanged()
 		}
-		p2p.onNodeDisconnected = { _ ->
+		p2p.addOnNodeDisconnectedListener { _ ->
 			stateManager.onNodesChanged()
 		}
-		p2p.onNodeIdentified = { _, _ ->
+		p2p.addOnNodeIdentifiedListener { _, _ ->
 			stateManager.onNodesChanged()
 		}
-		p2p.onTransferStateChanged = { _ ->
+		p2p.addOnTransferStateChangedListener { _ ->
 			stateManager.onTransferChanged()
 		}
-		p2p.onMessageReceived = { _ ->
+		p2p.addOnMessageReceivedListener { _ ->
 			stateManager.onMessagesChanged()
 		}
-		p2p.onPeerReceived = { _ ->
+		p2p.addOnPeerReceivedListener { _ ->
 			stateManager.onPeersChanged()
 		}
 		p2p.setWhitelistEnabled(loadSetting("graffiti:whitelist-enabled") == "true")
@@ -165,7 +165,11 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 	}
 
 	// ── Open URL API ─────────────────────────────────────────────────────────
-	var onOpenUrl: ((url: String) -> Boolean)? = null
+	private val onOpenUrlListeners = mutableListOf<(url: String) -> Boolean>()
+
+	fun addOnOpenUrlListener(listener: (url: String) -> Boolean) {
+		onOpenUrlListeners.add(listener)
+	}
 
 	private fun openUrlApi(header: JSONObject, content: Content?): Content {
 		val bodyParams = content?.let {
@@ -184,20 +188,43 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			return err("Only http and https links are permitted")
 		}
 
-		val handler = onOpenUrl ?: return err("Open URL handler not registered", Status.NOT_IMPLEMENTED)
-		return try {
-			val success = handler(rawUrl)
-			if (success) ok() else err("Failed to open URL")
-		} catch (e: Exception) {
-			err("Failed to open URL: ${e.message}")
+		if (onOpenUrlListeners.isEmpty()) {
+			return err("Open URL handler not registered", Status.NOT_IMPLEMENTED)
 		}
+		var anyHandled = false
+		for (listener in onOpenUrlListeners) {
+			try {
+				if (listener(rawUrl)) {
+					anyHandled = true
+				}
+			} catch (e: Exception) {
+				log(e)
+			}
+		}
+		return if (anyHandled) ok() else err("Failed to open URL")
 	}
 
 	// ── Version API ───────────────────────────────────────────────────────────
-	var onGetVersion: (() -> String)? = null
+	private val onGetVersionListeners = mutableListOf<() -> String>()
+
+	fun addOnGetVersionListener(listener: () -> String) {
+		onGetVersionListeners.add(listener)
+	}
 
 	private fun getVersion(): Content {
-		val ver = onGetVersion?.invoke()?.takeIf { it.isNotBlank() } ?: run {
+		var customVersion: String? = null
+		for (listener in onGetVersionListeners) {
+			try {
+				val v = listener().takeIf { it.isNotBlank() }
+				if (v != null) {
+					customVersion = v
+					break
+				}
+			} catch (e: Exception) {
+				log(e)
+			}
+		}
+		val ver = customVersion ?: run {
 			try {
 				val stream = GraffitiAPI::class.java.getResourceAsStream("/web/build-date.txt")
 				stream?.bufferedReader()?.use { it.readText().trim() }?.takeIf { it.isNotBlank() } ?: run {
@@ -219,8 +246,18 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 	}
 
 	// ── Pack Viewing API ──────────────────────────────────────────────────────
-	var onOpenPack: ((source: r3.source.Source, fileName: String, password: String?) -> Pair<String, Int>)? = null
-	var onClosePack: ((sessionId: String) -> Unit)? = null
+	private val onOpenPackListeners =
+		mutableListOf<(source: r3.source.Source, fileName: String, password: String?) -> Pair<String, Int>>()
+	private val onClosePackListeners = mutableListOf<(sessionId: String) -> Unit>()
+
+	fun addOnOpenPackListener(listener: (source: r3.source.Source, fileName: String, password: String?) -> Pair<String, Int>) {
+		onOpenPackListeners.add(listener)
+	}
+
+	fun addOnClosePackListener(listener: (sessionId: String) -> Unit) {
+		onClosePackListeners.add(listener)
+	}
+
 	private fun openPackApi(header: JSONObject, content: Content?): Content {
 		val bodyParams = content?.let {
 			try {
@@ -253,27 +290,40 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 
 			else -> return err("Missing 'path' or 'encKey' parameter")
 		}
-		val handler = onOpenPack ?: return err("Pack handler not registered", Status.INTERNAL_ERROR)
-		return try {
-			val (sessionId, port) = handler(source, fileName, password)
-			ok {
-				put("sessionId", sessionId)
-				put("port", port)
-				put("url", "http://localhost:$port/")
-			}
-		} catch (e: Exception) {
-			val errMsg = e.message ?: "Failed to open pack"
-			if (errMsg == "PASSWORD_REQUIRED" || errMsg == "INVALID_PASSWORD") {
-				err(errMsg, Status.UNAUTHORIZED)
-			} else {
-				err(errMsg)
+		if (onOpenPackListeners.isEmpty()) {
+			return err("Pack handler not registered", Status.INTERNAL_ERROR)
+		}
+		var lastException: Exception? = null
+		for (listener in onOpenPackListeners) {
+			try {
+				val (sessionId, port) = listener(source, fileName, password)
+				return ok {
+					put("sessionId", sessionId)
+					put("port", port)
+					put("url", "http://localhost:$port/")
+				}
+			} catch (e: Exception) {
+				lastException = e
+				val errMsg = e.message ?: ""
+				if (errMsg == "PASSWORD_REQUIRED" || errMsg == "INVALID_PASSWORD") {
+					return err(errMsg, Status.UNAUTHORIZED)
+				}
+				log(e)
 			}
 		}
+		val errMsg = lastException?.message ?: "Failed to open pack"
+		return err(errMsg)
 	}
 
 	private fun closePackApi(header: JSONObject): Content {
 		val sessionId = header.optString("sessionId", null) ?: return err("Missing 'sessionId' parameter")
-		onClosePack?.invoke(sessionId)
+		for (listener in onClosePackListeners) {
+			try {
+				listener(sessionId)
+			} catch (e: Exception) {
+				log(e)
+			}
+		}
 		return ok()
 	}
 

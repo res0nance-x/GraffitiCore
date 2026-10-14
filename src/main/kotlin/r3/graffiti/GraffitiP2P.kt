@@ -68,7 +68,6 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		const val MAX_STREAM_SIZE = 100 * 1024 * 1024 * 1024L // 100 GB
 		const val SMALL_CONTENT_THRESHOLD_BYTES = 256L
 		const val MAX_SMALL_CONTENT_ITEMS = 10000
-
 	}
 
 	// ── Backing maps (caches) ──────────────────────────────────────────────────
@@ -92,7 +91,6 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	}
 	private val isWarmupActive = AtomicBoolean(false)
 	private val pendingWarmupKeys = AtomicReference<List<EncryptedMetaKey>?>(null)
-
 	fun triggerMetaWarmup(keys: List<EncryptedMetaKey>) {
 		if (keys.isEmpty()) return
 		pendingWarmupKeys.set(keys)
@@ -109,7 +107,8 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 							if (decryptedMetaCache.containsKey(k)) continue
 							try {
 								getDecryptedMeta(k)
-							} catch (_: Exception) {}
+							} catch (_: Exception) {
+							}
 						}
 					}
 				} finally {
@@ -130,7 +129,6 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	// ── Message Arrival Ordering ──────────────────────────────────────────────
 	private val lastAssignedTimestamp = AtomicLong(0L)
 	val queryOrderTimestamps = ConcurrentHashMap<EncryptedMetaKey, Long>()
-
 	fun nextMonotonicTimestamp(): Long {
 		val now = System.currentTimeMillis()
 		return lastAssignedTimestamp.updateAndGet { prev ->
@@ -218,7 +216,6 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	init {
 		// Clean up all old temporary files from previous runs
 		cleanTempFiles(maxAgeMs = 0L)
-
 		val serverIdenFile = File(graffitiDir, "serverIdentity")
 		serverIdentity = if (serverIdenFile.exists()) {
 			serverIdenFile.toDataInputStream().use { Identity.read(it) }
@@ -285,323 +282,327 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		lastAssignedTimestamp.set(initialTs)
 	}
 
-	val contentHandler: (TCPNode, ByteArray, File?) -> Unit = contentHandler@{ node: TCPNode, rawHead: ByteArray, file: File? ->
-		try {
-			val type = StringWritable.read(rawHead.toDataInputStream()).str
-			when (type) {
-				// Peer is asking for all metadata we hold that matches their recipient filter.
-				// We respond with a QueryResponseMessage + list of matching EncryptedContentMetaData.
-				QueryMessage.type -> {
-					val msg = QueryMessage.read(rawHead.toDataInputStream())
-					nodeQueryMap[node] = msg
-					val isAskingAll = msg.isAskingAllRecipients()
-					val currentTs = nextMonotonicTimestamp()
-					val serverTime = activeWatermarkSupplier?.invoke()?.let { minOf(it, currentTs) } ?: currentTs
-					val metaList = mutableListOf<EncryptedContentMetaData>()
-					metaCache.values.forEach { eMeta ->
-						val msgTime = metaTimeCache[eMeta.key] ?: File(metaDir, "${eMeta.key}").lastModified()
-						if (msg.queryTime > 0L && msgTime <= msg.queryTime) return@forEach
-						if (isAskingAll && isIgnoredForRelay(eMeta)) return@forEach
-						if (!msg.matches(eMeta)) return@forEach
-						val contentExists =
-							smallContentCache.containsKey(eMeta.key) || File(contentDir, "${eMeta.key}").exists()
-						if (contentExists) metaList.add(eMeta)
+	val contentHandler: (TCPNode, ByteArray, File?) -> Unit =
+		contentHandler@{ node: TCPNode, rawHead: ByteArray, file: File? ->
+			try {
+				val type = StringWritable.read(rawHead.toDataInputStream()).str
+				when (type) {
+					// Peer is asking for all metadata we hold that matches their recipient filter.
+					// We respond with a QueryResponseMessage + list of matching EncryptedContentMetaData.
+					QueryMessage.type -> {
+						val msg = QueryMessage.read(rawHead.toDataInputStream())
+						nodeQueryMap[node] = msg
+						val isAskingAll = msg.isAskingAllRecipients()
+						val currentTs = nextMonotonicTimestamp()
+						val serverTime = activeWatermarkSupplier?.invoke()?.let { minOf(it, currentTs) } ?: currentTs
+						val metaList = mutableListOf<EncryptedContentMetaData>()
+						metaCache.values.forEach { eMeta ->
+							val msgTime = metaTimeCache[eMeta.key] ?: File(metaDir, "${eMeta.key}").lastModified()
+							if (msg.queryTime > 0L && msgTime <= msg.queryTime) return@forEach
+							if (isAskingAll && isIgnoredForRelay(eMeta)) return@forEach
+							if (!msg.matches(eMeta)) return@forEach
+							val contentExists =
+								smallContentCache.containsKey(eMeta.key) || File(contentDir, "${eMeta.key}").exists()
+							if (contentExists) metaList.add(eMeta)
+						}
+						metaList.sortBy { metaTimeCache[it.key] ?: 0L }
+						node.send(
+							QueryResponseMessage(serverTime).serialize(),
+							ListWritable(metaList.map { it.toHeader() }).serialize()
+						)
+						debug("Query from ${node.remoteAddress} (since=${msg.queryTime}): returning ${metaList.size} metadata items (out of ${metaCache.size})")
 					}
-					metaList.sortBy { metaTimeCache[it.key] ?: 0L }
-					node.send(
-						QueryResponseMessage(serverTime).serialize(),
-						ListWritable(metaList.map { it.toHeader() }).serialize()
-					)
-					debug("Query from ${node.remoteAddress} (since=${msg.queryTime}): returning ${metaList.size} metadata items (out of ${metaCache.size})")
-				}
-				// Response to our earlier QueryMessage: a list of EncryptedContentMetaData from the peer.
-				// We save any new meta addressed to us, then request the actual content for those keys.
-				QueryResponseMessage.type -> {
-					val resp = QueryResponseMessage.read(rawHead.toDataInputStream())
-					if (resp.serverTime > 0L) {
-						setPeerQueryTime(node, resp.serverTime)
-					}
-					val peerLabel = nodePeerMap[node]?.key?.name ?: node.remoteAddress.toString()
-					if (file != null) {
-						val headerList = file.toDataInputStream().use { dis ->
-							ListWritable.read(dis, EncryptedContentHeader::read).list
+					// Response to our earlier QueryMessage: a list of EncryptedContentMetaData from the peer.
+					// We save any new meta addressed to us, then request the actual content for those keys.
+					QueryResponseMessage.type -> {
+						val resp = QueryResponseMessage.read(rawHead.toDataInputStream())
+						if (resp.serverTime > 0L) {
+							setPeerQueryTime(node, resp.serverTime)
 						}
-						val myIdentityKeys = listIdentities().map { it.key }.toSet()
-						val myPeerKeys = listPeers().map { it.key }.toSet()
-						val wantContent = mutableListOf<EncryptedMetaKey>()
-						val wantPeers = mutableSetOf<PeerKey>()
-						debug("Received QueryResponse from ${node.remoteAddress}: ${headerList.size} header item(s)")
-						headerList.forEach { msgHeader ->
-							if (isMessageDeleted(msgHeader.key)) return@forEach
-							if (msgHeader.author.arr.contentEquals(msgHeader.recipient.arr)) {
-								debug("Ignoring header ${msgHeader.key.name} from ${node.remoteAddress}: author and recipient are the same")
-								return@forEach
+						val peerLabel = nodePeerMap[node]?.key?.name ?: node.remoteAddress.toString()
+						if (file != null) {
+							val headerList = file.toDataInputStream().use { dis ->
+								ListWritable.read(dis, EncryptedContentHeader::read).list
 							}
-							// Non-relay mode: ignore meta not addressed to us or our direct friends
-							// (Peers we have explicitly added)
-							if (!relayEnabled &&
-								msgHeader.recipient !in myIdentityKeys &&
-								PeerKey(msgHeader.recipient) !in myPeerKeys
-							) {
-								debug("Ignoring off-recipient meta ${msgHeader.key.name} from ${node.remoteAddress}")
-								return@forEach
-							}
-							// Whitelist mode: only accept messages from known peers
-							if (whitelistEnabled && !relayEnabled && msgHeader.author !in myPeerKeys) {
-								debug("Ignoring meta ${msgHeader.key.name} from ${node.remoteAddress}: author ${msgHeader.author.name} not in whitelist")
-								return@forEach
-							}
-							val metaExists = metaCache.containsKey(msgHeader.key) || File(metaDir, "${msgHeader.key}").exists()
-							val contentExists = smallContentCache.containsKey(msgHeader.key) || File(contentDir, "${msgHeader.key}").exists()
-							if (metaExists && contentExists) return@forEach
-
-							// Preserve the relay's arrival order for incoming content
-							queryOrderTimestamps.computeIfAbsent(msgHeader.key) { nextMonotonicTimestamp() }
-
-							val now = System.currentTimeMillis()
-							val pendingSince = pendingContentRequests[msgHeader.key]
-							val isPending = pendingSince != null && (now - pendingSince) < 30_000L
-							if (isPending) return@forEach
-
-							val authorPeer = getPeerByKey(msgHeader.author)
-							if (authorPeer == null) {
-								// We need this peer before we can verify and accept content
-								pendingPeerContent.computeIfAbsent(msgHeader.author) { ConcurrentHashMap() }[msgHeader.key] = node
-								wantPeers.add(msgHeader.author)
-							} else {
-								pendingContentRequests[msgHeader.key] = now
-								wantContent.add(msgHeader.key)
-							}
-						}
-						if (wantPeers.isNotEmpty()) {
-							node.send(PeerRequestMessage(wantPeers.toList()).serialize())
-							debug("Requested ${wantPeers.size} peer(s) from ${node.remoteAddress}")
-						}
-						if (wantContent.isNotEmpty()) {
-							node.send(ContentRequestMessage(wantContent).serialize())
-						} else if (wantPeers.isEmpty()) {
-							debug("No content requests needed from ${node.remoteAddress} after QueryResponse")
-						}
-					}
-				}
-				// Peer wants the meta file and content file for a list of keys we hold.
-				// We serve each key's EncryptedMetaMessage and EncryptedContentMessage in turn.
-				// Offloaded to a background executor so the TCP receive loop is never blocked during file transfer.
-				ContentRequestMessage.type -> {
-					val req = ContentRequestMessage.read(rawHead.toDataInputStream())
-					debug("Received ContentRequest from ${node.remoteAddress}: ${req.keys.joinToString { it.name }}")
-					contentSenderExecutor.execute {
-						try {
-							val isAskingAll = nodeQueryMap[node]?.isAskingAllRecipients() == true
-							req.keys.forEach { key ->
-								if (node.isClosed()) return@forEach
-								if (isMessageDeleted(key)) return@forEach
-								val eMeta = metaCache[key] ?: run {
-									val metaFile = File(metaDir, "$key")
-									if (metaFile.exists()) {
-										metaFile.toDataInputStream().use { EncryptedContentMetaData.read(it) }
-									} else null
-								}
-								if (isAskingAll && eMeta != null && isIgnoredForRelay(eMeta)) {
-									debug("Skipping sending ignored content ${key.name} to ${node.remoteAddress}")
+							val myIdentityKeys = listIdentities().map { it.key }.toSet()
+							val myPeerKeys = listPeers().map { it.key }.toSet()
+							val wantContent = mutableListOf<EncryptedMetaKey>()
+							val wantPeers = mutableSetOf<PeerKey>()
+							debug("Received QueryResponse from ${node.remoteAddress}: ${headerList.size} header item(s)")
+							headerList.forEach { msgHeader ->
+								if (isMessageDeleted(msgHeader.key)) return@forEach
+								if (msgHeader.author.arr.contentEquals(msgHeader.recipient.arr)) {
+									debug("Ignoring header ${msgHeader.key.name} from ${node.remoteAddress}: author and recipient are the same")
 									return@forEach
 								}
-								val smallBytes = smallContentCache[key]
-								if (eMeta != null) {
-									val contentFile = if (smallBytes == null) File(contentDir, "$key") else null
-									val hasContent = smallBytes != null || (contentFile?.exists() == true)
-									if (hasContent) {
-										val fileSize = smallBytes?.size?.toLong() ?: contentFile?.length() ?: 0L
-										if (smallBytes != null) {
-											node.send(EncryptedContentMessage(eMeta).serialize(), smallBytes)
-										} else if (contentFile != null) {
-											node.send(EncryptedContentMessage(eMeta).serialize(), contentFile)
-										}
-										logOutgoing(node, key.name, fileSize)
-									}
+								// Non-relay mode: ignore meta not addressed to us or our direct friends
+								// (Peers we have explicitly added)
+								if (!relayEnabled &&
+									msgHeader.recipient !in myIdentityKeys &&
+									PeerKey(msgHeader.recipient) !in myPeerKeys
+								) {
+									debug("Ignoring off-recipient meta ${msgHeader.key.name} from ${node.remoteAddress}")
+									return@forEach
 								}
-							}
-						} catch (e: Exception) {
-							logNodeError(node, "Error serving ContentRequest: ${e.message}")
-						}
-					}
-				}
-				// Incoming encrypted content file for a specific key.
-				EncryptedContentMessage.type -> {
-					val contentMessage = EncryptedContentMessage.read(rawHead.toDataInputStream())
-					val eMeta = contentMessage.eMeta
-					if (file != null) {
-						if (isMessageDeleted(eMeta.key)) {
-							file.delete()
-							debug("Ignoring content ${eMeta.key.name} from ${node.remoteAddress}: key is deleted")
-						} else if (eMeta.author.arr.contentEquals(eMeta.recipient.arr)) {
-							file.delete()
-							debug("Ignoring content ${eMeta.key.name} from ${node.remoteAddress}: author and recipient are the same")
-						} else {
-							val peer = getPeerByKey(eMeta.author)
-							if (peer == null) {
-								file.delete()
-								logNodeError(node, "Author peer ${eMeta.author.name} not found for content ${eMeta.key.name}")
-								return@contentHandler
-							}
-							val identity = getIdentityByKey(eMeta.recipient)
-							val valid = if (identity != null) {
-								// We have both: verify metadata signature AND content hash
-								eMeta.verify(peer, FileSource(file), identity)
-							} else {
-								// We only have the author peer (relaying): verify metadata signature
-								eMeta.verify(peer)
-							}
-							if (!valid) {
-								file.delete()
-								logNodeError(node, "Invalid content: signature or hash mismatch for ${eMeta.key.name}")
-								return@contentHandler
-							}
-							var contentStored = false
-							val destFile = File(contentDir, "${eMeta.key}").consistentFile()
-							val fileSize = file.length()
-							val moved = if (file.renameTo(destFile)) {
-								true
-							} else {
-								try {
-									file.copyTo(destFile, overwrite = true)
-									file.delete()
-									true
-								} catch (e: Exception) {
-									logNodeError(node, "Failed to move content file for ${eMeta.key.name}: ${e.message}")
-									false
+								// Whitelist mode: only accept messages from known peers
+								if (whitelistEnabled && !relayEnabled && msgHeader.author !in myPeerKeys) {
+									debug("Ignoring meta ${msgHeader.key.name} from ${node.remoteAddress}: author ${msgHeader.author.name} not in whitelist")
+									return@forEach
 								}
-							}
-							if (moved) {
-								totalContentSize.addAndGet(fileSize)
-								checkAndEnforceQuota()
-								if (fileSize <= SMALL_CONTENT_THRESHOLD_BYTES && smallContentCache.size < MAX_SMALL_CONTENT_ITEMS) {
-									smallContentCache[eMeta.key] = destFile.readBytes()
-								}
-								contentStored = true
-							}
-							if (contentStored) {
-								logIncoming(node, eMeta.key.name, fileSize)
-								pendingContentRequests.remove(eMeta.key)
-								metaCache[eMeta.key] = eMeta
-								val metaFile = File(metaDir, eMeta.key.toString())
-								if (!metaFile.exists()) {
-									metaFile.writeBytes(eMeta.serialize())
-									val ts = queryOrderTimestamps.remove(eMeta.key) ?: nextMonotonicTimestamp()
-									metaFile.setLastModified(ts)
-									metaTimeCache[eMeta.key] = ts
-									if (metaFile.exists()) {
-										onMessageReceived?.invoke(eMeta.key)
-										if (relayEnabled) {
-											pushNewMessage(eMeta.key, excludeNode = node)
-										}
-									}
+								val metaExists =
+									metaCache.containsKey(msgHeader.key) || File(metaDir, "${msgHeader.key}").exists()
+								val contentExists =
+									smallContentCache.containsKey(msgHeader.key) || File(contentDir, "${msgHeader.key}").exists()
+								if (metaExists && contentExists) return@forEach
+								// Preserve the relay's arrival order for incoming content
+								queryOrderTimestamps.computeIfAbsent(msgHeader.key) { nextMonotonicTimestamp() }
+								val now = System.currentTimeMillis()
+								val pendingSince = pendingContentRequests[msgHeader.key]
+								val isPending = pendingSince != null && (now - pendingSince) < 30_000L
+								if (isPending) return@forEach
+								val authorPeer = getPeerByKey(msgHeader.author)
+								if (authorPeer == null) {
+									// We need this peer before we can verify and accept content
+									pendingPeerContent.computeIfAbsent(msgHeader.author) { ConcurrentHashMap() }[msgHeader.key] =
+										node
+									wantPeers.add(msgHeader.author)
 								} else {
-									queryOrderTimestamps.remove(eMeta.key)
+									pendingContentRequests[msgHeader.key] = now
+									wantContent.add(msgHeader.key)
 								}
+							}
+							if (wantPeers.isNotEmpty()) {
+								node.send(PeerRequestMessage(wantPeers.toList()).serialize())
+								debug("Requested ${wantPeers.size} peer(s) from ${node.remoteAddress}")
+							}
+							if (wantContent.isNotEmpty()) {
+								node.send(ContentRequestMessage(wantContent).serialize())
+							} else if (wantPeers.isEmpty()) {
+								debug("No content requests needed from ${node.remoteAddress} after QueryResponse")
 							}
 						}
 					}
-				}
-				// Keepalive ping — respond immediately with high-priority pong so the sender resets our activity timer.
-				PingMessage.type -> node.sendPriority(StringWritable(PongMessage.type).serialize())
-				// Keepalive pong — no action needed; TCPNode already refreshed lastActivityMs on block receipt.
-				PongMessage.type -> { /* lastActivityMs already refreshed by TCPNode on block receipt */
-				}
-				// Peer is challenging us to prove our server identity.
-				// We sign their nonce with our server identity key and send back the response.
-				ChallengeMessage.type -> {
-					val msg = ChallengeMessage.read(rawHead.toDataInputStream())
-					try {
-						node.send(
-							ChallengeResponseMessage(
-								serverIdentity.asPeer(),
-								serverIdentity.sign(msg.nonce),
-								relayEnabled
-							).serialize()
-						)
-					} catch (e: Exception) {
-						logNodeError(node, "Challenge response failed: ${e.message}")
-					}
-				}
-				// Peer's response to our challenge. Verify their signature against the nonce we sent;
-				// if valid, record them as authenticated in nodePeerMap and fire onNodeIdentified.
-				// If invalid, close the connection immediately.
-				ChallengeResponseMessage.type -> {
-					val msg = ChallengeResponseMessage.read(rawHead.toDataInputStream())
-					val ourNonce = nodeChallengeMap.remove(node)   // atomic: nonce is consumed once
-					if (ourNonce != null && msg.isValidFor(ourNonce)) {
-						nodePeerMap[node] = msg.peer
-						nodeRelayMap[node] = msg.isRelay
-						nodeQueryTimeMap[node.remoteAddress]?.let { addrTime ->
-							peerQueryTimeMap.putIfAbsent(msg.peer.key, addrTime)
+					// Peer wants the meta file and content file for a list of keys we hold.
+					// We serve each key's EncryptedMetaMessage and EncryptedContentMessage in turn.
+					// Offloaded to a background executor so the TCP receive loop is never blocked during file transfer.
+					ContentRequestMessage.type -> {
+						val req = ContentRequestMessage.read(rawHead.toDataInputStream())
+						debug("Received ContentRequest from ${node.remoteAddress}: ${req.keys.joinToString { it.name }}")
+						contentSenderExecutor.execute {
+							try {
+								val isAskingAll = nodeQueryMap[node]?.isAskingAllRecipients() == true
+								req.keys.forEach { key ->
+									if (node.isClosed()) return@forEach
+									if (isMessageDeleted(key)) return@forEach
+									val eMeta = metaCache[key] ?: run {
+										val metaFile = File(metaDir, "$key")
+										if (metaFile.exists()) {
+											metaFile.toDataInputStream().use { EncryptedContentMetaData.read(it) }
+										} else null
+									}
+									if (isAskingAll && eMeta != null && isIgnoredForRelay(eMeta)) {
+										debug("Skipping sending ignored content ${key.name} to ${node.remoteAddress}")
+										return@forEach
+									}
+									val smallBytes = smallContentCache[key]
+									if (eMeta != null) {
+										val contentFile = if (smallBytes == null) File(contentDir, "$key") else null
+										val hasContent = smallBytes != null || (contentFile?.exists() == true)
+										if (hasContent) {
+											val fileSize = smallBytes?.size?.toLong() ?: contentFile?.length() ?: 0L
+											if (smallBytes != null) {
+												node.send(EncryptedContentMessage(eMeta).serialize(), smallBytes)
+											} else if (contentFile != null) {
+												node.send(EncryptedContentMessage(eMeta).serialize(), contentFile)
+											}
+											logOutgoing(node, key.name, fileSize)
+										}
+									}
+								}
+							} catch (e: Exception) {
+								logNodeError(node, "Error serving ContentRequest: ${e.message}")
+							}
 						}
-						onNodeIdentified?.invoke(node, msg.peer)
-						logConnected(node, msg.peer.key.name)
-						if (node !in nodesWithoutAutoSync) {
-							syncNode(node)
-						}
-					} else {
-						logNodeError(node, "Auth failed")
-						node.close()
 					}
-				}
-
-				// Peer is asking for public keys for a list of author/peer keys.
-				PeerRequestMessage.type -> {
-					val req = PeerRequestMessage.read(rawHead.toDataInputStream())
-					val foundPeers = mutableListOf<Peer>()
-					req.keys.forEach { key ->
-						val p = peerCache[key] ?: getIdentityByKey(IdentityKey(key.arr))?.asPeer()
-						if (p != null) foundPeers.add(p)
-					}
-					if (foundPeers.isNotEmpty()) {
-						node.send(PeerResponseMessage(foundPeers).serialize())
-						debug("PeerRequest from ${node.remoteAddress}: served ${foundPeers.size} peer(s)")
-					}
-				}
-				// Response to our earlier PeerRequestMessage: a list of Peer instances.
-				PeerResponseMessage.type -> {
-					val resp = PeerResponseMessage.read(rawHead.toDataInputStream())
-					debug("Received PeerResponse from ${node.remoteAddress}: ${resp.peers.size} peer(s)")
-					resp.peers.forEach { peer ->
-						val expectedKey = PeerKey(peer.mx.toByteArray().hash256())
-						if (expectedKey != peer.key) {
-							logNodeError(node, "Rejecting spoofed peer ${peer.key.name}: hash mismatch")
-							return@forEach
-						}
-						savePeer(peer, resetQueryTimes = false)
-						onPeerReceived?.invoke(peer)
-						val pendingMap = pendingPeerContent.remove(peer.key)
-						if (pendingMap != null) {
-							val nodeKeys = mutableMapOf<TCPNode, MutableList<EncryptedMetaKey>>()
-							val now = System.currentTimeMillis()
-							pendingMap.forEach { (metaKey, targetNode) ->
-								if (!targetNode.isClosed() && !isMessageDeleted(metaKey)) {
-									val metaExists = metaCache.containsKey(metaKey) || File(metaDir, "$metaKey").exists()
-									val contentExists = smallContentCache.containsKey(metaKey) || File(contentDir, "$metaKey").exists()
-									if (!metaExists || !contentExists) {
-										pendingContentRequests[metaKey] = now
-										nodeKeys.computeIfAbsent(targetNode) { mutableListOf() }.add(metaKey)
+					// Incoming encrypted content file for a specific key.
+					EncryptedContentMessage.type -> {
+						val contentMessage = EncryptedContentMessage.read(rawHead.toDataInputStream())
+						val eMeta = contentMessage.eMeta
+						if (file != null) {
+							if (isMessageDeleted(eMeta.key)) {
+								file.delete()
+								debug("Ignoring content ${eMeta.key.name} from ${node.remoteAddress}: key is deleted")
+							} else if (eMeta.author.arr.contentEquals(eMeta.recipient.arr)) {
+								file.delete()
+								debug("Ignoring content ${eMeta.key.name} from ${node.remoteAddress}: author and recipient are the same")
+							} else {
+								val peer = getPeerByKey(eMeta.author)
+								if (peer == null) {
+									file.delete()
+									logNodeError(
+										node,
+										"Author peer ${eMeta.author.name} not found for content ${eMeta.key.name}"
+									)
+									return@contentHandler
+								}
+								val identity = getIdentityByKey(eMeta.recipient)
+								val valid = if (identity != null) {
+									// We have both: verify metadata signature AND content hash
+									eMeta.verify(peer, FileSource(file), identity)
+								} else {
+									// We only have the author peer (relaying): verify metadata signature
+									eMeta.verify(peer)
+								}
+								if (!valid) {
+									file.delete()
+									logNodeError(node, "Invalid content: signature or hash mismatch for ${eMeta.key.name}")
+									return@contentHandler
+								}
+								var contentStored = false
+								val destFile = File(contentDir, "${eMeta.key}").consistentFile()
+								val fileSize = file.length()
+								val moved = if (file.renameTo(destFile)) {
+									true
+								} else {
+									try {
+										file.copyTo(destFile, overwrite = true)
+										file.delete()
+										true
+									} catch (e: Exception) {
+										logNodeError(node, "Failed to move content file for ${eMeta.key.name}: ${e.message}")
+										false
+									}
+								}
+								if (moved) {
+									totalContentSize.addAndGet(fileSize)
+									checkAndEnforceQuota()
+									if (fileSize <= SMALL_CONTENT_THRESHOLD_BYTES && smallContentCache.size < MAX_SMALL_CONTENT_ITEMS) {
+										smallContentCache[eMeta.key] = destFile.readBytes()
+									}
+									contentStored = true
+								}
+								if (contentStored) {
+									logIncoming(node, eMeta.key.name, fileSize)
+									pendingContentRequests.remove(eMeta.key)
+									metaCache[eMeta.key] = eMeta
+									val metaFile = File(metaDir, eMeta.key.toString())
+									if (!metaFile.exists()) {
+										metaFile.writeBytes(eMeta.serialize())
+										val ts = queryOrderTimestamps.remove(eMeta.key) ?: nextMonotonicTimestamp()
+										metaFile.setLastModified(ts)
+										metaTimeCache[eMeta.key] = ts
+										if (metaFile.exists()) {
+											notifyMessageReceived(eMeta.key)
+											if (relayEnabled) {
+												pushNewMessage(eMeta.key, excludeNode = node)
+											}
+										}
+									} else {
+										queryOrderTimestamps.remove(eMeta.key)
 									}
 								}
 							}
-							nodeKeys.forEach { (targetNode, keys) ->
-								if (keys.isNotEmpty()) {
-									targetNode.send(ContentRequestMessage(keys).serialize())
-									debug("Requested ${keys.size} content item(s) from ${targetNode.remoteAddress} after peer resolved")
+						}
+					}
+					// Keepalive ping — respond immediately with high-priority pong so the sender resets our activity timer.
+					PingMessage.type -> node.sendPriority(StringWritable(PongMessage.type).serialize())
+					// Keepalive pong — no action needed; TCPNode already refreshed lastActivityMs on block receipt.
+					PongMessage.type -> { /* lastActivityMs already refreshed by TCPNode on block receipt */
+					}
+					// Peer is challenging us to prove our server identity.
+					// We sign their nonce with our server identity key and send back the response.
+					ChallengeMessage.type -> {
+						val msg = ChallengeMessage.read(rawHead.toDataInputStream())
+						try {
+							node.send(
+								ChallengeResponseMessage(
+									serverIdentity.asPeer(),
+									serverIdentity.sign(msg.nonce),
+									relayEnabled
+								).serialize()
+							)
+						} catch (e: Exception) {
+							logNodeError(node, "Challenge response failed: ${e.message}")
+						}
+					}
+					// Peer's response to our challenge. Verify their signature against the nonce we sent;
+					// if valid, record them as authenticated in nodePeerMap and fire onNodeIdentified.
+					// If invalid, close the connection immediately.
+					ChallengeResponseMessage.type -> {
+						val msg = ChallengeResponseMessage.read(rawHead.toDataInputStream())
+						val ourNonce = nodeChallengeMap.remove(node)   // atomic: nonce is consumed once
+						if (ourNonce != null && msg.isValidFor(ourNonce)) {
+							nodePeerMap[node] = msg.peer
+							nodeRelayMap[node] = msg.isRelay
+							nodeQueryTimeMap[node.remoteAddress]?.let { addrTime ->
+								peerQueryTimeMap.putIfAbsent(msg.peer.key, addrTime)
+							}
+							notifyNodeIdentified(node, msg.peer)
+							logConnected(node, msg.peer.key.name)
+							if (node !in nodesWithoutAutoSync) {
+								syncNode(node)
+							}
+						} else {
+							logNodeError(node, "Auth failed")
+							node.close()
+						}
+					}
+					// Peer is asking for public keys for a list of author/peer keys.
+					PeerRequestMessage.type -> {
+						val req = PeerRequestMessage.read(rawHead.toDataInputStream())
+						val foundPeers = mutableListOf<Peer>()
+						req.keys.forEach { key ->
+							val p = peerCache[key] ?: getIdentityByKey(IdentityKey(key.arr))?.asPeer()
+							if (p != null) foundPeers.add(p)
+						}
+						if (foundPeers.isNotEmpty()) {
+							node.send(PeerResponseMessage(foundPeers).serialize())
+							debug("PeerRequest from ${node.remoteAddress}: served ${foundPeers.size} peer(s)")
+						}
+					}
+					// Response to our earlier PeerRequestMessage: a list of Peer instances.
+					PeerResponseMessage.type -> {
+						val resp = PeerResponseMessage.read(rawHead.toDataInputStream())
+						debug("Received PeerResponse from ${node.remoteAddress}: ${resp.peers.size} peer(s)")
+						resp.peers.forEach { peer ->
+							val expectedKey = PeerKey(peer.mx.toByteArray().hash256())
+							if (expectedKey != peer.key) {
+								logNodeError(node, "Rejecting spoofed peer ${peer.key.name}: hash mismatch")
+								return@forEach
+							}
+							savePeer(peer, resetQueryTimes = false)
+							notifyPeerReceived(peer)
+							val pendingMap = pendingPeerContent.remove(peer.key)
+							if (pendingMap != null) {
+								val nodeKeys = mutableMapOf<TCPNode, MutableList<EncryptedMetaKey>>()
+								val now = System.currentTimeMillis()
+								pendingMap.forEach { (metaKey, targetNode) ->
+									if (!targetNode.isClosed() && !isMessageDeleted(metaKey)) {
+										val metaExists = metaCache.containsKey(metaKey) || File(metaDir, "$metaKey").exists()
+										val contentExists =
+											smallContentCache.containsKey(metaKey) || File(contentDir, "$metaKey").exists()
+										if (!metaExists || !contentExists) {
+											pendingContentRequests[metaKey] = now
+											nodeKeys.computeIfAbsent(targetNode) { mutableListOf() }.add(metaKey)
+										}
+									}
+								}
+								nodeKeys.forEach { (targetNode, keys) ->
+									if (keys.isNotEmpty()) {
+										targetNode.send(ContentRequestMessage(keys).serialize())
+										debug("Requested ${keys.size} content item(s) from ${targetNode.remoteAddress} after peer resolved")
+									}
 								}
 							}
 						}
 					}
-				}
 
-				else -> debug("Unknown message type: $type from ${node.remoteAddress}")
+					else -> debug("Unknown message type: $type from ${node.remoteAddress}")
+				}
+			} catch (e: Exception) {
+				logNodeError(node, "Error in contentHandler: ${e.message}")
 			}
-		} catch (e: Exception) {
-			logNodeError(node, "Error in contentHandler: ${e.message}")
 		}
-	}
 
 	/** Send a challenge nonce to [node] and remember it so we can verify their response. */
 	private fun sendChallenge(node: TCPNode) {
@@ -635,13 +636,13 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			nodesWithoutAutoSync.remove(newNode)
 			nodeQueryTimeMap.remove(addr)
 			checkAndNotifyTransferState()
-			onNodeDisconnected?.invoke(newNode)
+			notifyNodeDisconnected(newNode)
 		}
 		connectionMap[addr] = newNode
 		if (!autoSync) {
 			nodesWithoutAutoSync.add(newNode)
 		}
-		onNodeConnected?.invoke(newNode, false)
+		notifyNodeConnected(newNode, false)
 		sendChallenge(newNode)
 		return newNode
 	}
@@ -874,9 +875,9 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 					nodesWithoutAutoSync.remove(node)
 					nodeQueryTimeMap.remove(node.remoteAddress)
 					checkAndNotifyTransferState()
-					onNodeDisconnected?.invoke(node)
+					notifyNodeDisconnected(node)
 				}
-				onNodeConnected?.invoke(node, true)
+				notifyNodeConnected(node, true)
 				sendChallenge(node)
 			}
 		).also {
@@ -1020,7 +1021,6 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	}
 
 	fun isIdentityIgnored(key: IdentityKey): Boolean = ignoredIdentitiesCache.contains(key)
-
 	fun setIdentityIgnored(key: IdentityKey, ignored: Boolean): Boolean {
 		val file = File(ignoredIdentitiesDir, "$key")
 		val changed = if (ignored) {
@@ -1039,7 +1039,6 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	}
 
 	fun isContentIgnored(key: EncryptedMetaKey): Boolean = ignoredContentCache.contains(key)
-
 	fun setContentIgnored(key: EncryptedMetaKey, ignored: Boolean): Boolean {
 		val file = File(ignoredContentDir, "$key")
 		val changed = if (ignored) {
@@ -1058,9 +1057,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	}
 
 	fun listIgnoredIdentities(): Set<IdentityKey> = ignoredIdentitiesCache.toSet()
-
 	fun listIgnoredContent(): Set<EncryptedMetaKey> = ignoredContentCache.toSet()
-
 	fun getNodeAlias(node: TCPNode): String =
 		nodePeerMap[node]?.key?.name ?: node.remoteAddress.address?.hostAddress ?: node.remoteAddress.hostString
 
@@ -1102,27 +1099,102 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	private val nodesWithoutAutoSync = Collections.synchronizedSet(mutableSetOf<TCPNode>())
 
 	// ── Connection lifecycle callbacks ────────────────────────────────────────
-	var onNodeConnected: ((node: TCPNode, inbound: Boolean) -> Unit)? = null
-	var onNodeDisconnected: ((node: TCPNode) -> Unit)? = null
-	var onTransferStateChanged: ((isTransferring: Boolean) -> Unit)? = null
-
-	fun isAnyTransferActive(): Boolean = allNodes.any { !it.isClosed() && it.isTransferring() }
-
-	private fun checkAndNotifyTransferState() {
-		val transferring = isAnyTransferActive()
-		try {
-			onTransferStateChanged?.invoke(transferring)
-		} catch (_: Exception) {}
-	}
+	private val onNodeConnectedListeners = mutableListOf<(node: TCPNode, inbound: Boolean) -> Unit>()
+	private val onNodeDisconnectedListeners = mutableListOf<(node: TCPNode) -> Unit>()
+	private val onTransferStateChangedListeners = mutableListOf<(isTransferring: Boolean) -> Unit>()
 
 	/** Fired when a greeting is received and the peer's signature is verified. */
-	var onNodeIdentified: ((node: TCPNode, peer: Peer) -> Unit)? = null
+	private val onNodeIdentifiedListeners = mutableListOf<(node: TCPNode, peer: Peer) -> Unit>()
 
 	/** Fired when a peer public key is verified and saved to peerCache. */
-	var onPeerReceived: ((peer: Peer) -> Unit)? = null
+	private val onPeerReceivedListeners = mutableListOf<(peer: Peer) -> Unit>()
 
 	/** Fired when a new encrypted meta file is successfully stored from a peer. */
-	var onMessageReceived: ((key: EncryptedMetaKey) -> Unit)? = null
+	private val onMessageReceivedListeners = mutableListOf<(key: EncryptedMetaKey) -> Unit>()
+	fun addOnNodeConnectedListener(listener: (node: TCPNode, inbound: Boolean) -> Unit) {
+		onNodeConnectedListeners.add(listener)
+	}
+
+	fun addOnNodeDisconnectedListener(listener: (node: TCPNode) -> Unit) {
+		onNodeDisconnectedListeners.add(listener)
+	}
+
+	fun addOnTransferStateChangedListener(listener: (isTransferring: Boolean) -> Unit) {
+		onTransferStateChangedListeners.add(listener)
+	}
+
+	fun addOnNodeIdentifiedListener(listener: (node: TCPNode, peer: Peer) -> Unit) {
+		onNodeIdentifiedListeners.add(listener)
+	}
+
+	fun addOnPeerReceivedListener(listener: (peer: Peer) -> Unit) {
+		onPeerReceivedListeners.add(listener)
+	}
+
+	fun addOnMessageReceivedListener(listener: (key: EncryptedMetaKey) -> Unit) {
+		onMessageReceivedListeners.add(listener)
+	}
+
+	private fun notifyNodeConnected(node: TCPNode, inbound: Boolean) {
+		for (listener in onNodeConnectedListeners) {
+			try {
+				listener(node, inbound)
+			} catch (e: Exception) {
+				log(e)
+			}
+		}
+	}
+
+	private fun notifyNodeDisconnected(node: TCPNode) {
+		for (listener in onNodeDisconnectedListeners) {
+			try {
+				listener(node)
+			} catch (e: Exception) {
+				log(e)
+			}
+		}
+	}
+
+	private fun notifyNodeIdentified(node: TCPNode, peer: Peer) {
+		for (listener in onNodeIdentifiedListeners) {
+			try {
+				listener(node, peer)
+			} catch (e: Exception) {
+				log(e)
+			}
+		}
+	}
+
+	private fun notifyPeerReceived(peer: Peer) {
+		for (listener in onPeerReceivedListeners) {
+			try {
+				listener(peer)
+			} catch (e: Exception) {
+				log(e)
+			}
+		}
+	}
+
+	private fun notifyMessageReceived(key: EncryptedMetaKey) {
+		for (listener in onMessageReceivedListeners) {
+			try {
+				listener(key)
+			} catch (e: Exception) {
+				log(e)
+			}
+		}
+	}
+
+	fun isAnyTransferActive(): Boolean = allNodes.any { !it.isClosed() && it.isTransferring() }
+	private fun checkAndNotifyTransferState() {
+		val transferring = isAnyTransferActive()
+		for (listener in onTransferStateChangedListeners) {
+			try {
+				listener(transferring)
+			} catch (_: Exception) {
+			}
+		}
+	}
 
 	/** Tracks metadata keys waiting for an author peer to be resolved: author -> (metaKey -> node). */
 	private val pendingPeerContent = ConcurrentHashMap<PeerKey, ConcurrentHashMap<EncryptedMetaKey, TCPNode>>()
@@ -1147,7 +1219,6 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 
 	/** Fallback map of remote address to last query server time for unauthenticated nodes. */
 	private val nodeQueryTimeMap = ConcurrentHashMap<InetSocketAddress, Long>()
-
 	fun getPeerQueryTime(node: TCPNode): Long {
 		val peerKey = nodePeerMap[node]?.key
 		if (peerKey != null) {
@@ -1337,7 +1408,6 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		// Belt-and-suspenders: prune entries that closed without firing their onClose.
 		synchronized(connectionMap) { connectionMap.entries.removeIf { it.value.isClosed() } }
 		tcpServer?.nodeList?.removeIf { it.isClosed() }
-
 		// Clean up orphaned temp files older than 30 minutes
 		cleanTempFiles(maxAgeMs = 30 * 60 * 1000L)
 	}

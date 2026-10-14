@@ -338,7 +338,7 @@ class GraffitiAPITest {
 		val p2p = GraffitiP2P(tempDir)
 		var openedUrl: String? = null
 		val api = GraffitiAPI(p2p) {}.apply {
-			onOpenUrl = { url ->
+			addOnOpenUrlListener { url ->
 				openedUrl = url
 				true
 			}
