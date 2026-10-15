@@ -465,7 +465,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 									true
 								} else {
 									try {
-										file.copyTo(destFile, overwrite = true)
+										file.copyTo(destFile, overwrite = true, bufferSize = DEFAULT_COPY_BUFFER_SIZE)
 										file.delete()
 										true
 									} catch (e: Exception) {

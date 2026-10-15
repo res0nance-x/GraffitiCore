@@ -36,7 +36,7 @@ class CustomTempFileManagerFactory(val getTmpDir: () -> File) : IFactory<ITempFi
 					}
 
 					override fun open(): OutputStream {
-						return tmpFile.outputStream().buffered()
+						return tmpFile.outputStream().buffered(r3.io.DEFAULT_COPY_BUFFER_SIZE)
 					}
 				}
 			}

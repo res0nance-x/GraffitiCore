@@ -4,6 +4,7 @@ import org.nanohttpd.protocols.http.response.Response
 import org.nanohttpd.protocols.http.response.Status
 import r3.content.*
 import r3.http.ContentHandler
+import r3.io.DEFAULT_COPY_BUFFER_SIZE
 import r3.io.log
 import r3.io.serialize
 import r3.key.Key256
@@ -403,9 +404,9 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 
 		destFile.parentFile?.mkdirs()
 		try {
-			destFile.outputStream().use { out ->
-				content.createInputStream().use { inp ->
-					inp.copyTo(out)
+			destFile.outputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { out ->
+				content.createInputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { inp ->
+					inp.copyTo(out, DEFAULT_COPY_BUFFER_SIZE)
 				}
 			}
 		} catch (e: Exception) {
@@ -1035,9 +1036,9 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		if (isAsync) {
 			val stagedFile = File(p2p.tmpDir, "upload_${UUID.randomUUID()}.tmp")
 			try {
-				stagedFile.outputStream().use { out ->
-					content.createInputStream().use { inp ->
-						inp.copyTo(out)
+				stagedFile.outputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { out ->
+					content.createInputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { inp ->
+						inp.copyTo(out, DEFAULT_COPY_BUFFER_SIZE)
 					}
 				}
 			} catch (e: Exception) {
