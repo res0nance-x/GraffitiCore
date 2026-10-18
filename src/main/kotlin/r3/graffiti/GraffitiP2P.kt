@@ -28,27 +28,44 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
 /*
-Peer to peer synchronization:
+Peer-to-peer synchronization flow:
 
-// Initial sync (A initiates)
-A → B:  QueryMessage { recipientKeys: Set<IdentityKey> }
-B → A:  QueryResponseMessage (header) + ListWritable<EncryptedContentMetaData> (file body)
-A → B:  ContentRequestMessage { keys: List<EncryptedMetaKey> }  // only keys A wants content for
-B → A:  EncryptedMetaMessage + meta header and EncryptedContentMessage + content file (per key)
+// 1. Connection & Mutual Authentication Handshake (both directions on connect)
+A → B:  ChallengeMessage { nonce: ByteArray(32) }
+B → A:  ChallengeResponseMessage { peer: Peer, signature: ByteArray, isRelay: Boolean }
+        (Connection closed immediately if signature verification fails)
 
-// Push (when either side receives or creates a new message)
-A → B:  SyncResponseMessage (header) + ListWritable<EncryptedContentMetaData> (file body, typically 1 item)
-B:      issues ContentRequestMessage if it wants the content
+// 2. Initial Sync (triggered automatically after authentication)
+A → B:  QueryMessage { authorFilter, recipientFilter, queryTime: Long }
+B → A:  QueryResponseMessage { serverTime: Long } (header)
+        + ListWritable<EncryptedContentHeader> (file body with author, recipient, key)
 
+// 3. Dynamic Peer Resolution (if A receives headers from unknown authors)
+A → B:  PeerRequestMessage { keys: List<PeerKey> }
+B → A:  PeerResponseMessage { peers: List<Peer> }
+        (A validates peer key hash against MX key before saving)
 
-// Blocking: all messages addressed to our identity keys are accepted regardless of author.
-// Blocking is handled via a separate block-list checked at display/notification time.
+// 4. Content Transfer
+A → B:  ContentRequestMessage { keys: List<EncryptedMetaKey> }
+B → A:  EncryptedContentMessage { eMeta: EncryptedContentMetaData } (header)
+        + content body (in-memory ByteArray if <= 256 B, otherwise File)
 
-// Liveness (application-level — no SO_KEEPALIVE)
-// GraffitiP2P sends PingMessage to every connected node every PING_INTERVAL_MS.
-// Any received block (data or pong) resets TCPNode.lastActivityMs.
-// Nodes silent for PING_TIMEOUT_MS are closed and removed from tracking structures.
-// onNodeConnected / onNodeDisconnected callbacks are fired for UI / WebSocket notifications.
+// 5. Push (when a node receives or locally creates new content)
+A → B:  QueryResponseMessage { serverTime: 0L } (header)
+        + ListWritable<EncryptedContentHeader> (file body, typically 1 item)
+B:      Verifies / requests peer if needed, then issues ContentRequestMessage
+
+// Filtering & Verification:
+// - Non-relay: rejects messages not addressed to local identities or known peers.
+// - Whitelist mode: rejects messages from unknown authors.
+// - Relay mode: verifies author signature; recipient additionally verifies content hash.
+// - Deleted & Ignored: drops deleted keys and filters out ignored identities/content.
+
+// Liveness (application-level keepalive):
+// - Every PING_INTERVAL_MS (60s), sends PingMessage; peer replies with priority PongMessage.
+// - Any inbound block resets TCPNode.lastActivityMs.
+// - Idle nodes silent for PING_TIMEOUT_MS (180s) are closed (skipped if actively transferring).
+// - onNodeConnected / onNodeDisconnected callbacks are fired for UI / WebSocket notifications.
  */
 
 class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false) {
@@ -63,8 +80,8 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	var defaultP2PPort: Int = 0
 
 	companion object {
-		const val PING_INTERVAL_MS = 60_000L  // send a ping every 30 s
-		const val PING_TIMEOUT_MS = 3 * PING_INTERVAL_MS  // close after 90 s of silence (3 missed pings)
+		const val PING_INTERVAL_MS = 60_000L  // send a ping every 60 s
+		const val PING_TIMEOUT_MS = 3 * PING_INTERVAL_MS  // close after 180 s of silence (3 missed pings)
 		const val MAX_STREAM_SIZE = 100 * 1024 * 1024 * 1024L // 100 GB
 		const val SMALL_CONTENT_THRESHOLD_BYTES = 256L
 		const val MAX_SMALL_CONTENT_ITEMS = 10000
@@ -382,8 +399,8 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 							}
 						}
 					}
-					// Peer wants the meta file and content file for a list of keys we hold.
-					// We serve each key's EncryptedMetaMessage and EncryptedContentMessage in turn.
+					// Peer wants the meta and content for a list of keys we hold.
+					// We serve each key's EncryptedContentMessage (containing metadata and content) in turn.
 					// Offloaded to a background executor so the TCP receive loop is never blocked during file transfer.
 					ContentRequestMessage.type -> {
 						val req = ContentRequestMessage.read(rawHead.toDataInputStream())
