@@ -77,6 +77,8 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	val ignoredIdentitiesDir = File(graffitiDir, "ignored_identities").also { it.mkdirs() }
 	val ignoredContentDir = File(graffitiDir, "ignored_content").also { it.mkdirs() }
 	val tmpDir = File(graffitiDir, "tmp").also { it.mkdirs() }
+	val p2pLinkDir = File(graffitiDir, "p2plink").also { it.mkdirs() }
+	var defaultDownloadsDir: File = File(System.getProperty("user.home"), "Downloads").also { if (!it.exists()) it.mkdirs() }
 	var defaultP2PPort: Int = 0
 
 	companion object {
@@ -100,6 +102,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	private val contentSenderExecutor = Executors.newCachedThreadPool { r ->
 		Thread(r, "Graffiti-ContentSender").apply { isDaemon = true }
 	}
+	private val p2pLinkReceivers = ConcurrentHashMap<String, (node: TCPNode, msg: P2PLinkContentMessage, file: File?) -> Unit>()
 	private val metaWarmupExecutor = Executors.newSingleThreadExecutor { r ->
 		Thread(r, "Graffiti-MetaWarmup").apply {
 			isDaemon = true
@@ -614,6 +617,41 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 						}
 					}
 
+					// Request for on-demand direct file transfer for a p2plink
+					P2PLinkRequestMessage.type -> {
+						val req = P2PLinkRequestMessage.read(rawHead.toDataInputStream())
+						debug("Received P2PLinkRequest from ${node.remoteAddress} for transferId=${req.transferId}")
+						contentSenderExecutor.execute {
+							try {
+								val file = File(p2pLinkDir, req.transferId)
+								if (file.exists() && file.isFile) {
+									logOutgoing(node, "p2plink:${req.transferId}", file.length())
+									node.send(
+										P2PLinkContentMessage(req.transferId, P2PLinkContentMessage.STATUS_OK, file.length()).serialize(),
+										file
+									)
+								} else {
+									node.send(
+										P2PLinkContentMessage(req.transferId, P2PLinkContentMessage.STATUS_NOT_FOUND, 0L).serialize()
+									)
+								}
+							} catch (e: Exception) {
+								logNodeError(node, "Error serving P2PLinkRequest: ${e.message}")
+							}
+						}
+					}
+					// Incoming streaming content for an on-demand p2plink transfer
+					P2PLinkContentMessage.type -> {
+						val msg = P2PLinkContentMessage.read(rawHead.toDataInputStream())
+						debug("Received P2PLinkContent from ${node.remoteAddress}: transferId=${msg.transferId}, status=${msg.status}, length=${msg.length}")
+						val receiver = p2pLinkReceivers.remove(msg.transferId)
+						if (receiver != null) {
+							receiver(node, msg, file)
+						} else {
+							file?.delete()
+						}
+					}
+
 					else -> debug("Unknown message type: $type from ${node.remoteAddress}")
 				}
 			} catch (e: Exception) {
@@ -985,6 +1023,23 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 
 	@Synchronized
 	fun deleteMessage(key: EncryptedMetaKey): Boolean {
+		// Clean up backing p2plink file if applicable
+		try {
+			val decrypted = getDecryptedMeta(key)
+			if (decrypted != null && decrypted.first.type == "p2plink") {
+				val jsonStr = getContent(key).createInputStream().use { it.reader().readText() }
+				val jsonObj = r3.org.json.JSONObject(jsonStr)
+				val transferId = jsonObj.optString("transferId")
+				if (transferId.isNotEmpty()) {
+					val backingFile = File(p2pLinkDir, transferId)
+					if (backingFile.exists()) {
+						backingFile.delete()
+						debug("Deleted backing p2plink file: $transferId")
+					}
+				}
+			}
+		} catch (_: Exception) {}
+
 		setContentIgnored(key, false)
 		queryOrderTimestamps.remove(key)
 		val hadMeta = metaCache.containsKey(key) || isMessageDeleted(key) || File(metaDir, "$key").exists()
@@ -1230,6 +1285,31 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 
 	/** Maps each live TCPNode to the verified Peer from its challenge-response. */
 	private val nodePeerMap = ConcurrentHashMap<TCPNode, Peer>()
+
+	fun getNodeForPeer(peerKey: PeerKey): TCPNode? {
+		return nodePeerMap.entries.firstOrNull { it.value.key == peerKey && !it.key.isClosed() }?.key
+	}
+
+	fun isConnectedToPeer(peerKey: PeerKey): Boolean = getNodeForPeer(peerKey) != null
+
+	fun requestP2PLinkDownload(
+		hostPeerKey: PeerKey,
+		transferId: String,
+		onComplete: (success: Boolean, file: File?, error: String?) -> Unit
+	): Boolean {
+		val node = getNodeForPeer(hostPeerKey) ?: return false
+		p2pLinkReceivers[transferId] = { _, msg, file ->
+			if (msg.status == P2PLinkContentMessage.STATUS_OK && file != null) {
+				onComplete(true, file, null)
+			} else if (msg.status == P2PLinkContentMessage.STATUS_NOT_FOUND) {
+				onComplete(false, null, "File not found on host peer")
+			} else {
+				onComplete(false, null, "Error during transfer (status=${msg.status})")
+			}
+		}
+		node.send(P2PLinkRequestMessage(transferId).serialize())
+		return true
+	}
 
 	/** In-memory map of peer key to last query server time received. */
 	private val peerQueryTimeMap = ConcurrentHashMap<PeerKey, Long>()

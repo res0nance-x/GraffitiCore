@@ -540,6 +540,48 @@ Settings
 		</article>
 	</template>
 
+	<template id="tpl-p2plink-message">
+		<article class="message-item msg-p2plink-item">
+			<header class="message-header">
+				<figure class="msg-author">
+					<img alt="" class="msg-author-avatar msg-avatar">
+					<figcaption class="msg-author-name msg-name"></figcaption>
+				</figure>
+				<span aria-hidden="true" class="msg-arrow">→</span>
+				<figure class="msg-recipient">
+					<img alt="" class="msg-recipient-avatar msg-avatar">
+					<figcaption class="msg-recipient-name msg-name"></figcaption>
+				</figure>
+				<time class="msg-time"></time>
+			</header>
+			<div class="message-body p2plink-body">
+				<div class="p2plink-card" style="border: 1px solid var(--border-color, #333); border-radius: 8px; padding: 12px; background: var(--card-bg, rgba(255,255,255,0.03)); max-width: 480px;">
+					<div class="p2plink-header" style="display: flex; align-items: center; gap: 10px;">
+						<span aria-hidden="true" class="material-symbols-outlined msg-file-icon" style="font-size: 2.2rem; color: #3b82f6;">hub</span>
+						<div class="p2plink-meta" style="flex: 1; min-width: 0;">
+							<div class="p2plink-file-name msg-file-name" style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></div>
+							<div class="p2plink-file-size" style="font-size: 0.85rem; opacity: 0.75;"></div>
+						</div>
+					</div>
+					<div class="p2plink-info-box" style="font-size: 0.82rem; margin: 8px 0;">
+						<span class="p2plink-host-label">Host: <strong class="p2plink-host-alias"></strong></span>
+						<div class="p2plink-connection-status" style="font-size: 0.8rem; margin-top: 3px;"></div>
+					</div>
+					<div class="p2plink-actions" style="margin-top: 10px; display: flex; gap: 8px; align-items: center;">
+						<button type="button" class="btn-download-p2plink btn" style="padding: 6px 14px; cursor: pointer; border-radius: 6px; font-weight: 500;">⬇ Download File</button>
+						<button type="button" class="btn-open-p2plink btn" style="display: none; padding: 6px 14px; cursor: pointer; border-radius: 6px; font-weight: 500; background: #10b981; color: white;">✓ Open File</button>
+					</div>
+					<div class="p2plink-progress-container" style="display: none; margin-top: 10px;">
+						<div class="p2plink-progress-bar" style="height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden;">
+							<div class="p2plink-progress-fill" style="width: 0%; height: 100%; background: #3b82f6; transition: width 0.2s;"></div>
+						</div>
+						<span class="p2plink-progress-text" style="font-size: 0.78rem; opacity: 0.8; margin-top: 4px; display: inline-block;">Starting P2P transfer...</span>
+					</div>
+				</div>
+			</div>
+		</article>
+	</template>
+
 	<!-- ══════════════════════════════════════════════════════════════════════════
  Dialog templates
  ══════════════════════════════════════════════════════════════════════ -->

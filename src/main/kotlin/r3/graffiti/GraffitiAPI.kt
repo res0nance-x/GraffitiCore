@@ -4,9 +4,7 @@ import org.nanohttpd.protocols.http.response.Response
 import org.nanohttpd.protocols.http.response.Status
 import r3.content.*
 import r3.http.ContentHandler
-import r3.io.DEFAULT_COPY_BUFFER_SIZE
-import r3.io.log
-import r3.io.serialize
+import r3.io.*
 import r3.key.Key256
 import r3.org.json.JSONArray
 import r3.org.json.JSONObject
@@ -17,11 +15,15 @@ import r3.source.FileSink
 import r3.source.FileSource
 import r3.source.readString
 import java.io.DataInputStream
+import r3.encryption.EncryptedContinuousInputStream
+import r3.math.EncryptedSequence
 import java.io.File
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.URLDecoder
+import java.security.MessageDigest
+import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -105,6 +107,8 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/message/forward" -> forwardMessage(header)
 			"/api/message/send/text" -> content?.let { sendTextMessage(header, it) }
 			"/api/message/send/file" -> content?.let { sendFileMessage(header, it) }
+			"/api/message/send/p2plink" -> content?.let { sendP2PLinkMessage(header, it) }
+			"/api/p2plink/download" -> downloadP2PLink(header)
 			"/api/content" -> getContent(header)
 			"/api/storage" -> getStorageInfo()
 			"/api/storage/purge" -> purgeStorage(header)
@@ -1072,6 +1076,151 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			return ok { put("key", encKey.toString()) }
 		} finally {
 			stateManager.setEncoding(false)
+		}
+	}
+
+	private fun sendP2PLinkMessage(header: JSONObject, content: Content?): Content {
+		if (content == null) return err("No file content provided")
+		val keys = resolveSendKeys(header) ?: return err("Select a sender and recipient first")
+		val (idenKey, peerKey) = keys
+		val fileParam = header.optString("file").takeIf { it.isNotEmpty() } ?: "file"
+		val originalName = try {
+			URLDecoder.decode(fileParam, "UTF-8")
+		} catch (_: Exception) {
+			fileParam
+		}
+		val iden = p2p.getIdentityByKey(idenKey) ?: return err("No identity found for $idenKey")
+		val peer = p2p.getPeerByKey(peerKey) ?: p2p.getIdentityByKey(IdentityKey(peerKey.arr))?.asPeer() ?: return err("No peer found for $peerKey")
+
+		val transferId = UUID.randomUUID().toString()
+		val stagedFile = File(p2p.tmpDir, "upload_p2plink_${UUID.randomUUID()}.tmp")
+		try {
+			stagedFile.outputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { out ->
+				content.createInputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { inp ->
+					inp.copyTo(out, DEFAULT_COPY_BUFFER_SIZE)
+				}
+			}
+		} catch (e: Exception) {
+			if (stagedFile.exists()) stagedFile.delete()
+			return err("Failed to stage uploaded file: ${e.message}")
+		}
+
+		val ts = p2p.nextMonotonicTimestamp()
+		val cmd = Command(
+			type = CommandType.SEND_P2PLINK,
+			identityKey = idenKey,
+			peerKey = peerKey,
+			sentTimestamp = ts,
+			payload = CommandPayload.P2PLinkPayload(stagedFile, originalName, transferId)
+		)
+		commandQueue.submit(cmd)
+		return ok {
+			put("commandId", cmd.id)
+			put("sentTimestamp", ts)
+			put("transferId", transferId)
+		}
+	}
+
+	private fun downloadP2PLink(header: JSONObject): Content {
+		val keyStr = header.optString("key").takeIf { it.isNotEmpty() } ?: return err("Missing 'key' parameter")
+		val key = EncryptedMetaKey(keyStr)
+		val metaPair = p2p.getDecryptedMeta(key) ?: return err("Metadata not found or cannot decrypt")
+		if (metaPair.first.type != "p2plink") return err("Message is not a p2plink")
+
+		val jsonStr = try {
+			p2p.getContent(key).createInputStream().use { it.reader().readText() }
+		} catch (e: Exception) {
+			return err("Failed to read p2plink content: ${e.message}")
+		}
+		val json = JSONObject(jsonStr)
+		val transferId = json.getString("transferId")
+		val fileName = json.getString("fileName")
+		val hostPeerKeyStr = json.getString("hostPeerKey")
+		val streamKeyB64 = json.getString("streamKey")
+		val expectedSha256 = json.optString("sha256")
+		val hostPeerKey = PeerKey(hostPeerKeyStr)
+
+		val hostNode = p2p.getNodeForPeer(hostPeerKey)
+		if (hostNode == null) {
+			val hostAlias = json.optString("hostAlias", hostPeerKey.name)
+			return err("Host peer ($hostAlias) is not currently connected")
+		}
+
+		val destDir = header.optString("destinationDir").takeIf { it.isNotEmpty() }?.let { File(it) }
+			?: p2p.defaultDownloadsDir
+
+		if (!destDir.exists()) destDir.mkdirs()
+		val destFile = File(destDir, fileName).consistentFile()
+
+		sendToAll(JSONObject().apply {
+			put("event", "p2plink_start")
+			put("transferId", transferId)
+			put("fileName", fileName)
+			put("messageKey", keyStr)
+		})
+
+		val streamPass = Password256(Base64.getDecoder().decode(streamKeyB64))
+		val requested = p2p.requestP2PLinkDownload(hostPeerKey, transferId) { success, tempFile, error ->
+			if (success && tempFile != null) {
+				try {
+					val digest = MessageDigest.getInstance("SHA-256")
+					val seq = EncryptedSequence.createSequence(streamPass)
+					tempFile.inputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { fileIn ->
+						EncryptedContinuousInputStream(seq, fileIn).use { decIn ->
+							destFile.outputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { fileOut ->
+								val buf = ByteArray(DEFAULT_COPY_BUFFER_SIZE)
+								var r: Int
+								while (decIn.read(buf).also { r = it } != -1) {
+									digest.update(buf, 0, r)
+									fileOut.write(buf, 0, r)
+								}
+							}
+						}
+					}
+					tempFile.delete()
+					val actualSha256 = digest.digest().joinToString("") { "%02x".format(it) }
+					if (expectedSha256.isNotEmpty() && !actualSha256.equals(expectedSha256, ignoreCase = true)) {
+						sendToAll(JSONObject().apply {
+							put("event", "p2plink_error")
+							put("transferId", transferId)
+							put("messageKey", keyStr)
+							put("error", "SHA-256 integrity check failed")
+						})
+					} else {
+						sendToAll(JSONObject().apply {
+							put("event", "p2plink_complete")
+							put("transferId", transferId)
+							put("fileName", fileName)
+							put("path", destFile.absolutePath)
+							put("messageKey", keyStr)
+						})
+					}
+				} catch (e: Exception) {
+					tempFile.delete()
+					sendToAll(JSONObject().apply {
+						put("event", "p2plink_error")
+						put("transferId", transferId)
+						put("messageKey", keyStr)
+						put("error", "Decryption failed: ${e.message}")
+					})
+				}
+			} else {
+				sendToAll(JSONObject().apply {
+					put("event", "p2plink_error")
+					put("transferId", transferId)
+					put("messageKey", keyStr)
+					put("error", error ?: "Transfer failed")
+				})
+			}
+		}
+
+		if (!requested) {
+			return err("Failed to initiate transfer request to host peer")
+		}
+
+		return ok {
+			put("transferId", transferId)
+			put("status", "REQUESTED")
 		}
 	}
 

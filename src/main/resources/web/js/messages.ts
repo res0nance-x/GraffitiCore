@@ -855,6 +855,7 @@ const isHtml = (t?: string) => Boolean(t && htmlExtensions.has(t.toLowerCase()))
 
 function pickTemplateId(type?: string): string {
    if (!type) return 'tpl-binary-message';
+   if (type === 'p2plink') return 'tpl-p2plink-message';
    if (isText(type)) return 'tpl-text-message';
    if (isImage(type)) return 'tpl-image-message';
    if (isAudio(type)) return 'tpl-audio-message';
@@ -1453,6 +1454,78 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
          };
          video?.after(viewBtn);
       }
+   } else if (msg.type === 'p2plink') {
+      const fileNameEl = el.querySelector<HTMLElement>('.p2plink-file-name');
+      const fileSizeEl = el.querySelector<HTMLElement>('.p2plink-file-size');
+      const hostAliasEl = el.querySelector<HTMLElement>('.p2plink-host-alias');
+      const statusEl = el.querySelector<HTMLElement>('.p2plink-connection-status');
+      const downloadBtn = el.querySelector<HTMLButtonElement>('.btn-download-p2plink');
+      const openBtn = el.querySelector<HTMLButtonElement>('.btn-open-p2plink');
+      const progressContainer = el.querySelector<HTMLElement>('.p2plink-progress-container');
+      const progressText = el.querySelector<HTMLElement>('.p2plink-progress-text');
+
+      let downloadedPath = '';
+
+      const applyDescriptor = (jsonStr: string) => {
+         try {
+            const data = JSON.parse(jsonStr);
+            if (fileNameEl) fileNameEl.textContent = data.fileName || msg.name || 'P2P File';
+            if (fileSizeEl) fileSizeEl.textContent = data.fileSize ? formatSize(data.fileSize) : '';
+            if (hostAliasEl) hostAliasEl.textContent = data.hostAlias || 'Unknown Peer';
+
+            if (statusEl) {
+               statusEl.textContent = '● P2P Direct Transfer Available';
+               statusEl.style.color = '#10b981';
+            }
+         } catch (_e) {}
+      };
+
+      const cached = textContentCache.get(msg.key);
+      if (cached) {
+         applyDescriptor(cached);
+      } else {
+         fetch(url)
+            .then(r => r.text())
+            .then(t => {
+               textContentCache.set(msg.key, t);
+               applyDescriptor(t);
+            })
+            .catch(() => {});
+      }
+
+      if (downloadBtn) {
+         downloadBtn.onclick = async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            downloadBtn.disabled = true;
+            if (progressContainer) progressContainer.style.display = 'block';
+            if (progressText) {
+               progressText.textContent = 'Requesting P2P stream from host...';
+               progressText.style.color = '';
+            }
+            try {
+               await graffiti.downloadP2PLink(msg.key);
+            } catch (err: any) {
+               if (progressText) {
+                  progressText.textContent = `Download failed: ${err.message}`;
+                  progressText.style.color = '#ef4444';
+               }
+               downloadBtn.disabled = false;
+            }
+         };
+      }
+
+      if (openBtn) {
+         openBtn.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if ((window as any).Android && (window as any).Android.openFile && downloadedPath) {
+               (window as any).Android.openFile(downloadedPath);
+            } else if (downloadedPath) {
+               alert(`File saved to: ${downloadedPath}`);
+            }
+         };
+      }
    } else {
       const fileNameEl = el.querySelector<HTMLElement>('.msg-file-name');
       if (fileNameEl) fileNameEl.textContent = msg.name || (msg.type ? 'File' : 'Loading...');
@@ -1656,6 +1729,35 @@ async function sendPayload(payload: Payload): Promise<void> {
          await refreshMessages();
          scrollToBottom();
       } else {
+         const isLarge = payload.file.size > 50 * 1024 * 1024; // > 50 MB
+         const sendAsP2PLink = isLarge && confirm(`This file is large (${formatSize(payload.file.size)}).\n\nSend as an on-demand direct P2P link? (Recommended for large files to eliminate HTTP transfer drops)`);
+         if (sendAsP2PLink) {
+            setStatus(`Staging P2P link for ${payload.fileName}...`);
+            const res = await graffiti.sendP2PLink(identityKey, peerKey, payload.file, true);
+            if (res.commandId) {
+               const ts = res.sentTimestamp || Date.now();
+               handleCommandUpdate({
+                  id: res.commandId,
+                  type: 'SEND_P2PLINK',
+                  identityKey,
+                  peerKey,
+                  sentTimestamp: ts,
+                  status: 'QUEUED',
+                  progress: 10,
+                  fileName: payload.fileName,
+                  statusMessage: 'Preparing P2P link on server...',
+                  createdAt: ts
+               });
+               setStatus(`P2P link queued: ${payload.fileName}`);
+            } else {
+               setStatus(`P2P link sent: ${payload.fileName}`);
+            }
+            shouldScrollToBottomOnSend = true;
+            await refreshMessages();
+            scrollToBottom();
+            return;
+         }
+
          setStatus(`Staging ${payload.fileName}...`);
          const res = await graffiti.sendFile(identityKey, peerKey, payload.file, true);
          if (res.commandId) {
@@ -3254,5 +3356,77 @@ onSectionShow('section-network', cleanupViewerMedia);
 onSectionShow('section-identity', cleanupViewerMedia);
 onSectionShow('section-settings', cleanupViewerMedia);
 onSectionShow('section-help', cleanupViewerMedia);
+
+// ── P2P Link WebSocket Event Handlers ──────────────────────────────────────────
+onWsEvent('p2plink_start', (data: any) => {
+   const msgEl = messagesContainer?.querySelector<HTMLElement>(`[data-key="${data.messageKey}"]`);
+   if (msgEl) {
+      const container = msgEl.querySelector<HTMLElement>('.p2plink-progress-container');
+      const text = msgEl.querySelector<HTMLElement>('.p2plink-progress-text');
+      const fill = msgEl.querySelector<HTMLElement>('.p2plink-progress-fill');
+      if (container) container.style.display = 'block';
+      if (text) {
+         text.textContent = 'Transferring via TCPNode...';
+         text.style.color = '';
+      }
+      if (fill) fill.style.width = '45%';
+   }
+});
+
+onWsEvent('p2plink_complete', (data: any) => {
+   const msgEl = messagesContainer?.querySelector<HTMLElement>(`[data-key="${data.messageKey}"]`);
+   if (msgEl) {
+      const container = msgEl.querySelector<HTMLElement>('.p2plink-progress-container');
+      const dlBtn = msgEl.querySelector<HTMLButtonElement>('.btn-download-p2plink');
+      const openBtn = msgEl.querySelector<HTMLButtonElement>('.btn-open-p2plink');
+      if (container) container.style.display = 'none';
+      if (dlBtn) dlBtn.style.display = 'none';
+      if (openBtn) {
+         openBtn.style.display = 'inline-flex';
+         openBtn.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if ((window as any).Android && (window as any).Android.openFile) {
+               (window as any).Android.openFile(data.path);
+            } else {
+               alert(`File saved to: ${data.path}`);
+            }
+         };
+      }
+   }
+});
+
+onWsEvent('p2plink_error', (data: any) => {
+   const msgEl = messagesContainer?.querySelector<HTMLElement>(`[data-key="${data.messageKey}"]`);
+   if (msgEl) {
+      const dlBtn = msgEl.querySelector<HTMLButtonElement>('.btn-download-p2plink');
+      const text = msgEl.querySelector<HTMLElement>('.p2plink-progress-text');
+      const statusEl = msgEl.querySelector<HTMLElement>('.p2plink-connection-status');
+      const isNotFound = typeof data.error === 'string' && data.error.toLowerCase().includes('not found');
+
+      if (isNotFound) {
+         if (dlBtn) {
+            dlBtn.disabled = true;
+            dlBtn.textContent = 'Unavailable';
+            dlBtn.style.opacity = '0.5';
+            dlBtn.style.cursor = 'not-allowed';
+         }
+         if (text) {
+            text.textContent = 'File removed: This content is no longer available on the host peer.';
+            text.style.color = '#ef4444';
+         }
+         if (statusEl) {
+            statusEl.textContent = '✖ File removed by host';
+            statusEl.style.color = '#ef4444';
+         }
+      } else {
+         if (dlBtn) dlBtn.disabled = false;
+         if (text) {
+            text.textContent = `Transfer failed: ${data.error}`;
+            text.style.color = '#ef4444';
+         }
+      }
+   }
+});
 
 
