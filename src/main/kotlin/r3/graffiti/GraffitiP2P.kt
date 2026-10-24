@@ -14,6 +14,8 @@ import r3.source.FileSource
 import r3.source.ListWritable
 import r3.source.StringWritable
 import r3.thread.async
+import java.io.ByteArrayInputStream
+import java.io.DataInputStream
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -85,6 +87,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		const val PING_INTERVAL_MS = 60_000L  // send a ping every 60 s
 		const val PING_TIMEOUT_MS = 3 * PING_INTERVAL_MS  // close after 180 s of silence (3 missed pings)
 		const val MAX_STREAM_SIZE = 100 * 1024 * 1024 * 1024L // 100 GB
+		const val DEFAULT_STREAM_TIMEOUT_MS = 300_000L // 5 minutes
 		const val SMALL_CONTENT_THRESHOLD_BYTES = 256L
 		const val MAX_SMALL_CONTENT_ITEMS = 10000
 	}
@@ -103,6 +106,26 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		Thread(r, "Graffiti-ContentSender").apply { isDaemon = true }
 	}
 	private val p2pLinkReceivers = ConcurrentHashMap<String, (node: TCPNode, msg: P2PLinkContentMessage, file: File?) -> Unit>()
+
+	@Volatile
+	var onP2PLinkProgress: ((transferId: String, bytesWritten: Long, totalBytes: Long) -> Unit)? = null
+
+	private fun attachStreamProgress(node: TCPNode) {
+		node.onStreamProgress = { _, _, header, bytesWritten ->
+			try {
+				if (header.isNotEmpty()) {
+					val dis = DataInputStream(ByteArrayInputStream(header))
+					val type = StringWritable.read(dis).str
+					if (type == P2PLinkContentMessage.type) {
+						val transferId = StringWritable.read(dis).str
+						dis.readInt() // status
+						val totalLength = dis.readLong()
+						onP2PLinkProgress?.invoke(transferId, bytesWritten, totalLength)
+					}
+				}
+			} catch (_: Exception) {}
+		}
+	}
 	private val metaWarmupExecutor = Executors.newSingleThreadExecutor { r ->
 		Thread(r, "Graffiti-MetaWarmup").apply {
 			isDaemon = true
@@ -677,8 +700,12 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		}
 		connectionMap.remove(addr)
 		val socket = Socket()
+		try {
+			socket.tcpNoDelay = true
+		} catch (_: Exception) {}
 		socket.connect(addr)
-		val newNode = TCPNode(socket, tmpDir, contentHandler, maxStreamSize = MAX_STREAM_SIZE)
+		val newNode = TCPNode(socket, tmpDir, contentHandler, maxStreamSize = MAX_STREAM_SIZE, streamTimeoutMs = DEFAULT_STREAM_TIMEOUT_MS)
+		attachStreamProgress(newNode)
 		newNode.onTransferStateChanged = { checkAndNotifyTransferState() }
 		newNode.onClose = {
 			val alias = nodePeerMap[newNode]?.key?.name ?: "unknown"
@@ -917,7 +944,9 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			nodeList, tmpDir, contentHandler, InetSocketAddress(port),
 			serverKey = ServerKey(serverIdentity.key.arr),
 			maxStreamSize = MAX_STREAM_SIZE,
+			streamTimeoutMs = DEFAULT_STREAM_TIMEOUT_MS,
 			onAccept = { node ->
+				attachStreamProgress(node)
 				node.onTransferStateChanged = { checkAndNotifyTransferState() }
 				node.onClose = {
 					val alias = nodePeerMap[node]?.key?.name ?: "unknown"
@@ -1489,7 +1518,10 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			if (!node.isClosed()) {
 				if (now - node.lastActivityMs > PING_TIMEOUT_MS) {
 					if (node.isTransferring()) {
-						debug("Node ${node.remoteAddress} silent on read for ${(now - node.lastActivityMs) / 1000}s but actively transferring — skipping timeout")
+						debug("Node ${node.remoteAddress} silent on read for ${(now - node.lastActivityMs) / 1000}s but actively transferring — sending ping probe")
+						try {
+							node.sendPriority(pingHeader)
+						} catch (_: Exception) {}
 					} else {
 						logNodeError(node, "Silent for ${(now - node.lastActivityMs) / 1000}s, closing")
 						node.close()   // fires onClose → onNodeDisconnected + map removal

@@ -1469,6 +1469,7 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
       const applyDescriptor = (jsonStr: string) => {
          try {
             const data = JSON.parse(jsonStr);
+            if (data.transferId) el.dataset.transferId = data.transferId;
             if (fileNameEl) fileNameEl.textContent = data.fileName || msg.name || 'P2P File';
             if (fileSizeEl) fileSizeEl.textContent = data.fileSize ? formatSize(data.fileSize) : '';
             if (hostAliasEl) hostAliasEl.textContent = data.hostAlias || 'Unknown Peer';
@@ -3358,8 +3359,20 @@ onSectionShow('section-settings', cleanupViewerMedia);
 onSectionShow('section-help', cleanupViewerMedia);
 
 // ── P2P Link WebSocket Event Handlers ──────────────────────────────────────────
+function findP2PLinkElement(messageKey?: string, transferId?: string): HTMLElement | null {
+   if (messageKey) {
+      const el = messagesContainer?.querySelector<HTMLElement>(`[data-msg-key="${messageKey}"]`);
+      if (el) return el;
+   }
+   if (transferId) {
+      const el = messagesContainer?.querySelector<HTMLElement>(`[data-transfer-id="${transferId}"]`);
+      if (el) return el;
+   }
+   return null;
+}
+
 onWsEvent('p2plink_start', (data: any) => {
-   const msgEl = messagesContainer?.querySelector<HTMLElement>(`[data-key="${data.messageKey}"]`);
+   const msgEl = findP2PLinkElement(data.messageKey, data.transferId);
    if (msgEl) {
       const container = msgEl.querySelector<HTMLElement>('.p2plink-progress-container');
       const text = msgEl.querySelector<HTMLElement>('.p2plink-progress-text');
@@ -3369,12 +3382,62 @@ onWsEvent('p2plink_start', (data: any) => {
          text.textContent = 'Transferring via TCPNode...';
          text.style.color = '';
       }
-      if (fill) fill.style.width = '45%';
+      if (fill) fill.style.width = '5%';
+   }
+});
+
+onWsEvent('p2plink_progress', (data: any) => {
+   const msgEl = findP2PLinkElement(data.messageKey, data.transferId);
+   if (msgEl) {
+      const container = msgEl.querySelector<HTMLElement>('.p2plink-progress-container');
+      const text = msgEl.querySelector<HTMLElement>('.p2plink-progress-text');
+      const fill = msgEl.querySelector<HTMLElement>('.p2plink-progress-fill');
+      if (container) container.style.display = 'block';
+      const pct = Math.min(95, Math.max(5, data.progress ?? 0));
+      if (fill) fill.style.width = `${pct}%`;
+      if (text) {
+         const transferred = formatSize(data.bytesWritten || 0);
+         const total = data.totalBytes ? formatSize(data.totalBytes) : '';
+         text.textContent = total ? `Transferring: ${transferred} / ${total} (${data.progress ?? 0}%)` : `Transferring: ${transferred}`;
+         text.style.color = '';
+      }
+   }
+});
+
+onWsEvent('p2plink_decrypting', (data: any) => {
+   const msgEl = findP2PLinkElement(data.messageKey, data.transferId);
+   if (msgEl) {
+      const container = msgEl.querySelector<HTMLElement>('.p2plink-progress-container');
+      const text = msgEl.querySelector<HTMLElement>('.p2plink-progress-text');
+      const fill = msgEl.querySelector<HTMLElement>('.p2plink-progress-fill');
+      if (container) container.style.display = 'block';
+      if (fill) fill.style.width = '95%';
+      if (text) {
+         text.textContent = 'Verifying integrity & decrypting...';
+         text.style.color = '';
+      }
+   }
+});
+
+onWsEvent('p2plink_decrypt_progress', (data: any) => {
+   const msgEl = findP2PLinkElement(data.messageKey, data.transferId);
+   if (msgEl) {
+      const container = msgEl.querySelector<HTMLElement>('.p2plink-progress-container');
+      const text = msgEl.querySelector<HTMLElement>('.p2plink-progress-text');
+      const fill = msgEl.querySelector<HTMLElement>('.p2plink-progress-fill');
+      if (container) container.style.display = 'block';
+      if (fill) fill.style.width = `${Math.min(99, Math.max(90, data.progress ?? 95))}%`;
+      if (text) {
+         const decrypted = formatSize(data.bytesDecrypted || 0);
+         const total = data.totalBytes ? formatSize(data.totalBytes) : '';
+         text.textContent = total ? `Decrypting: ${decrypted} / ${total} (${data.progress ?? 0}%)` : `Decrypting: ${decrypted}`;
+         text.style.color = '';
+      }
    }
 });
 
 onWsEvent('p2plink_complete', (data: any) => {
-   const msgEl = messagesContainer?.querySelector<HTMLElement>(`[data-key="${data.messageKey}"]`);
+   const msgEl = findP2PLinkElement(data.messageKey, data.transferId);
    if (msgEl) {
       const container = msgEl.querySelector<HTMLElement>('.p2plink-progress-container');
       const dlBtn = msgEl.querySelector<HTMLButtonElement>('.btn-download-p2plink');
@@ -3397,7 +3460,7 @@ onWsEvent('p2plink_complete', (data: any) => {
 });
 
 onWsEvent('p2plink_error', (data: any) => {
-   const msgEl = messagesContainer?.querySelector<HTMLElement>(`[data-key="${data.messageKey}"]`);
+   const msgEl = findP2PLinkElement(data.messageKey, data.transferId);
    if (msgEl) {
       const dlBtn = msgEl.querySelector<HTMLButtonElement>('.btn-download-p2plink');
       const text = msgEl.querySelector<HTMLElement>('.p2plink-progress-text');

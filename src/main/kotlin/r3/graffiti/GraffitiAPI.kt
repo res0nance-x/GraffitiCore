@@ -38,6 +38,8 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		)
 	}
 
+	private val p2pLinkTransferToKey = ConcurrentHashMap<String, String>()
+
 	val commandQueue = CommandQueue(p2p, stateManager)
 
 	init {
@@ -68,6 +70,18 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		}
 		p2p.addOnPeerReceivedListener { _ ->
 			stateManager.onPeersChanged()
+		}
+		p2p.onP2PLinkProgress = { transferId, bytesWritten, totalBytes ->
+			val msgKey = p2pLinkTransferToKey[transferId]
+			sendToAll(JSONObject().apply {
+				put("event", "p2plink_progress")
+				put("transferId", transferId)
+				if (msgKey != null) put("messageKey", msgKey)
+				put("bytesWritten", bytesWritten)
+				put("totalBytes", totalBytes)
+				val percent = if (totalBytes > 0) ((bytesWritten * 100) / totalBytes).toInt().coerceIn(0, 100) else 0
+				put("progress", percent)
+			})
 		}
 		p2p.setWhitelistEnabled(loadSetting("graffiti:whitelist-enabled") == "true")
 	}
@@ -1159,12 +1173,23 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			put("messageKey", keyStr)
 		})
 
+		p2pLinkTransferToKey[transferId] = keyStr
 		val streamPass = Password256(Base64.getDecoder().decode(streamKeyB64))
 		val requested = p2p.requestP2PLinkDownload(hostPeerKey, transferId) { success, tempFile, error ->
+			p2pLinkTransferToKey.remove(transferId)
 			if (success && tempFile != null) {
 				try {
+					sendToAll(JSONObject().apply {
+						put("event", "p2plink_decrypting")
+						put("transferId", transferId)
+						put("messageKey", keyStr)
+						put("fileName", fileName)
+					})
 					val digest = MessageDigest.getInstance("SHA-256")
 					val seq = EncryptedSequence.createSequence(streamPass)
+					val totalBytes = tempFile.length()
+					var totalRead = 0L
+					var lastReport = 0L
 					tempFile.inputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { fileIn ->
 						EncryptedContinuousInputStream(seq, fileIn).use { decIn ->
 							destFile.outputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { fileOut ->
@@ -1173,6 +1198,20 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 								while (decIn.read(buf).also { r = it } != -1) {
 									digest.update(buf, 0, r)
 									fileOut.write(buf, 0, r)
+									totalRead += r
+									val now = System.currentTimeMillis()
+									if (now - lastReport >= 250) {
+										lastReport = now
+										sendToAll(JSONObject().apply {
+											put("event", "p2plink_decrypt_progress")
+											put("transferId", transferId)
+											put("messageKey", keyStr)
+											put("bytesDecrypted", totalRead)
+											put("totalBytes", totalBytes)
+											val percent = if (totalBytes > 0) ((totalRead * 100) / totalBytes).toInt().coerceIn(0, 100) else 0
+											put("progress", percent)
+										})
+									}
 								}
 							}
 						}

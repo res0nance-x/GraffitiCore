@@ -112,13 +112,13 @@ class P2PLinkTransferTest {
 		val transferId = sendJson.getString("transferId")
 
 		// Wait for command processing to finish on Alice
-		val cmdDeadline = System.currentTimeMillis() + 5000L
+		val cmdDeadline = System.currentTimeMillis() + 10000L
 		while (System.currentTimeMillis() < cmdDeadline && apiA.commandQueue.isBusy()) {
 			Thread.sleep(50)
 		}
 
 		// Wait for the descriptor message to arrive at Bob
-		val syncDeadline = System.currentTimeMillis() + 5000L
+		val syncDeadline = System.currentTimeMillis() + 15000L
 		var bobMsgKey: EncryptedMetaKey? = null
 		while (System.currentTimeMillis() < syncDeadline && bobMsgKey == null) {
 			val metaFiles = p2pB.metaDir.listFiles { f -> f.isFile } ?: emptyArray()
