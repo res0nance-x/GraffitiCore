@@ -13,6 +13,8 @@ import r3.source.FileSink
 import r3.source.FileSource
 import r3.source.ListWritable
 import r3.source.StringWritable
+import r3.encryption.EncryptedContinuousOutputStream
+import r3.math.EncryptedSequence
 import r3.thread.async
 import java.io.ByteArrayInputStream
 import java.io.DataInputStream
@@ -79,9 +81,12 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	val ignoredIdentitiesDir = File(graffitiDir, "ignored_identities").also { it.mkdirs() }
 	val ignoredContentDir = File(graffitiDir, "ignored_content").also { it.mkdirs() }
 	val tmpDir = File(graffitiDir, "tmp").also { it.mkdirs() }
-	val p2pLinkDir = File(graffitiDir, "p2plink").also { it.mkdirs() }
 	var defaultDownloadsDir: File = File(System.getProperty("user.home"), "Downloads").also { if (!it.exists()) it.mkdirs() }
 	var defaultP2PPort: Int = 0
+
+	var relayMaxContentSizeBytes: Long = 50 * 1024 * 1024L // 50MB default for relays
+	var autoDownloadThresholdBytes: Long = 50 * 1024 * 1024L // 50MB default for clients
+	val contentHolders = ConcurrentHashMap<EncryptedMetaKey, MutableSet<TCPNode>>()
 
 	companion object {
 		const val PING_INTERVAL_MS = 60_000L  // send a ping every 60 s
@@ -105,10 +110,15 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	private val contentSenderExecutor = Executors.newCachedThreadPool { r ->
 		Thread(r, "Graffiti-ContentSender").apply { isDaemon = true }
 	}
-	private val p2pLinkReceivers = ConcurrentHashMap<String, (node: TCPNode, msg: P2PLinkContentMessage, file: File?) -> Unit>()
 
 	@Volatile
-	var onP2PLinkProgress: ((transferId: String, bytesWritten: Long, totalBytes: Long) -> Unit)? = null
+	var onContentProgress: ((key: EncryptedMetaKey, bytesWritten: Long, totalBytes: Long) -> Unit)? = null
+
+	fun getContentSize(key: EncryptedMetaKey): Long {
+		smallContentCache[key]?.let { return it.size.toLong() }
+		val f = File(contentDir, "$key")
+		return if (f.exists()) f.length() else 0L
+	}
 
 	private fun attachStreamProgress(node: TCPNode) {
 		node.onStreamProgress = { _, _, header, bytesWritten ->
@@ -116,11 +126,10 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 				if (header.isNotEmpty()) {
 					val dis = DataInputStream(ByteArrayInputStream(header))
 					val type = StringWritable.read(dis).str
-					if (type == P2PLinkContentMessage.type) {
-						val transferId = StringWritable.read(dis).str
-						dis.readInt() // status
+					if (type == EncryptedContentMessage.type) {
 						val totalLength = dis.readLong()
-						onP2PLinkProgress?.invoke(transferId, bytesWritten, totalLength)
+						val eMeta = EncryptedContentMetaData.read(dis)
+						onContentProgress?.invoke(eMeta.key, bytesWritten, totalLength)
 					}
 				}
 			} catch (_: Exception) {}
@@ -351,7 +360,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 						metaList.sortBy { metaTimeCache[it.key] ?: 0L }
 						node.send(
 							QueryResponseMessage(serverTime).serialize(),
-							ListWritable(metaList.map { it.toHeader() }).serialize()
+							ListWritable(metaList.map { it.toHeader(getContentSize(it.key)) }).serialize()
 						)
 						debug("Query from ${node.remoteAddress} (since=${msg.queryTime}): returning ${metaList.size} metadata items (out of ${metaCache.size})")
 					}
@@ -370,12 +379,19 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 							val myIdentityKeys = listIdentities().map { it.key }.toSet()
 							val myPeerKeys = listPeers().map { it.key }.toSet()
 							val wantContent = mutableListOf<EncryptedMetaKey>()
+							val wantMeta = mutableListOf<EncryptedMetaKey>()
 							val wantPeers = mutableSetOf<PeerKey>()
 							debug("Received QueryResponse from ${node.remoteAddress}: ${headerList.size} header item(s)")
 							headerList.forEach { msgHeader ->
+								contentHolders.computeIfAbsent(msgHeader.key) { ConcurrentHashMap.newKeySet() }.add(node)
 								if (isMessageDeleted(msgHeader.key)) return@forEach
 								if (msgHeader.author.arr.contentEquals(msgHeader.recipient.arr)) {
 									debug("Ignoring header ${msgHeader.key.name} from ${node.remoteAddress}: author and recipient are the same")
+									return@forEach
+								}
+								// Relay check: If relay size threshold is exceeded, relay ignores content completely
+								if (relayEnabled && relayMaxContentSizeBytes > 0L && msgHeader.contentLength > relayMaxContentSizeBytes) {
+									debug("Relay ignoring header ${msgHeader.key.name} from ${node.remoteAddress}: size (${msgHeader.contentLength}) exceeds relay limit ($relayMaxContentSizeBytes)")
 									return@forEach
 								}
 								// Non-relay mode: ignore meta not addressed to us or our direct friends
@@ -397,6 +413,15 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 								val contentExists =
 									smallContentCache.containsKey(msgHeader.key) || File(contentDir, "${msgHeader.key}").exists()
 								if (metaExists && contentExists) return@forEach
+
+								// If client already has meta, but content is large and hasn't been manually downloaded yet:
+								if (metaExists && !contentExists) {
+									if (!relayEnabled && autoDownloadThresholdBytes > 0L && msgHeader.contentLength > autoDownloadThresholdBytes) {
+										debug("Large content ${msgHeader.key.name} (${msgHeader.contentLength} bytes) awaiting manual download")
+										return@forEach
+									}
+								}
+
 								// Preserve the relay's arrival order for incoming content
 								queryOrderTimestamps.computeIfAbsent(msgHeader.key) { nextMonotonicTimestamp() }
 								val now = System.currentTimeMillis()
@@ -404,6 +429,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 								val isPending = pendingSince != null && (now - pendingSince) < 30_000L
 								if (isPending) return@forEach
 								val authorPeer = getPeerByKey(msgHeader.author)
+								val isLargeForClient = !relayEnabled && autoDownloadThresholdBytes > 0L && msgHeader.contentLength > autoDownloadThresholdBytes
 								if (authorPeer == null) {
 									// We need this peer before we can verify and accept content
 									pendingPeerContent.computeIfAbsent(msgHeader.author) { ConcurrentHashMap() }[msgHeader.key] =
@@ -411,16 +437,24 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 									wantPeers.add(msgHeader.author)
 								} else {
 									pendingContentRequests[msgHeader.key] = now
-									wantContent.add(msgHeader.key)
+									if (isLargeForClient) {
+										wantMeta.add(msgHeader.key)
+									} else {
+										wantContent.add(msgHeader.key)
+									}
 								}
 							}
 							if (wantPeers.isNotEmpty()) {
 								node.send(PeerRequestMessage(wantPeers.toList()).serialize())
 								debug("Requested ${wantPeers.size} peer(s) from ${node.remoteAddress}")
 							}
+							if (wantMeta.isNotEmpty()) {
+								node.send(MetaRequestMessage(wantMeta).serialize())
+								debug("Requested metadata for ${wantMeta.size} large message(s) from ${node.remoteAddress}")
+							}
 							if (wantContent.isNotEmpty()) {
 								node.send(ContentRequestMessage(wantContent).serialize())
-							} else if (wantPeers.isEmpty()) {
+							} else if (wantPeers.isEmpty() && wantMeta.isEmpty()) {
 								debug("No content requests needed from ${node.remoteAddress} after QueryResponse")
 							}
 						}
@@ -454,9 +488,9 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 										if (hasContent) {
 											val fileSize = smallBytes?.size?.toLong() ?: contentFile?.length() ?: 0L
 											if (smallBytes != null) {
-												node.send(EncryptedContentMessage(eMeta).serialize(), smallBytes)
+												node.send(EncryptedContentMessage(eMeta, fileSize).serialize(), smallBytes)
 											} else if (contentFile != null) {
-												node.send(EncryptedContentMessage(eMeta).serialize(), contentFile)
+												node.send(EncryptedContentMessage(eMeta, fileSize).serialize(), contentFile)
 											}
 											logOutgoing(node, key.name, fileSize)
 										}
@@ -464,6 +498,61 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 								}
 							} catch (e: Exception) {
 								logNodeError(node, "Error serving ContentRequest: ${e.message}")
+							}
+						}
+					}
+					// Peer wants only metadata (no content body) for a list of keys
+					MetaRequestMessage.type -> {
+						val req = MetaRequestMessage.read(rawHead.toDataInputStream())
+						debug("Received MetaRequest from ${node.remoteAddress}: ${req.keys.joinToString { it.name }}")
+						contentSenderExecutor.execute {
+							try {
+								val isAskingAll = nodeQueryMap[node]?.isAskingAllRecipients() == true
+								req.keys.forEach { key ->
+									if (node.isClosed()) return@forEach
+									if (isMessageDeleted(key)) return@forEach
+									val eMeta = metaCache[key] ?: run {
+										val metaFile = File(metaDir, "$key")
+										if (metaFile.exists()) {
+											metaFile.toDataInputStream().use { EncryptedContentMetaData.read(it) }
+										} else null
+									}
+									if (isAskingAll && eMeta != null && isIgnoredForRelay(eMeta)) return@forEach
+									if (eMeta != null) {
+										node.send(EncryptedMetaMessage(eMeta).serialize())
+									}
+								}
+							} catch (e: Exception) {
+								logNodeError(node, "Error serving MetaRequest: ${e.message}")
+							}
+						}
+					}
+					// Incoming encrypted metadata (no content body attached)
+					EncryptedMetaMessage.type -> {
+						val msg = EncryptedMetaMessage.read(rawHead.toDataInputStream())
+						val eMeta = msg.eMeta
+						if (isMessageDeleted(eMeta.key)) {
+							debug("Ignoring meta ${eMeta.key.name} from ${node.remoteAddress}: key is deleted")
+						} else {
+							val peer = getPeerByKey(eMeta.author)
+							if (peer == null) {
+								debug("Author peer ${eMeta.author.name} not found for meta ${eMeta.key.name}")
+							} else if (!eMeta.verify(peer)) {
+								logNodeError(node, "Invalid signature for meta ${eMeta.key.name}")
+							} else {
+								pendingContentRequests.remove(eMeta.key)
+								metaCache[eMeta.key] = eMeta
+								val metaFile = File(metaDir, "${eMeta.key}").consistentFile()
+								if (!metaFile.exists()) {
+									metaFile.writeBytes(eMeta.serialize())
+									val ts = queryOrderTimestamps.remove(eMeta.key) ?: nextMonotonicTimestamp()
+									metaFile.setLastModified(ts)
+									metaTimeCache[eMeta.key] = ts
+									contentHolders.computeIfAbsent(eMeta.key) { ConcurrentHashMap.newKeySet() }.add(node)
+									notifyMessageReceived(eMeta.key)
+								} else {
+									queryOrderTimestamps.remove(eMeta.key)
+								}
 							}
 						}
 					}
@@ -534,14 +623,12 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 										val ts = queryOrderTimestamps.remove(eMeta.key) ?: nextMonotonicTimestamp()
 										metaFile.setLastModified(ts)
 										metaTimeCache[eMeta.key] = ts
-										if (metaFile.exists()) {
-											notifyMessageReceived(eMeta.key)
-											if (relayEnabled) {
-												pushNewMessage(eMeta.key, excludeNode = node)
-											}
-										}
 									} else {
 										queryOrderTimestamps.remove(eMeta.key)
+									}
+									notifyMessageReceived(eMeta.key)
+									if (relayEnabled) {
+										pushNewMessage(eMeta.key, excludeNode = node)
 									}
 								}
 							}
@@ -640,40 +727,6 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 						}
 					}
 
-					// Request for on-demand direct file transfer for a p2plink
-					P2PLinkRequestMessage.type -> {
-						val req = P2PLinkRequestMessage.read(rawHead.toDataInputStream())
-						debug("Received P2PLinkRequest from ${node.remoteAddress} for transferId=${req.transferId}")
-						contentSenderExecutor.execute {
-							try {
-								val file = File(p2pLinkDir, req.transferId)
-								if (file.exists() && file.isFile) {
-									logOutgoing(node, "p2plink:${req.transferId}", file.length())
-									node.send(
-										P2PLinkContentMessage(req.transferId, P2PLinkContentMessage.STATUS_OK, file.length()).serialize(),
-										file
-									)
-								} else {
-									node.send(
-										P2PLinkContentMessage(req.transferId, P2PLinkContentMessage.STATUS_NOT_FOUND, 0L).serialize()
-									)
-								}
-							} catch (e: Exception) {
-								logNodeError(node, "Error serving P2PLinkRequest: ${e.message}")
-							}
-						}
-					}
-					// Incoming streaming content for an on-demand p2plink transfer
-					P2PLinkContentMessage.type -> {
-						val msg = P2PLinkContentMessage.read(rawHead.toDataInputStream())
-						debug("Received P2PLinkContent from ${node.remoteAddress}: transferId=${msg.transferId}, status=${msg.status}, length=${msg.length}")
-						val receiver = p2pLinkReceivers.remove(msg.transferId)
-						if (receiver != null) {
-							receiver(node, msg, file)
-						} else {
-							file?.delete()
-						}
-					}
 
 					else -> debug("Unknown message type: $type from ${node.remoteAddress}")
 				}
@@ -813,7 +866,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		val contentExists = smallContentCache.containsKey(metaKey) || File(contentDir, "$metaKey").exists()
 		if (!contentExists) return // Must have the content before we push/relay it!
 		val header = QueryResponseMessage(0L).serialize()
-		val body = ListWritable(listOf(eMeta.toHeader())).serialize()
+		val body = ListWritable(listOf(eMeta.toHeader(getContentSize(eMeta.key)))).serialize()
 		allNodes.filter { !it.isClosed() && it != excludeNode }.forEach { node ->
 			val query = nodeQueryMap[node]
 			val isAskingAll = query?.isAskingAllRecipients() == true
@@ -909,14 +962,45 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		content: Content,
 		authorIdentity: Identity,
 		recipientPeer: Peer,
-		timestamp: Long = nextMonotonicTimestamp()
+		timestamp: Long = nextMonotonicTimestamp(),
+		onProgress: ((percent: Int, status: String) -> Unit)? = null
 	): EncryptedMetaKey {
+		onProgress?.invoke(5, "Analyzing content...")
 		val contentKey = ContentKey(content.hash256())
 		val meta = ContentMeta(content)
 		val pass = Password256.createPassword()
 		val eMeta = meta.encrypt(authorIdentity, recipientPeer, contentKey, pass)
 		val contentFile = File(contentDir, eMeta.key.toString()).consistentFile()
-		content.encrypt(pass, FileSink(contentFile, false))
+		onProgress?.invoke(15, "Encrypting...")
+
+		val totalBytes = content.length
+		if (totalBytes > 0 && onProgress != null) {
+			val seq = EncryptedSequence.createSequence(pass)
+			contentFile.outputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { fileOut ->
+				EncryptedContinuousOutputStream(seq, fileOut).use { encOut ->
+					content.createInputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { inp ->
+						val buffer = ByteArray(DEFAULT_COPY_BUFFER_SIZE)
+						var bytesCopied = 0L
+						var lastReported = 15
+						while (true) {
+							val read = inp.read(buffer)
+							if (read <= 0) break
+							encOut.write(buffer, 0, read)
+							bytesCopied += read
+							val pct = 15 + ((bytesCopied * 80) / totalBytes).toInt().coerceIn(0, 80)
+							if (pct >= lastReported + 2) {
+								lastReported = pct
+								onProgress(pct, "Encrypting (${((bytesCopied * 100) / totalBytes).toInt()}%)...")
+							}
+						}
+					}
+				}
+			}
+		} else {
+			content.encrypt(pass, FileSink(contentFile, false))
+		}
+		onProgress?.invoke(98, "Finalizing message...")
+
 		val fileSize = contentFile.length()
 		totalContentSize.addAndGet(fileSize)
 		val metaDest = File(metaDir, eMeta.key.toString()).consistentFile()
@@ -1052,23 +1136,6 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 
 	@Synchronized
 	fun deleteMessage(key: EncryptedMetaKey): Boolean {
-		// Clean up backing p2plink file if applicable
-		try {
-			val decrypted = getDecryptedMeta(key)
-			if (decrypted != null && decrypted.first.type == "p2plink") {
-				val jsonStr = getContent(key).createInputStream().use { it.reader().readText() }
-				val jsonObj = r3.org.json.JSONObject(jsonStr)
-				val transferId = jsonObj.optString("transferId")
-				if (transferId.isNotEmpty()) {
-					val backingFile = File(p2pLinkDir, transferId)
-					if (backingFile.exists()) {
-						backingFile.delete()
-						debug("Deleted backing p2plink file: $transferId")
-					}
-				}
-			}
-		} catch (_: Exception) {}
-
 		setContentIgnored(key, false)
 		queryOrderTimestamps.remove(key)
 		val hadMeta = metaCache.containsKey(key) || isMessageDeleted(key) || File(metaDir, "$key").exists()
@@ -1247,6 +1314,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	}
 
 	private fun notifyNodeDisconnected(node: TCPNode) {
+		contentHolders.values.forEach { it.remove(node) }
 		for (listener in onNodeDisconnectedListeners) {
 			try {
 				listener(node)
@@ -1321,22 +1389,17 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 
 	fun isConnectedToPeer(peerKey: PeerKey): Boolean = getNodeForPeer(peerKey) != null
 
-	fun requestP2PLinkDownload(
-		hostPeerKey: PeerKey,
-		transferId: String,
-		onComplete: (success: Boolean, file: File?, error: String?) -> Unit
-	): Boolean {
-		val node = getNodeForPeer(hostPeerKey) ?: return false
-		p2pLinkReceivers[transferId] = { _, msg, file ->
-			if (msg.status == P2PLinkContentMessage.STATUS_OK && file != null) {
-				onComplete(true, file, null)
-			} else if (msg.status == P2PLinkContentMessage.STATUS_NOT_FOUND) {
-				onComplete(false, null, "File not found on host peer")
-			} else {
-				onComplete(false, null, "Error during transfer (status=${msg.status})")
+	fun requestContentDownload(key: EncryptedMetaKey): Boolean {
+		if (hasContent(key)) return true
+		val targetNode = contentHolders[key]?.firstOrNull { !it.isClosed() }
+			?: run {
+				val meta = getMetaByKey(key) ?: return false
+				getNodeForPeer(meta.author)
 			}
-		}
-		node.send(P2PLinkRequestMessage(transferId).serialize())
+			?: allNodes.firstOrNull { !it.isClosed() }
+			?: return false
+
+		targetNode.send(ContentRequestMessage(listOf(key)).serialize())
 		return true
 	}
 

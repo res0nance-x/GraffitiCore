@@ -5,7 +5,7 @@ import r3.source.StringWritable
 import java.io.DataInputStream
 import java.io.DataOutputStream
 
-// Signals that the header is EncryptedContentMetaData and the file is empty
+// Carries only encrypted metadata (no content file body attached)
 class EncryptedMetaMessage(val eMeta: EncryptedContentMetaData) : Writable {
 	override fun write(dos: DataOutputStream) {
 		StringWritable(type).write(dos)
@@ -13,12 +13,10 @@ class EncryptedMetaMessage(val eMeta: EncryptedContentMetaData) : Writable {
 	}
 
 	companion object {
-		val type = "meta"
+		const val type = "metaonly"
 		fun read(dis: DataInputStream): EncryptedMetaMessage {
 			val type = StringWritable.read(dis).str
-			if (type != this.type) {
-				error("Invalid message type: $type")
-			}
+			if (type != this.type) error("Invalid message type: $type")
 			val eMeta = EncryptedContentMetaData.read(dis)
 			return EncryptedMetaMessage(eMeta)
 		}

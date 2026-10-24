@@ -41,6 +41,7 @@ export interface MessageEntry {
    type?: string;
    created?: number | string;
    fileTime?: number;
+   hasContent?: boolean;
    ignored?: boolean;
 }
 
@@ -51,6 +52,7 @@ export interface DecryptedMessageMeta {
    type: string;
    created: number | string;
    fileTime?: number;
+   hasContent?: boolean;
    ignored?: boolean;
 }
 
@@ -141,7 +143,7 @@ export interface SendMessageResponse extends ApiOk {
 
 export interface ActiveCommand {
    id: string;
-   type: 'SEND_TEXT' | 'SEND_FILE' | 'SEND_P2PLINK' | 'CREATE_PACK' | 'FORWARD';
+   type: 'SEND_TEXT' | 'SEND_FILE' | 'CREATE_PACK' | 'FORWARD';
    identityKey: string;
    peerKey: string;
    sentTimestamp: number;
@@ -384,36 +386,48 @@ export const graffiti = {
       return parseJson<SendMessageResponse>(res);
    },
 
-   async sendFile(identityKey: string, peerKey: string, file: File, async = true): Promise<SendMessageResponse> {
-      const url = new URL(`/api/message/send/file?identityKey=${encodeURIComponent(identityKey)}&peerKey=${encodeURIComponent(peerKey)}&file=${encodeURIComponent(file.name)}${async ? '&async=true' : ''}`, window.location.origin);
-      const res = await fetch(url.toString(), {
-         method: 'PUT',
-         headers: {
-            'Content-Type': file.type || 'application/octet-stream',
-            'file': encodeURIComponent(file.name)
-         },
-         body: file
+   async sendFile(
+      identityKey: string,
+      peerKey: string,
+      file: File,
+      async = true,
+      onProgress?: (percent: number, loaded: number, total: number) => void
+   ): Promise<SendMessageResponse> {
+      const url = new URL(
+         `/api/message/send/file?identityKey=${encodeURIComponent(identityKey)}&peerKey=${encodeURIComponent(peerKey)}&file=${encodeURIComponent(file.name)}${async ? '&async=true' : ''}`,
+         window.location.origin
+      );
+      return new Promise<SendMessageResponse>((resolve, reject) => {
+         const xhr = new XMLHttpRequest();
+         xhr.open('PUT', url.toString(), true);
+         xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+         xhr.setRequestHeader('file', encodeURIComponent(file.name));
+         if (xhr.upload && onProgress) {
+            xhr.upload.onprogress = (evt) => {
+               if (evt.lengthComputable && evt.total > 0) {
+                  const percent = Math.round((evt.loaded * 100) / evt.total);
+                  onProgress(percent, evt.loaded, evt.total);
+               }
+            };
+         }
+         xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+               try {
+                  resolve(JSON.parse(xhr.responseText) as SendMessageResponse);
+               } catch (e) {
+                  reject(e);
+               }
+            } else {
+               reject(new Error(xhr.statusText || `Upload failed with status ${xhr.status}`));
+            }
+         };
+         xhr.onerror = () => reject(new Error('Network error during upload'));
+         xhr.send(file);
       });
-      return parseJson<SendMessageResponse>(res);
    },
 
-   async sendP2PLink(identityKey: string, peerKey: string, file: File, async = true): Promise<SendMessageResponse> {
-      const url = new URL(`/api/message/send/p2plink?identityKey=${encodeURIComponent(identityKey)}&peerKey=${encodeURIComponent(peerKey)}&file=${encodeURIComponent(file.name)}${async ? '&async=true' : ''}`, window.location.origin);
-      const res = await fetch(url.toString(), {
-         method: 'PUT',
-         headers: {
-            'Content-Type': file.type || 'application/octet-stream',
-            'file': encodeURIComponent(file.name)
-         },
-         body: file
-      });
-      return parseJson<SendMessageResponse>(res);
-   },
-
-   async downloadP2PLink(key: string, destinationDir?: string): Promise<ApiOk> {
-      const params: Record<string, string> = { key };
-      if (destinationDir) params.destinationDir = destinationDir;
-      return get<ApiOk>('/api/p2plink/download', params);
+   async downloadMessageContent(key: string): Promise<ApiOk> {
+      return get<ApiOk>('/api/message/download', { key });
    },
 
    async createPackBegin(identityKey: string, peerKey: string, packName: string): Promise<CreatePackBeginResponse> {

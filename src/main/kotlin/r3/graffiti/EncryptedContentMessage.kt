@@ -6,9 +6,13 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 
 // Signals that the file is Content data
-class EncryptedContentMessage(val eMeta: EncryptedContentMetaData) : Writable {
+class EncryptedContentMessage(
+	val eMeta: EncryptedContentMetaData,
+	val contentLength: Long = 0L
+) : Writable {
 	override fun write(dos: DataOutputStream) {
 		StringWritable(type).write(dos)
+		dos.writeLong(contentLength)
 		eMeta.write(dos)
 	}
 
@@ -19,8 +23,9 @@ class EncryptedContentMessage(val eMeta: EncryptedContentMetaData) : Writable {
 			if (type != this.type) {
 				error("Invalid message type: $type")
 			}
+			val contentLength = dis.readLong()
 			val eMeta = EncryptedContentMetaData.read(dis)
-			return EncryptedContentMessage(eMeta)
+			return EncryptedContentMessage(eMeta, contentLength)
 		}
 	}
 }

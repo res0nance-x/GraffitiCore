@@ -76,13 +76,6 @@ class StateManager(
 	fun getMessageKeysInTimeOrder(): List<String> {
 		val files = p2p.metaDir.listFiles { f -> f.isFile }.orEmpty()
 		return files
-			.filter {
-				try {
-					p2p.hasContent(EncryptedMetaKey(it.name))
-				} catch (_: Exception) {
-					false
-				}
-			}
 			.sortedBy { it.lastModified() }
 			.map { it.name }
 	}

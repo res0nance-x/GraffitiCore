@@ -27,8 +27,8 @@ class EncryptedContentMetaData(
 ) : Writable {
 	val key = EncryptedMetaKey(sign.serialize().hash256())
 
-	fun toHeader(): EncryptedContentHeader {
-		return EncryptedContentHeader(key, author, recipient)
+	fun toHeader(contentLength: Long = 0L): EncryptedContentHeader {
+		return EncryptedContentHeader(key, author, recipient, contentLength)
 	}
 
 	fun decrypt(identity: Identity): Pair<ContentMeta, Password256> {

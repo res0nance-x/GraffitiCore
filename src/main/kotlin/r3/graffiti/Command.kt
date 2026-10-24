@@ -10,7 +10,6 @@ import java.util.UUID
 enum class CommandType {
 	SEND_TEXT,
 	SEND_FILE,
-	SEND_P2PLINK,
 	CREATE_PACK,
 	FORWARD
 }
@@ -29,7 +28,6 @@ enum class CommandStatus {
 sealed interface CommandPayload {
 	data class Text(val text: String) : CommandPayload
 	data class FilePayload(val stagedFile: File, val originalFileName: String) : CommandPayload
-	data class P2PLinkPayload(val stagedFile: File, val originalFileName: String, val transferId: String) : CommandPayload
 	data class PackPayload(val stagingDir: File, val packName: String) : CommandPayload
 	data class Forward(val sourceMessageKey: EncryptedMetaKey) : CommandPayload
 }
@@ -63,10 +61,6 @@ data class Command(
 		when (payload) {
 			is CommandPayload.Text -> put("text", payload.text)
 			is CommandPayload.FilePayload -> put("fileName", payload.originalFileName)
-			is CommandPayload.P2PLinkPayload -> {
-				put("fileName", payload.originalFileName)
-				put("transferId", payload.transferId)
-			}
 			is CommandPayload.PackPayload -> put("packName", payload.packName)
 			is CommandPayload.Forward -> put("sourceMessageKey", payload.sourceMessageKey.toString())
 		}

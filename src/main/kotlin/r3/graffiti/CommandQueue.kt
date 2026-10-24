@@ -96,8 +96,8 @@ class CommandQueue(
 				}
 
 				is CommandPayload.FilePayload -> {
-					command.progress = 30
-					command.statusMessage = "Encrypting ${payload.originalFileName}..."
+					command.progress = 5
+					command.statusMessage = "Encrypting ${payload.originalFileName} (0%)..."
 					onCommandUpdated?.invoke(command)
 
 					val originalName = payload.originalFileName
@@ -106,78 +106,23 @@ class CommandQueue(
 						ext = originalName.substringAfterLast('.', "").lowercase()
 					}
 					try {
-						p2p.pkeEncrypt(wrappedContent, iden, peer, timestamp = command.sentTimestamp)
-					} finally {
-						if (payload.stagedFile.exists()) {
-							payload.stagedFile.delete()
-						}
-					}
-				}
-
-				is CommandPayload.P2PLinkPayload -> {
-					command.progress = 20
-					command.statusMessage = "Preparing P2P link for ${payload.originalFileName}..."
-					onCommandUpdated?.invoke(command)
-
-					val transferId = payload.transferId
-					val linkBackingFile = File(p2p.p2pLinkDir, transferId)
-					val streamPass = Password256.createPassword()
-
-					command.progress = 35
-					command.statusMessage = "Encrypting backing file for P2P link..."
-					onCommandUpdated?.invoke(command)
-
-					val digest = MessageDigest.getInstance("SHA-256")
-					val rawSize = payload.stagedFile.length()
-
-					try {
-						val seq = EncryptedSequence.createSequence(streamPass)
-						linkBackingFile.outputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { fileOut ->
-							EncryptedContinuousOutputStream(seq, fileOut).use { encOut ->
-								payload.stagedFile.inputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { fileIn ->
-									val buf = ByteArray(DEFAULT_COPY_BUFFER_SIZE)
-									var r: Int
-									while (fileIn.read(buf).also { r = it } != -1) {
-										digest.update(buf, 0, r)
-										encOut.write(buf, 0, r)
-									}
-								}
+						p2p.pkeEncrypt(
+							wrappedContent, iden, peer, timestamp = command.sentTimestamp,
+							onProgress = { pct, statusMsg ->
+								command.progress = pct
+								command.statusMessage = statusMsg
+								onCommandUpdated?.invoke(command)
 							}
-						}
+						)
 					} finally {
 						if (payload.stagedFile.exists()) {
 							payload.stagedFile.delete()
 						}
 					}
-
-					command.progress = 75
-					command.statusMessage = "Publishing P2P link offer..."
-					onCommandUpdated?.invoke(command)
-
-					val sha256Hex = digest.digest().joinToString("") { "%02x".format(it) }
-					val descriptorJson = JSONObject().apply {
-						put("version", 1)
-						put("transferId", transferId)
-						put("fileName", payload.originalFileName)
-						put("fileSize", rawSize)
-						put("fileType", payload.originalFileName.substringAfterLast('.', "").lowercase())
-						put("sha256", sha256Hex)
-						put("streamKey", Base64.getEncoder().encodeToString(streamPass.arr))
-						put("hostPeerKey", p2p.serverIdentity.asPeer().key.toString())
-						put("hostAlias", iden.asPeer().key.name)
-					}
-
-					val descriptorBytes = descriptorJson.toString().toByteArray(Charsets.UTF_8)
-					val descriptorContent = MutableMetaDataContent(BinaryContent(descriptorBytes, "${payload.originalFileName}.p2plink", "p2plink")).apply {
-						path = "${payload.originalFileName}.p2plink"
-						ext = "p2plink"
-					}
-
-					p2p.pkeEncrypt(descriptorContent, iden, peer, timestamp = command.sentTimestamp)
 				}
 
 				is CommandPayload.PackPayload -> {
-					command.progress = 25
+					command.progress = 10
 					command.statusMessage = "Compiling pack archive: ${payload.packName}..."
 					onCommandUpdated?.invoke(command)
 
@@ -187,7 +132,7 @@ class CommandQueue(
 						val sink = FileSink(tempPackFile, append = false)
 						BinaryPack.create(dirPack, sink)
 
-						command.progress = 60
+						command.progress = 30
 						command.statusMessage = "Encrypting pack archive..."
 						onCommandUpdated?.invoke(command)
 
@@ -195,7 +140,15 @@ class CommandQueue(
 							path = payload.packName
 							ext = "pack"
 						}
-						p2p.pkeEncrypt(wrappedContent, iden, peer, timestamp = command.sentTimestamp)
+						p2p.pkeEncrypt(
+							wrappedContent, iden, peer, timestamp = command.sentTimestamp,
+							onProgress = { pct, statusMsg ->
+								val scaled = 30 + ((pct * 65) / 100).coerceIn(0, 65)
+								command.progress = scaled
+								command.statusMessage = statusMsg
+								onCommandUpdated?.invoke(command)
+							}
+						)
 					} finally {
 						payload.stagingDir.deleteRecursively()
 						if (tempPackFile.exists()) {
@@ -266,15 +219,6 @@ class CommandQueue(
 			is CommandPayload.FilePayload -> {
 				if (payload.stagedFile.exists()) {
 					payload.stagedFile.delete()
-				}
-			}
-			is CommandPayload.P2PLinkPayload -> {
-				if (payload.stagedFile.exists()) {
-					payload.stagedFile.delete()
-				}
-				val backing = File(p2p.p2pLinkDir, payload.transferId)
-				if (backing.exists()) {
-					backing.delete()
 				}
 			}
 			is CommandPayload.PackPayload -> {
