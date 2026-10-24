@@ -496,6 +496,14 @@ function wireButtons(): void {
    relayOn.addEventListener('change', () => {
       if (relayOn.checked) void setRelay(true);
    });
+
+   const androidServiceField = document.getElementById('field-android-service');
+   if (androidServiceField && (window as any).Android?.stopService) {
+      androidServiceField.hidden = false;
+      document.getElementById('btn-service-stop')?.addEventListener('click', () => {
+         (window as any).Android?.stopService();
+      });
+   }
 }
 
 // ── Utility ───────────────────────────────────────────────────────────────────
@@ -520,6 +528,10 @@ onSectionShow('section-network', async () => {
    if (!buttonsWired) {
       wireButtons();
       buttonsWired = true;
+   }
+   const androidServiceField = document.getElementById('field-android-service');
+   if (androidServiceField && (window as any).Android?.stopService) {
+      androidServiceField.hidden = false;
    }
    await Promise.all([loadNodeIdentity(), loadRelayMode(), loadConnections(), loadServerStatus()]);
 });
