@@ -277,12 +277,38 @@ function updateBatterySettingsUi(): void {
    }
 }
 
+(window as any).updateBatterySettingsUi = updateBatterySettingsUi;
+
+let batteryPollTimer: number | null = null;
+function pollBatterySettings(): void {
+   if (batteryPollTimer !== null) clearInterval(batteryPollTimer);
+   let count = 0;
+   batteryPollTimer = window.setInterval(() => {
+      count++;
+      updateBatterySettingsUi();
+      const isOptimized = (window as any).Android?.isBatteryOptimized?.() ?? true;
+      if (!isOptimized || count > 20) {
+         if (batteryPollTimer !== null) {
+            clearInterval(batteryPollTimer);
+            batteryPollTimer = null;
+         }
+      }
+   }, 500);
+}
+
 document.getElementById('btn-settings-battery')?.addEventListener('click', () => {
    (window as any).Android?.openBatterySettings();
+   pollBatterySettings();
 });
 
 window.addEventListener('focus', () => {
    updateBatterySettingsUi();
+});
+
+document.addEventListener('visibilitychange', () => {
+   if (document.visibilityState === 'visible') {
+      updateBatterySettingsUi();
+   }
 });
 
 const quotaInput = document.getElementById('settings-storage-quota') as HTMLInputElement | null;
