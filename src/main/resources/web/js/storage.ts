@@ -257,7 +257,32 @@ void loadAppVersion();
 
 // Reload storage info and version when entering Settings tab
 onSectionShow('section-settings', async () => {
+   updateBatterySettingsUi();
    await Promise.all([loadStorageInfo(), loadAppVersion()]);
+});
+
+function updateBatterySettingsUi(): void {
+   const card = document.getElementById('settings-card-android-battery');
+   if (!card || !(window as any).Android?.openBatterySettings) return;
+   card.hidden = false;
+   const isOptimized = (window as any).Android?.isBatteryOptimized?.() ?? true;
+   const statusEl = document.getElementById('settings-battery-status');
+   const btn = document.getElementById('btn-settings-battery') as HTMLButtonElement | null;
+   if (statusEl) {
+      statusEl.textContent = isOptimized ? 'Status: Optimized (May sleep in background)' : 'Status: Unrestricted (Optimal)';
+      statusEl.style.color = isOptimized ? 'var(--warning, #ff9800)' : 'var(--success, #4caf50)';
+   }
+   if (btn) {
+      btn.textContent = isOptimized ? 'Set Unrestricted Battery' : 'Open Battery Settings';
+   }
+}
+
+document.getElementById('btn-settings-battery')?.addEventListener('click', () => {
+   (window as any).Android?.openBatterySettings();
+});
+
+window.addEventListener('focus', () => {
+   updateBatterySettingsUi();
 });
 
 const quotaInput = document.getElementById('settings-storage-quota') as HTMLInputElement | null;
