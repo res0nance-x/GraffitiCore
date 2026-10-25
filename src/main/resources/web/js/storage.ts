@@ -283,11 +283,12 @@ let batteryPollTimer: number | null = null;
 function pollBatterySettings(): void {
    if (batteryPollTimer !== null) clearInterval(batteryPollTimer);
    let count = 0;
+   const initialOptimized = (window as any).Android?.isBatteryOptimized?.() ?? true;
    batteryPollTimer = window.setInterval(() => {
       count++;
       updateBatterySettingsUi();
-      const isOptimized = (window as any).Android?.isBatteryOptimized?.() ?? true;
-      if (!isOptimized || count > 20) {
+      const currentOptimized = (window as any).Android?.isBatteryOptimized?.() ?? true;
+      if (currentOptimized !== initialOptimized || count > 30) {
          if (batteryPollTimer !== null) {
             clearInterval(batteryPollTimer);
             batteryPollTimer = null;
