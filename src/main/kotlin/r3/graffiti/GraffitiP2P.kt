@@ -749,9 +749,11 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	fun getTCPNode(addr: InetSocketAddress, autoSync: Boolean = true): TCPNode {
 		val node = connectionMap[addr]
 		if (node != null && !node.isClosed()) {
+			pendingReconnects.remove(addr)
 			return node
 		}
-		connectionMap.remove(addr)
+		pendingReconnects.remove(addr)
+		explicitlyDisconnected.remove(addr)
 		val socket = Socket()
 		try {
 			socket.tcpNoDelay = true
@@ -762,6 +764,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		newNode.onTransferStateChanged = { checkAndNotifyTransferState() }
 		newNode.onClose = {
 			val alias = nodePeerMap[newNode]?.key?.name ?: "unknown"
+			val wasRelay = nodeRelayMap[newNode] == true
 			logDisconnected(newNode, alias)
 			connectionMap.remove(addr)
 			nodePeerMap.remove(newNode)
@@ -772,6 +775,21 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			nodeQueryTimeMap.remove(addr)
 			checkAndNotifyTransferState()
 			notifyNodeDisconnected(newNode)
+
+			if (!explicitlyDisconnected.remove(addr)) {
+				val now = System.currentTimeMillis()
+				pendingReconnects.computeIfAbsent(addr) {
+					log("Scheduling auto-reconnect for $addr (first attempt in 2s)")
+					ReconnectTarget(
+						addr = addr,
+						firstFailedAtMs = now,
+						nextAttemptMs = now + 2000L,
+						attemptCount = 0,
+						isRelay = wasRelay,
+						autoSync = autoSync
+					)
+				}
+			}
 		}
 		connectionMap[addr] = newNode
 		if (!autoSync) {
@@ -783,6 +801,8 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	}
 
 	fun disconnect(addr: InetSocketAddress) {
+		explicitlyDisconnected.add(addr)
+		pendingReconnects.remove(addr)
 		connectionMap[addr]?.close()
 		tcpServer?.nodeList?.firstOrNull { !it.isClosed() && it.remoteAddress == addr }?.close()
 	}
@@ -1075,6 +1095,8 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		tcpServer = null
 		mcd = null
 		sd = null
+		pendingReconnects.clear()
+		explicitlyDisconnected.clear()
 		log("Server stopped")
 	}
 
@@ -1265,6 +1287,20 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	private val ephemeralIdentities = CopyOnWriteArrayList<Identity>()
 	private val connectionMap = Collections.synchronizedMap(mutableMapOf<InetSocketAddress, TCPNode>())
 	private val nodesWithoutAutoSync = Collections.synchronizedSet(mutableSetOf<TCPNode>())
+
+	data class ReconnectTarget(
+		val addr: InetSocketAddress,
+		val firstFailedAtMs: Long,
+		var nextAttemptMs: Long,
+		var attemptCount: Int = 0,
+		val isRelay: Boolean = false,
+		val autoSync: Boolean = true
+	)
+
+	private val pendingReconnects = ConcurrentHashMap<InetSocketAddress, ReconnectTarget>()
+	private val explicitlyDisconnected = Collections.synchronizedSet(mutableSetOf<InetSocketAddress>())
+	@Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
+	private val reconnectSignal = java.lang.Object()
 
 	// ── Connection lifecycle callbacks ────────────────────────────────────────
 	private val onNodeConnectedListeners = mutableListOf<(node: TCPNode, inbound: Boolean) -> Unit>()
@@ -1569,6 +1605,76 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 					break
 				} catch (e: Exception) {
 					log("GraffitiPing: ${e.message}")
+				}
+			}
+		}
+
+		thread(isDaemon = true, name = "GraffitiReconnect") {
+			while (!Thread.interrupted()) {
+				try {
+					synchronized(reconnectSignal) {
+						reconnectSignal.wait(1000L)
+					}
+					processPendingReconnects()
+				} catch (_: InterruptedException) {
+					break
+				} catch (e: Exception) {
+					log("GraffitiReconnect: ${e.message}")
+				}
+			}
+		}
+	}
+
+	fun retryPendingConnectionsImmediately() {
+		val now = System.currentTimeMillis()
+		pendingReconnects.values.forEach { it.nextAttemptMs = now }
+		synchronized(reconnectSignal) {
+			reconnectSignal.notifyAll()
+		}
+	}
+
+	private fun processPendingReconnects() {
+		if (pendingReconnects.isEmpty()) return
+		val now = System.currentTimeMillis()
+		val maxDurationMs = 5 * 60 * 1000L // 5 minutes
+
+		val toAttempt = mutableListOf<ReconnectTarget>()
+		val iterator = pendingReconnects.entries.iterator()
+		while (iterator.hasNext()) {
+			val entry = iterator.next()
+			val target = entry.value
+			if (now - target.firstFailedAtMs > maxDurationMs) {
+				log("Auto-reconnect expired for ${target.addr} after 5 minutes")
+				iterator.remove()
+				continue
+			}
+			if (target.nextAttemptMs <= now) {
+				toAttempt.add(target)
+			}
+		}
+
+		for (target in toAttempt) {
+			val existing = connectionMap[target.addr]
+			if (existing != null && !existing.isClosed()) {
+				pendingReconnects.remove(target.addr)
+				continue
+			}
+			target.attemptCount++
+			val backoffMs = when (target.attemptCount) {
+				1 -> 5_000L
+				2 -> 10_000L
+				3 -> 20_000L
+				else -> 30_000L
+			}
+			target.nextAttemptMs = now + backoffMs
+			async {
+				try {
+					debug("Attempting auto-reconnect to ${target.addr} (attempt ${target.attemptCount})...")
+					getTCPNode(target.addr, target.autoSync)
+					pendingReconnects.remove(target.addr)
+					log("Auto-reconnect succeeded for ${target.addr}")
+				} catch (e: Exception) {
+					debug("Auto-reconnect failed for ${target.addr}: ${e.message}")
 				}
 			}
 		}
