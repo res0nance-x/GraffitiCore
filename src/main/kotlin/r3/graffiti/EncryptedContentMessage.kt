@@ -8,12 +8,14 @@ import java.io.DataOutputStream
 // Signals that the file is Content data
 class EncryptedContentMessage(
 	val eMeta: EncryptedContentMetaData,
-	val contentLength: Long = 0L
+	val contentLength: Long = 0L,
+	val offset: Long = 0L
 ) : Writable {
 	override fun write(dos: DataOutputStream) {
 		StringWritable(type).write(dos)
 		dos.writeLong(contentLength)
 		eMeta.write(dos)
+		dos.writeLong(offset)
 	}
 
 	companion object {
@@ -25,7 +27,14 @@ class EncryptedContentMessage(
 			}
 			val contentLength = dis.readLong()
 			val eMeta = EncryptedContentMetaData.read(dis)
-			return EncryptedContentMessage(eMeta, contentLength)
+			val offset = if (dis.available() >= 8) {
+				try {
+					dis.readLong()
+				} catch (_: Exception) {
+					0L
+				}
+			} else 0L
+			return EncryptedContentMessage(eMeta, contentLength, offset)
 		}
 	}
 }

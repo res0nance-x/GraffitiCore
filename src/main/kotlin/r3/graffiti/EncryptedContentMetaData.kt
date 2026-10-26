@@ -57,12 +57,29 @@ class EncryptedContentMetaData(
 	}
 
 	fun verify(peer: Peer, contentSource: Source, identity: Identity): Boolean {
-		if (!verify(peer)) return false
+		if (!verify(peer)) {
+			r3.io.log("verify failed: author signature invalid for ${author.name}")
+			return false
+		}
 		return try {
-			val (_, pass) = decrypt(identity)
+			val (meta, pass) = decrypt(identity)
+			val srcLen = contentSource.length
+			r3.io.log("verify content for ${key.name}: expected length=${meta.length}, file size=$srcLen")
+			if (srcLen != meta.length) {
+				r3.io.log("verify failed: file length mismatch! expected=${meta.length}, actual=$srcLen")
+				return false
+			}
 			val hash = EncryptSource(pass, contentSource).hash256()
-			contentKey.arr.contentEquals(hash)
-		} catch (e: Exception) {
+			val matches = contentKey.arr.contentEquals(hash)
+			if (!matches) {
+				r3.io.log("verify failed: hash mismatch for ${key.name}! expected=${contentKey.name}, calculated=${r3.key.Key256(hash).name}")
+			} else {
+				r3.io.log("verify succeeded for ${key.name}")
+			}
+			matches
+		} catch (e: Throwable) {
+			r3.io.log("verify failed with exception for ${key.name}: ${e.javaClass.simpleName}: ${e.message}")
+			e.printStackTrace()
 			false
 		}
 	}
