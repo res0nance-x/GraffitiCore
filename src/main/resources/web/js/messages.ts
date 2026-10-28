@@ -851,6 +851,13 @@ const isText = (t?: string) => Boolean(t && textExtensions.has(t.toLowerCase()))
 const isAudio = (t?: string) => Boolean(t && audioExtensions.has(t.toLowerCase()));
 const isVideo = (t?: string) => Boolean(t && videoExtensions.has(t.toLowerCase()));
 const isHtml = (t?: string) => Boolean(t && htmlExtensions.has(t.toLowerCase()));
+const packExtensions = new Set(['pack', 'epack', 'mhtml', 'mht', 'zip']);
+export const isPackFile = (name?: string, type?: string) => {
+   if (type && packExtensions.has(type.toLowerCase())) return true;
+   if (!name) return false;
+   const ext = name.split('.').pop()?.toLowerCase();
+   return Boolean(ext && packExtensions.has(ext));
+};
 
 function pickTemplateId(type?: string, hasContent?: boolean): string {
    if (hasContent === false) return 'tpl-placeholder-message';
@@ -1498,11 +1505,11 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
          link.textContent = msg.name ? `⬇ Download ${msg.name}${sizeStr}` : (msg.type ? `⬇ Download file${sizeStr}` : 'Loading message...');
       }
 
-      const isPackFile = msg.name && (msg.name.toLowerCase().endsWith('.pack') || msg.name.toLowerCase().endsWith('.epack'));
-      const isHtmlFile = isHtml(msg.type) || (msg.name && (msg.name.toLowerCase().endsWith('.html') || msg.name.toLowerCase().endsWith('.htm')));
+      const isPack = isPackFile(msg.name, msg.type);
+      const isHtmlFile = !isPack && (isHtml(msg.type) || (msg.name && (msg.name.toLowerCase().endsWith('.html') || msg.name.toLowerCase().endsWith('.htm'))));
 
       let viewBtn = el.querySelector<HTMLButtonElement>('.btn-view-media');
-      if (!viewBtn && (isPackFile || isHtmlFile)) {
+      if (!viewBtn && (isPack || isHtmlFile)) {
          viewBtn = document.createElement('button');
          viewBtn.type = 'button';
          viewBtn.className = 'btn-view-media';
@@ -1510,13 +1517,13 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
          viewBtn.style.display = 'inline-flex';
          viewBtn.style.alignItems = 'center';
          viewBtn.style.gap = '0.25rem';
-         viewBtn.innerHTML = isPackFile
+         viewBtn.innerHTML = isPack
             ? '<span class="material-symbols-outlined" style="font-size: 1rem;">open_in_new</span> Launch'
             : '<span class="material-symbols-outlined" style="font-size: 1rem;">visibility</span> View';
          viewBtn.onclick = (e) => {
             e.preventDefault();
             e.stopPropagation();
-            if (isPackFile) {
+            if (isPack) {
                void openPackFile({encKey: msg.key, name: msg.name});
             } else {
                openFullContentViewer(msg);
@@ -2738,8 +2745,8 @@ function initTextViewerControls(): void {
 }
 
 export function openFullContentViewer(msg: MessageData, fullText?: string): void {
-   const isPackFile = msg.name && (msg.name.toLowerCase().endsWith('.pack') || msg.name.toLowerCase().endsWith('.epack'));
-   if (isPackFile) {
+   const isPack = isPackFile(msg.name, msg.type);
+   if (isPack) {
       void openPackFile({encKey: msg.key, name: msg.name});
       return;
    }
@@ -3099,7 +3106,7 @@ document.addEventListener('click', (e: MouseEvent) => {
       if (key) {
          const msg = allFilteredMessages.find(m => m.key === key);
          if (msg) {
-            const isPack = msg.name && (msg.name.toLowerCase().endsWith('.pack') || msg.name.toLowerCase().endsWith('.epack'));
+            const isPack = isPackFile(msg.name, msg.type);
             if (isPack) {
                void openPackFile({encKey: msg.key, name: msg.name});
             } else {

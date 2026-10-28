@@ -207,19 +207,20 @@
 			</ul>
 		</li>
 	</ul>
-	<h3 id='pack-files-pack--epack'>Pack Files (.pack &amp; .epack)</h3>
-	<p>A <strong>Pack file</strong> is an open-source archive format engineered specifically for in-place streaming,
-		seeking, and encrypted streaming (<code>.epack</code>) without requiring temporary extraction to disk.</p>
+	<h3 id='pack-files-pack--epack'>Pack Files (.pack, .epack, .mhtml &amp; .zip)</h3>
+	<p>Graffiti supports viewing and streaming archive packages directly without extracting them to disk. In addition to native <strong>Pack files</strong> (<code>.pack</code> and password-encrypted <code>.epack</code>), web archives (<strong>MHTML</strong> / <code>.mhtml</code>, <code>.mht</code>) and <strong>ZIP</strong> archives (<code>.zip</code>) can be launched directly as pack formats.</p>
 	<ul>
 		<li>
-			<p><strong>Instant Streaming &amp; Seeking:</strong> Unlike standard ZIP or TAR archives that must be fully
-				unpacked, Pack files support random position seeking. You can instantly jump forward and backward in
-				multi-gigabyte video or audio files without waiting for a full file download or decryption.</p>
+			<p><strong>Instant Streaming &amp; Seeking:</strong> Pack files support random position seeking and in-place streaming. You can jump forward and backward in multi-gigabyte media without waiting for a full file download or disk extraction.</p>
 		</li>
 		<li>
-			<p><strong>Encrypted Packs (.epack):</strong> Encrypted with a password and decrypted on-the-fly in memory
-				as
-				data blocks are read.</p>
+			<p><strong>Encrypted Packs (.epack):</strong> Encrypted with a password and decrypted on-the-fly in memory as data blocks are read.</p>
+		</li>
+		<li>
+			<p><strong>MHTML Web Archives (.mhtml, .mht):</strong> Self-contained web pages saved with complete styles, scripts, fonts, and images are indexed and rendered with link resolution in an isolated sandbox.</p>
+		</li>
+		<li>
+			<p><strong>ZIP Archives (.zip):</strong> Standard ZIP files are accessed in-place as packs, allowing you to browse embedded websites (with <code>index.html</code>) or view media files directly in the Pack Viewer.</p>
 		</li>
 		<li>
 			<p><strong>Rich Collections:</strong> A pack file can bundle an entire website, interactive web app, photo
