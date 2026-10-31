@@ -2,9 +2,11 @@ package r3.graffiti
 
 import r3.content.Content
 import r3.content.ContentMeta
+import r3.encryption.EncryptedContinuousOutputStream
 import r3.hash.hash256
 import r3.io.*
 import r3.key.hash256
+import r3.math.EncryptedSequence
 import r3.net.discover.*
 import r3.net.tcp.TCPNode
 import r3.net.tcp.TCPServer
@@ -13,8 +15,6 @@ import r3.source.FileSink
 import r3.source.FileSource
 import r3.source.ListWritable
 import r3.source.StringWritable
-import r3.encryption.EncryptedContinuousOutputStream
-import r3.math.EncryptedSequence
 import r3.thread.async
 import java.io.ByteArrayInputStream
 import java.io.DataInputStream

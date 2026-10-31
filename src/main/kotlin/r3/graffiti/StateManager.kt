@@ -2,7 +2,6 @@ package r3.graffiti
 
 import r3.org.json.JSONArray
 import r3.org.json.JSONObject
-import r3.pke.EncryptedMetaKey
 import r3.pke.name
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong

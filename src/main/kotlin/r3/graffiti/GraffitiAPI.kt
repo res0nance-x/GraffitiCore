@@ -4,27 +4,25 @@ import org.nanohttpd.protocols.http.response.Response
 import org.nanohttpd.protocols.http.response.Status
 import r3.content.*
 import r3.http.ContentHandler
-import r3.io.*
+import r3.io.DEFAULT_COPY_BUFFER_SIZE
+import r3.io.log
+import r3.io.serialize
 import r3.key.Key256
 import r3.org.json.JSONArray
 import r3.org.json.JSONObject
-import r3.pke.*
 import r3.pack.BinaryPack
 import r3.pack.DirPack
+import r3.pke.*
 import r3.source.FileSink
 import r3.source.FileSource
 import r3.source.readString
 import java.io.DataInputStream
-import r3.encryption.EncryptedContinuousInputStream
-import r3.math.EncryptedSequence
 import java.io.File
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.URLDecoder
-import java.security.MessageDigest
-import java.util.Base64
-import java.util.UUID
+import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 
 class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : ContentHandler {

@@ -1,7 +1,7 @@
 import {graffiti, IdentityEntry, PeerEntry} from './graffiti-api.js';
 import {buildTable, TableItem} from './table.js';
 import {showDialog} from './dialog.js';
-import {onSectionShow, onWsEvent, onWsOpen} from './app.js';
+import {onSectionShow} from './app.js';
 
 const identitiesTable = document.getElementById('identities') as HTMLTableElement;
 const peersTable = document.getElementById('peers') as HTMLTableElement;

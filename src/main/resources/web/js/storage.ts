@@ -1,5 +1,5 @@
-import { showSection, onSectionShow } from './app.js';
-import { graffiti } from './graffiti-api.js';
+import {onSectionShow, showSection} from './app.js';
+import {graffiti} from './graffiti-api.js';
 
 // ── Help Documentation Navigation & Dynamic Loading ─────────────────────────
 const showHelpBtn = document.getElementById('btn-show-help') as HTMLButtonElement | null;

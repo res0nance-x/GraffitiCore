@@ -1,5 +1,5 @@
 import {ActiveCommand, DecryptedMessageMeta, graffiti, IdentityEntry, openPackFile, PeerEntry} from './graffiti-api.js';
-import {onSectionShow, onWsEvent, onWsOpen, showSection} from './app.js';
+import {onSectionShow, onWsEvent, showSection} from './app.js';
 import {showDialog, showProgressModal} from './dialog.js';
 import {attachCustomAudioPlayer} from './audio-player.js';
 

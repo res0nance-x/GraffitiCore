@@ -1,25 +1,15 @@
 package r3.graffiti
 
-import r3.content.BinaryContent
 import r3.content.FileContent
 import r3.content.TextContent
 import r3.io.log
 import r3.pack.BinaryPack
 import r3.pack.DirPack
-import r3.encryption.EncryptedContinuousOutputStream
-import r3.io.DEFAULT_COPY_BUFFER_SIZE
-import r3.math.EncryptedSequence
-import r3.org.json.JSONObject
-import r3.pke.*
+import r3.pke.EncryptedMetaKey
+import r3.pke.IdentityKey
 import r3.source.FileSink
 import java.io.File
-import java.security.MessageDigest
-import java.util.Base64
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
-import java.util.concurrent.Future
-import java.util.concurrent.ThreadFactory
+import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicInteger
 
 class CommandQueue(

@@ -3,7 +3,7 @@
  */
 
 import {onSectionShow, onWsEvent, onWsOpen} from './app.js';
-import {ConnectionEntry, NodeStateEntry, graffiti} from './graffiti-api.js';
+import {graffiti, NodeStateEntry} from './graffiti-api.js';
 
 // ── State ─────────────────────────────────────────────────────────────────────
 

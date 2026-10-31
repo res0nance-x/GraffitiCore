@@ -2,7 +2,12 @@ import {graffiti} from './graffiti-api.js';
 import {onWsEvent, onWsOpen} from './app.js';
 import {applyNodesState, applyRelayState, applyServerState, updateNetTransferIndicator} from './network.js';
 import {applyContactsState, applyWhitelistState} from './identity.js';
-import {applyActiveCommandsState, applyMessagesContactsState, applyMessagesState, updateMsgIndicator} from './messages.js';
+import {
+   applyActiveCommandsState,
+   applyMessagesContactsState,
+   applyMessagesState,
+   updateMsgIndicator
+} from './messages.js';
 
 let currentVersion = -1;
 let lastNodesVersion = -1;

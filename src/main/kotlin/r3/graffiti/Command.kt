@@ -5,7 +5,7 @@ import r3.pke.EncryptedMetaKey
 import r3.pke.IdentityKey
 import r3.pke.PeerKey
 import java.io.File
-import java.util.UUID
+import java.util.*
 
 enum class CommandType {
 	SEND_TEXT,
