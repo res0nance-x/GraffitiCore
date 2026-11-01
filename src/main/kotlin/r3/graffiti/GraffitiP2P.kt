@@ -8,6 +8,7 @@ import r3.io.*
 import r3.key.hash256
 import r3.math.EncryptedSequence
 import r3.net.discover.*
+import r3.net.tcp.TCPBlockHandler
 import r3.net.tcp.TCPNode
 import r3.net.tcp.TCPServer
 import r3.pke.*
@@ -120,21 +121,6 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		return if (f.exists()) f.length() else 0L
 	}
 
-	private fun attachStreamProgress(node: TCPNode) {
-		node.onStreamProgress = { _, _, header, bytesWritten ->
-			try {
-				if (header.isNotEmpty()) {
-					val dis = DataInputStream(ByteArrayInputStream(header))
-					val type = StringWritable.read(dis).str
-					if (type == EncryptedContentMessage.type) {
-						val totalLength = dis.readLong()
-						val eMeta = EncryptedContentMetaData.read(dis)
-						onContentProgress?.invoke(eMeta.key, bytesWritten, totalLength)
-					}
-				}
-			} catch (_: Exception) {}
-		}
-	}
 	private val metaWarmupExecutor = Executors.newSingleThreadExecutor { r ->
 		Thread(r, "Graffiti-MetaWarmup").apply {
 			isDaemon = true
@@ -804,6 +790,27 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			}
 		}
 
+	val blockHandler = TCPBlockHandler(
+		tmpDir = tmpDir,
+		maxStreamSize = MAX_STREAM_SIZE,
+		streamTimeoutMs = DEFAULT_STREAM_TIMEOUT_MS,
+		fileStreamFactory = ::createFileStreamForHeader,
+		onStreamProgress = { _, _, header, bytesWritten ->
+			try {
+				if (header.isNotEmpty()) {
+					val dis = DataInputStream(ByteArrayInputStream(header))
+					val type = StringWritable.read(dis).str
+					if (type == EncryptedContentMessage.type) {
+						val totalLength = dis.readLong()
+						val eMeta = EncryptedContentMetaData.read(dis)
+						onContentProgress?.invoke(eMeta.key, bytesWritten, totalLength)
+					}
+				}
+			} catch (_: Exception) {}
+		},
+		contentHandler = contentHandler
+	)
+
 	/** Send a challenge nonce to [node] and remember it so we can verify their response. */
 	private fun sendChallenge(node: TCPNode) {
 		try {
@@ -828,8 +835,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			socket.tcpNoDelay = true
 		} catch (_: Exception) {}
 		socket.connect(addr)
-		val newNode = TCPNode(socket, tmpDir, contentHandler, maxStreamSize = MAX_STREAM_SIZE, streamTimeoutMs = DEFAULT_STREAM_TIMEOUT_MS, fileStreamFactory = ::createFileStreamForHeader)
-		attachStreamProgress(newNode)
+		val newNode = TCPNode(socket, blockHandler)
 		newNode.onTransferStateChanged = { checkAndNotifyTransferState() }
 		newNode.onClose = {
 			val alias = nodePeerMap[newNode]?.key?.name ?: "unknown"
@@ -1110,12 +1116,11 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	fun startTCPServer(port: Int) {
 		val nodeList = CopyOnWriteArrayList<TCPNode>()
 		TCPServer(
-			nodeList, tmpDir, contentHandler, InetSocketAddress(port),
+			blockHandler = blockHandler,
+			nodeList = nodeList,
+			address = InetSocketAddress(port),
 			serverKey = ServerKey(serverIdentity.key.arr),
-			maxStreamSize = MAX_STREAM_SIZE,
-			streamTimeoutMs = DEFAULT_STREAM_TIMEOUT_MS,
 			onAccept = { node ->
-				attachStreamProgress(node)
 				node.onTransferStateChanged = { checkAndNotifyTransferState() }
 				node.onClose = {
 					val alias = nodePeerMap[node]?.key?.name ?: "unknown"
@@ -1127,8 +1132,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 				}
 				notifyNodeConnected(node, true)
 				sendChallenge(node)
-			},
-			fileStreamFactory = ::createFileStreamForHeader
+			}
 		).also {
 			tcpServer = it
 			it.start(false)

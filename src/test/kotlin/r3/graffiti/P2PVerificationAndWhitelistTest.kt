@@ -142,7 +142,7 @@ class P2PVerificationAndWhitelistTest {
 			val port = serverSocket.localPort
 			Socket("127.0.0.1", port).use { clientSocket ->
 				serverSocket.accept().use { acceptedSocket ->
-					val nodeB = r3.net.tcp.TCPNode(acceptedSocket, p2pB.tmpDir, p2pB.contentHandler)
+					val nodeB = r3.net.tcp.TCPNode(acceptedSocket, p2pB.blockHandler)
 
 					// Calling contentHandler: should reject because author is unknown
 					p2pB.contentHandler(nodeB, rawHead, tempContentFile)
