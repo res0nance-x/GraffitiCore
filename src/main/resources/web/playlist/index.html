@@ -1078,7 +1078,24 @@
 				video.src = file.path;
 				video.controls = true;
 				video.autoplay = isPlaying;
-				video.onended = () => { if (document.getElementById('autoAdvanceCheck').checked) nextItem(); };
+				video.addEventListener('play', () => {
+					isPlaying = true;
+					updatePlayPauseUI();
+				});
+				video.addEventListener('pause', () => {
+					if (currentMediaElement === video && !video.ended) {
+						isPlaying = false;
+						updatePlayPauseUI();
+					}
+				});
+				video.onended = () => {
+					if (document.getElementById('autoAdvanceCheck').checked && allFiles.length > 1) {
+						nextItem();
+					} else {
+						isPlaying = false;
+						updatePlayPauseUI();
+					}
+				};
 				stage.appendChild(video);
 				currentMediaElement = video;
 				break;
@@ -1155,6 +1172,24 @@
 		const file = allFiles[currentIndex];
 		window.location.href = file.path;
 	}
+
+	function onHostPause() {
+		if (!isPlaying) return;
+		if (currentMediaElement) {
+			if (currentMediaElement.tagName === 'VIDEO') {
+				togglePlayPause();
+			}
+		} else if (timerAnimFrame) {
+			togglePlayPause();
+		}
+	}
+	window.onHostPause = onHostPause;
+
+	document.addEventListener('visibilitychange', () => {
+		if (document.visibilityState === 'hidden') {
+			onHostPause();
+		}
+	});
 
 	document.addEventListener('keydown', (e) => {
 		if (e.target.tagName === 'INPUT') return;

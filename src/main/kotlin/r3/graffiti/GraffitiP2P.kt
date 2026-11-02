@@ -28,6 +28,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
@@ -1113,6 +1114,11 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	private var tcpServer: TCPServer? = null
 	private var mcd: MulticastDiscoverServer? = null
 	private var sd: ScanDiscoverServer? = null
+	private val activeMulticastDiscoveries = AtomicInteger(0)
+
+	fun isMulticastNeeded(): Boolean =
+		(tcpServer != null && !tcpServer!!.socketServer.isClosed) || activeMulticastDiscoveries.get() > 0
+
 	fun startTCPServer(port: Int) {
 		val nodeList = CopyOnWriteArrayList<TCPNode>()
 		TCPServer(
@@ -1137,6 +1143,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			tcpServer = it
 			it.start(false)
 			log("TCP server started on ${it.peerAddressInfo}")
+			notifyMulticastStateChanged()
 			// Advertise the server identity key so that peers discovering us
 			// see the stable server avatar/name, not an IP-hash key.
 			val discoverInfo =
@@ -1160,6 +1167,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		tcpServer = null
 		mcd = null
 		sd = null
+		notifyMulticastStateChanged()
 		pendingReconnects.clear()
 		explicitlyDisconnected.clear()
 		activeStreamVerifiers.values.forEach { it.close() }
@@ -1373,6 +1381,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	private val onNodeConnectedListeners = mutableListOf<(node: TCPNode, inbound: Boolean) -> Unit>()
 	private val onNodeDisconnectedListeners = mutableListOf<(node: TCPNode) -> Unit>()
 	private val onTransferStateChangedListeners = mutableListOf<(isTransferring: Boolean) -> Unit>()
+	private val onMulticastStateChangedListeners = mutableListOf<(needed: Boolean) -> Unit>()
 
 	/** Fired when a greeting is received and the peer's signature is verified. */
 	private val onNodeIdentifiedListeners = mutableListOf<(node: TCPNode, peer: Peer) -> Unit>()
@@ -1392,6 +1401,10 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 
 	fun addOnTransferStateChangedListener(listener: (isTransferring: Boolean) -> Unit) {
 		onTransferStateChangedListeners.add(listener)
+	}
+
+	fun addOnMulticastStateChangedListener(listener: (needed: Boolean) -> Unit) {
+		onMulticastStateChangedListeners.add(listener)
 	}
 
 	fun addOnNodeIdentifiedListener(listener: (node: TCPNode, peer: Peer) -> Unit) {
@@ -1463,6 +1476,16 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		for (listener in onTransferStateChangedListeners) {
 			try {
 				listener(transferring)
+			} catch (_: Exception) {
+			}
+		}
+	}
+
+	private fun notifyMulticastStateChanged() {
+		val needed = isMulticastNeeded()
+		for (listener in onMulticastStateChangedListeners) {
+			try {
+				listener(needed)
 			} catch (_: Exception) {
 			}
 		}
@@ -1804,7 +1827,18 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 				if (seen.add(addr.serverKey)) found(addr)
 			}
 			// Multicast blocks for ~1 s internally — run it concurrently with the scan.
-			val mFuture = async { MulticastDiscover().discover { notify(it) } }
+			activeMulticastDiscoveries.incrementAndGet()
+			notifyMulticastStateChanged()
+			val mFuture = async {
+				try {
+					MulticastDiscover().discover { notify(it) }
+				} finally {
+					if (activeMulticastDiscoveries.decrementAndGet() <= 0) {
+						activeMulticastDiscoveries.set(0)
+						notifyMulticastStateChanged()
+					}
+				}
+			}
 			if (scan) {
 				ScanDiscover().discover { notify(it) }
 				// Give both mechanisms up to 6 s (covers large /24 subnet scans).
