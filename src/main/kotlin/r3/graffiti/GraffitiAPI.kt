@@ -77,6 +77,13 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 				put("progress", percent)
 			})
 		}
+		p2p.onContentDownloadFailed = { key, error ->
+			sendToAll(JSONObject().apply {
+				put("event", "content_download_failed")
+				put("messageKey", key.toString())
+				put("error", error)
+			})
+		}
 		p2p.setWhitelistEnabled(loadSetting("graffiti:whitelist-enabled") == "true")
 	}
 

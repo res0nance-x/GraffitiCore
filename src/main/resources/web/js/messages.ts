@@ -1344,7 +1344,40 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
       return el;
    }
 
-   if (isText(msg.type)) {
+   if (msg.hasContent === false) {
+      const fileNameEl = el.querySelector<HTMLElement>('.placeholder-file-name');
+      const fileSizeEl = el.querySelector<HTMLElement>('.placeholder-file-size');
+      const downloadBtn = el.querySelector<HTMLButtonElement>('.btn-download-content');
+      const progressContainer = el.querySelector<HTMLElement>('.placeholder-progress-container');
+      const progressText = el.querySelector<HTMLElement>('.placeholder-progress-text');
+
+      if (fileNameEl) fileNameEl.textContent = msg.name || 'Large File';
+      if (fileSizeEl) fileSizeEl.textContent = msg.size ? formatSize(msg.size) : '';
+
+      if (downloadBtn) {
+         downloadBtn.onclick = async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            downloadBtn.disabled = true;
+            downloadBtn.textContent = 'Requesting...';
+            if (progressContainer) progressContainer.style.display = 'block';
+            if (progressText) {
+               progressText.textContent = 'Requesting download from peer...';
+               progressText.style.color = '';
+            }
+            try {
+               await graffiti.downloadMessageContent(msg.key);
+            } catch (err: any) {
+               if (progressText) {
+                  progressText.textContent = `Download failed: ${err.message}`;
+                  progressText.style.color = '#ef4444';
+               }
+               downloadBtn.disabled = false;
+               downloadBtn.textContent = '⬇ Download';
+            }
+         };
+      }
+   } else if (isText(msg.type)) {
       const pre = el.querySelector<HTMLPreElement>('.msg-text-content');
       if (pre) {
          const renderText = (t: string) => {
@@ -1460,39 +1493,6 @@ function createMessageElement(msg: MessageData): HTMLElement | null {
             openFullContentViewer(msg);
          };
          video?.after(viewBtn);
-      }
-   } else if (msg.hasContent === false) {
-      const fileNameEl = el.querySelector<HTMLElement>('.placeholder-file-name');
-      const fileSizeEl = el.querySelector<HTMLElement>('.placeholder-file-size');
-      const downloadBtn = el.querySelector<HTMLButtonElement>('.btn-download-content');
-      const progressContainer = el.querySelector<HTMLElement>('.placeholder-progress-container');
-      const progressText = el.querySelector<HTMLElement>('.placeholder-progress-text');
-
-      if (fileNameEl) fileNameEl.textContent = msg.name || 'Large File';
-      if (fileSizeEl) fileSizeEl.textContent = msg.size ? formatSize(msg.size) : '';
-
-      if (downloadBtn) {
-         downloadBtn.onclick = async (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            downloadBtn.disabled = true;
-            downloadBtn.textContent = 'Requesting...';
-            if (progressContainer) progressContainer.style.display = 'block';
-            if (progressText) {
-               progressText.textContent = 'Requesting download from peer...';
-               progressText.style.color = '';
-            }
-            try {
-               await graffiti.downloadMessageContent(msg.key);
-            } catch (err: any) {
-               if (progressText) {
-                  progressText.textContent = `Download failed: ${err.message}`;
-                  progressText.style.color = '#ef4444';
-               }
-               downloadBtn.disabled = false;
-               downloadBtn.textContent = '⬇ Download';
-            }
-         };
       }
    } else {
       const fileNameEl = el.querySelector<HTMLElement>('.msg-file-name');
@@ -3374,5 +3374,27 @@ onWsEvent('content_progress', (data: any) => {
       }
    }
 });
+
+onWsEvent('content_download_failed', (data: any) => {
+   const msgKey = data.messageKey;
+   if (!msgKey) return;
+   const msgEl = messagesContainer?.querySelector<HTMLElement>(`[data-msg-key="${CSS.escape(msgKey)}"]`);
+   if (msgEl) {
+      const container = msgEl.querySelector<HTMLElement>('.placeholder-progress-container');
+      const text = msgEl.querySelector<HTMLElement>('.placeholder-progress-text');
+      const dlBtn = msgEl.querySelector<HTMLButtonElement>('.btn-download-content');
+      if (container) container.style.display = 'block';
+      if (text) {
+         text.textContent = `Download failed: ${data.error || 'No connected peer has this content'}`;
+         text.style.color = '#ef4444';
+      }
+      if (dlBtn) {
+         dlBtn.style.display = '';
+         dlBtn.disabled = false;
+         dlBtn.textContent = '⬇ Download';
+      }
+   }
+});
+
 
 

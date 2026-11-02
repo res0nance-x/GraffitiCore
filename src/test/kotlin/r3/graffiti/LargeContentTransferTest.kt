@@ -186,4 +186,98 @@ class LargeContentTransferTest {
 		nodeToSender.close()
 		p2pSender.stopTCPServer()
 	}
+
+	@Test
+	fun testNodeBlindFallbackAcrossMultipleConnections(
+		@TempDir dirRelay: File,
+		@TempDir dirEmptyPeer: File,
+		@TempDir dirHolderPeer: File,
+		@TempDir dirReceiver: File
+	) {
+		val p2pRelay = GraffitiP2P(dirRelay, relayEnabledAtStartup = true).apply {
+			relayMaxContentSizeBytes = 1000L
+		}
+		val p2pEmptyPeer = GraffitiP2P(dirEmptyPeer)
+		val p2pHolderPeer = GraffitiP2P(dirHolderPeer)
+		val p2pReceiver = GraffitiP2P(dirReceiver).apply {
+			autoDownloadThresholdBytes = 1000L
+		}
+
+		p2pRelay.startTCPServer(0)
+		p2pEmptyPeer.startTCPServer(0)
+		p2pHolderPeer.startTCPServer(0)
+
+		val relayPort = p2pRelay.serverPort!!
+		val emptyPeerPort = p2pEmptyPeer.serverPort!!
+		val holderPeerPort = p2pHolderPeer.serverPort!!
+
+		val alice = p2pHolderPeer.createIdentity("alice-author")
+		val bob = p2pReceiver.createIdentity("bob-recipient")
+		p2pHolderPeer.savePeer(bob.asPeer())
+		p2pReceiver.savePeer(alice.asPeer())
+
+		// Connect Receiver to Relay first, then EmptyPeer, then HolderPeer
+		val nodeToRelay = p2pReceiver.getTCPNode(InetSocketAddress("127.0.0.1", relayPort))
+		val nodeToEmpty = p2pReceiver.getTCPNode(InetSocketAddress("127.0.0.1", emptyPeerPort))
+		val nodeToHolder = p2pReceiver.getTCPNode(InetSocketAddress("127.0.0.1", holderPeerPort))
+
+		val connectDeadline = System.currentTimeMillis() + 5000L
+		while (System.currentTimeMillis() < connectDeadline &&
+			(!p2pReceiver.isConnectedToPeer(p2pRelay.serverIdentity.asPeer().key) ||
+				!p2pReceiver.isConnectedToPeer(p2pEmptyPeer.serverIdentity.asPeer().key) ||
+				!p2pReceiver.isConnectedToPeer(p2pHolderPeer.serverIdentity.asPeer().key))
+		) {
+			Thread.sleep(50)
+		}
+
+		// HolderPeer creates a 20 KB file (> 1 KB threshold)
+		val payload = "Node-blind fallback test payload ".repeat(700).toByteArray()
+		val uploadFile = File(dirHolderPeer, "archive.pack").apply { writeBytes(payload) }
+		val apiHolder = GraffitiAPI(p2pHolderPeer) {}
+		val apiReceiver = GraffitiAPI(p2pReceiver) {}
+
+		apiHolder.handle(JSONObject().apply {
+			put("path", "/api/message/send/file")
+			put("identityKey", alice.key.toString())
+			put("peerKey", bob.asPeer().key.toString())
+			put("file", "archive.pack")
+		}, FileContent(uploadFile))
+
+		val metaFile = p2pHolderPeer.metaDir.listFiles { f -> f.isFile }!!.first()
+		val msgKey = EncryptedMetaKey(metaFile.name)
+		p2pHolderPeer.pushNewMessage(msgKey)
+
+		// Wait for Receiver to receive metadata only
+		val metaDeadline = System.currentTimeMillis() + 5000L
+		while (System.currentTimeMillis() < metaDeadline && !File(p2pReceiver.metaDir, msgKey.toString()).exists()) {
+			Thread.sleep(50)
+		}
+		assertTrue(File(p2pReceiver.metaDir, msgKey.toString()).exists(), "Receiver should have metadata")
+		assertFalse(p2pReceiver.hasContent(msgKey), "Receiver should not have auto-downloaded large content")
+
+		// Simulate contentHolders cleared (e.g. after reconnect) or pointing to EmptyPeer first
+		p2pReceiver.contentHolders.clear()
+		p2pReceiver.contentHolders.computeIfAbsent(msgKey) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add(nodeToEmpty)
+
+		// Trigger manual download: should try EmptyPeer (gets ContentNotFound), then iterate and succeed from HolderPeer
+		val dlResp = apiReceiver.handle(JSONObject().apply {
+			put("path", "/api/message/download")
+			put("key", msgKey.toString())
+		}, null)
+		assertTrue(JSONObject(dlResp!!.readString()).getBoolean("ok"))
+
+		val dlDeadline = System.currentTimeMillis() + 10000L
+		while (System.currentTimeMillis() < dlDeadline && !p2pReceiver.hasContent(msgKey)) {
+			Thread.sleep(50)
+		}
+		assertTrue(p2pReceiver.hasContent(msgKey), "Receiver should download content by iterating through connected peers")
+		assertArrayEquals(payload, p2pReceiver.getContent(msgKey).createInputStream().use { it.readBytes() })
+
+		nodeToRelay.close()
+		nodeToEmpty.close()
+		nodeToHolder.close()
+		p2pRelay.stopTCPServer()
+		p2pEmptyPeer.stopTCPServer()
+		p2pHolderPeer.stopTCPServer()
+	}
 }

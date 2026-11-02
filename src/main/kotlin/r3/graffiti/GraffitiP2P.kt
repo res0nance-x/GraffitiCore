@@ -124,10 +124,23 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	@Volatile
 	var onContentProgress: ((key: EncryptedMetaKey, bytesWritten: Long, totalBytes: Long) -> Unit)? = null
 
+	@Volatile
+	var onContentDownloadFailed: ((key: EncryptedMetaKey, error: String) -> Unit)? = null
+
+	private val headerContentLengths = ConcurrentHashMap<EncryptedMetaKey, Long>()
+
 	fun getContentSize(key: EncryptedMetaKey): Long {
 		smallContentCache[key]?.let { return it.size.toLong() }
 		val f = File(contentDir, "$key")
 		return if (f.exists()) f.length() else 0L
+	}
+
+	fun getKnownContentSize(key: EncryptedMetaKey): Long {
+		val diskSize = getContentSize(key)
+		if (diskSize > 0L) return diskSize
+		getDecryptedMeta(key)?.first?.length?.takeIf { it > 0L }?.let { return it }
+		headerContentLengths[key]?.takeIf { it > 0L }?.let { return it }
+		return 0L
 	}
 
 	private val metaWarmupExecutor = Executors.newSingleThreadExecutor { r ->
@@ -377,6 +390,9 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 							debug("Received QueryResponse from ${node.remoteAddress}: ${headerList.size} header item(s)")
 							headerList.forEach { msgHeader ->
 								contentHolders.computeIfAbsent(msgHeader.key) { ConcurrentHashMap.newKeySet() }.add(node)
+								if (msgHeader.contentLength > 0L) {
+									headerContentLengths[msgHeader.key] = msgHeader.contentLength
+								}
 								if (isMessageDeleted(msgHeader.key)) return@forEach
 								if (msgHeader.author.arr.contentEquals(msgHeader.recipient.arr)) {
 									debug("Ignoring header ${msgHeader.key.name} from ${node.remoteAddress}: author and recipient are the same")
@@ -476,9 +492,14 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 						contentSenderExecutor.execute {
 							try {
 								val isAskingAll = nodeQueryMap[node]?.isAskingAllRecipients() == true
+								val missingKeys = mutableListOf<EncryptedMetaKey>()
+								val availableItems = mutableListOf<Triple<EncryptedMetaKey, EncryptedContentMetaData, ByteArray?>>()
 								req.keys.forEach { key ->
 									if (node.isClosed()) return@forEach
-									if (isMessageDeleted(key)) return@forEach
+									if (isMessageDeleted(key)) {
+										missingKeys.add(key)
+										return@forEach
+									}
 									val eMeta = metaCache[key] ?: run {
 										val metaFile = File(metaDir, "$key")
 										if (metaFile.exists()) {
@@ -487,45 +508,69 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 									}
 									if (isAskingAll && eMeta != null && isIgnoredForRelay(eMeta)) {
 										debug("Skipping sending ignored content ${key.name} to ${node.remoteAddress}")
+										missingKeys.add(key)
 										return@forEach
 									}
 									val smallBytes = smallContentCache[key]
-									if (eMeta != null) {
-										val contentFile = if (smallBytes == null) File(contentDir, "$key") else null
-										val hasContent = smallBytes != null || (contentFile?.exists() == true)
-										if (hasContent) {
-											val fileSize = smallBytes?.size?.toLong() ?: contentFile?.length() ?: 0L
-											val reqOffset = req.offsets[key] ?: 0L
-											val validOffset = if (reqOffset in 0L until fileSize) reqOffset else 0L
+									if (eMeta != null && (smallBytes != null || File(contentDir, "$key").exists())) {
+										availableItems.add(Triple(key, eMeta, smallBytes))
+									} else {
+										missingKeys.add(key)
+									}
+								}
+								if (missingKeys.isNotEmpty() && !node.isClosed()) {
+									node.sendPriority(ContentNotFoundMessage(missingKeys).serialize())
+									debug("Sent ContentNotFound for ${missingKeys.size} key(s) to ${node.remoteAddress}")
+								}
+								availableItems.forEach { (key, eMeta, smallBytes) ->
+									if (node.isClosed()) return@forEach
+									val contentFile = if (smallBytes == null) File(contentDir, "$key") else null
+									if (smallBytes != null || contentFile?.exists() == true) {
+										val fileSize = smallBytes?.size?.toLong() ?: contentFile?.length() ?: 0L
+										val reqOffset = req.offsets[key] ?: 0L
+										val validOffset = if (reqOffset in 0L until fileSize) reqOffset else 0L
 
-											if (smallBytes != null) {
-												if (validOffset > 0L) {
-													val slice = smallBytes.copyOfRange(validOffset.toInt(), smallBytes.size)
-													node.send(EncryptedContentMessage(eMeta, fileSize, validOffset).serialize(), slice)
-												} else {
-													node.send(EncryptedContentMessage(eMeta, fileSize, 0L).serialize(), smallBytes)
-												}
-											} else if (contentFile != null) {
-												if (validOffset > 0L) {
-													contentFile.inputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { istream ->
-														var toSkip = validOffset
-														while (toSkip > 0L) {
-															val skipped = istream.skip(toSkip)
-															if (skipped <= 0L) break
-															toSkip -= skipped
-														}
-														node.send(EncryptedContentMessage(eMeta, fileSize, validOffset).serialize(), istream)
-													}
-												} else {
-													node.send(EncryptedContentMessage(eMeta, fileSize, 0L).serialize(), contentFile)
-												}
+										if (smallBytes != null) {
+											if (validOffset > 0L) {
+												val slice = smallBytes.copyOfRange(validOffset.toInt(), smallBytes.size)
+												node.send(EncryptedContentMessage(eMeta, fileSize, validOffset).serialize(), slice)
+											} else {
+												node.send(EncryptedContentMessage(eMeta, fileSize, 0L).serialize(), smallBytes)
 											}
-											logOutgoing(node, key.name, fileSize)
+										} else if (contentFile != null) {
+											if (validOffset > 0L) {
+												contentFile.inputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { istream ->
+													var toSkip = validOffset
+													while (toSkip > 0L) {
+														val skipped = istream.skip(toSkip)
+														if (skipped <= 0L) break
+														toSkip -= skipped
+													}
+													node.send(EncryptedContentMessage(eMeta, fileSize, validOffset).serialize(), istream)
+												}
+											} else {
+												node.send(EncryptedContentMessage(eMeta, fileSize, 0L).serialize(), contentFile)
+											}
 										}
+										logOutgoing(node, key.name, fileSize)
 									}
 								}
 							} catch (e: Exception) {
 								logNodeError(node, "Error serving ContentRequest: ${e.message}")
+							}
+						}
+					}
+					ContentNotFoundMessage.type -> {
+						val msg = ContentNotFoundMessage.read(rawHead.toDataInputStream())
+						debug("Received ContentNotFound from ${node.remoteAddress} for ${msg.keys.size} key(s)")
+						msg.keys.forEach { key ->
+							contentHolders[key]?.remove(node)
+							val attempt = activeDownloadAttempts[key]
+							if (attempt != null && attempt.currentNode == node && !attempt.streamStarted) {
+								tryNextNodeForDownload(key)
+							} else if (inFlightNodeRequests[key] == node) {
+								inFlightNodeRequests.remove(key)
+								pendingContentRequests.remove(key)
 							}
 						}
 					}
@@ -642,6 +687,9 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 									val corruptFile = File(tmpDir, "${eMeta.key}.corrupt")
 									file.renameTo(corruptFile)
 									logNodeError(node, "Invalid content: signature or hash mismatch for ${eMeta.key.name} (file size ${if (corruptFile.exists()) corruptFile.length() else file.length()} bytes)")
+									if (activeDownloadAttempts[eMeta.key]?.currentNode == node) {
+										tryNextNodeForDownload(eMeta.key)
+									}
 									return@contentHandler
 								}
 								var contentStored = false
@@ -669,6 +717,8 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 								}
 								if (contentStored) {
 									logIncoming(node, eMeta.key.name, fileSize)
+									activeDownloadAttempts.remove(eMeta.key)
+									contentHolders.computeIfAbsent(eMeta.key) { ConcurrentHashMap.newKeySet() }.add(node)
 									pendingContentRequests.remove(eMeta.key)
 									inFlightNodeRequests.remove(eMeta.key)
 									batchPendingKeys[node]?.remove(eMeta.key)
@@ -1635,21 +1685,95 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 
 	fun isConnectedToPeer(peerKey: PeerKey): Boolean = getNodeForPeer(peerKey) != null
 
+	private class ContentDownloadAttempt(
+		val key: EncryptedMetaKey,
+		val remainingNodes: java.util.concurrent.ConcurrentLinkedQueue<TCPNode>,
+		val isManual: Boolean,
+		@Volatile var currentNode: TCPNode? = null,
+		@Volatile var streamStarted: Boolean = false,
+		@Volatile var attemptId: Long = 0L
+	)
+
+	private val activeDownloadAttempts = ConcurrentHashMap<EncryptedMetaKey, ContentDownloadAttempt>()
+	private val downloadAttemptCounter = AtomicLong(0L)
+
+	private fun buildCandidateNodes(key: EncryptedMetaKey): List<TCPNode> {
+		val knownHolders = contentHolders[key]?.filter { !it.isClosed() }.orEmpty()
+		val openNodes = allNodes.filter { !it.isClosed() }
+		val holderDirect = knownHolders.filter { !isNodeRelay(it) }
+		val holderRelays = knownHolders.filter { isNodeRelay(it) }
+		val otherDirect = openNodes.filter { !isNodeRelay(it) }
+		val otherRelays = openNodes.filter { isNodeRelay(it) }
+		return (holderDirect + holderRelays + otherDirect + otherRelays).distinct()
+	}
+
 	fun requestContentDownload(key: EncryptedMetaKey): Boolean {
 		if (hasContent(key)) return true
-		val targetNode = contentHolders[key]?.firstOrNull { !it.isClosed() }
-			?: run {
-				val meta = getMetaByKey(key) ?: return false
-				getNodeForPeer(meta.author)
-			}
-			?: allNodes.firstOrNull { !it.isClosed() }
-			?: return false
+		val candidates = buildCandidateNodes(key)
+		if (candidates.isEmpty()) return false
 
-		val now = System.currentTimeMillis()
-		pendingContentRequests[key] = now
-		inFlightNodeRequests[key] = targetNode
-		targetNode.send(createContentRequestMessage(listOf(key)).serialize())
-		return true
+		val attempt = ContentDownloadAttempt(
+			key = key,
+			remainingNodes = java.util.concurrent.ConcurrentLinkedQueue(candidates),
+			isManual = true
+		)
+		activeDownloadAttempts[key] = attempt
+		return tryNextNodeForDownload(key)
+	}
+
+	private fun tryNextNodeForDownload(key: EncryptedMetaKey): Boolean {
+		if (hasContent(key) || isMessageDeleted(key)) {
+			activeDownloadAttempts.remove(key)
+			return true
+		}
+		val attempt = activeDownloadAttempts[key] ?: return false
+		var nextNode: TCPNode? = null
+		var currentAttemptId = 0L
+		synchronized(attempt) {
+			var candidate = attempt.remainingNodes.poll()
+			while (candidate != null && candidate.isClosed()) {
+				candidate = attempt.remainingNodes.poll()
+			}
+			nextNode = candidate
+			if (nextNode == null) {
+				activeDownloadAttempts.remove(key, attempt)
+				pendingContentRequests.remove(key)
+				inFlightNodeRequests.remove(key)
+			} else {
+				currentAttemptId = downloadAttemptCounter.incrementAndGet()
+				attempt.currentNode = nextNode
+				attempt.streamStarted = false
+				attempt.attemptId = currentAttemptId
+				pendingContentRequests[key] = System.currentTimeMillis()
+				inFlightNodeRequests[key] = nextNode
+			}
+		}
+		val targetNode = nextNode
+		if (targetNode == null) {
+			debug("Exhausted all candidate nodes for content ${key.name}")
+			if (attempt.isManual) {
+				onContentDownloadFailed?.invoke(key, "No connected peer has this content")
+			}
+			return false
+		}
+		return try {
+			debug("Requesting content ${key.name} from ${targetNode.remoteAddress} (${attempt.remainingNodes.size} fallback node(s) remaining)")
+			targetNode.send(createContentRequestMessage(listOf(key)).serialize())
+			contentSenderExecutor.execute {
+				try {
+					Thread.sleep(5_000L)
+					val current = activeDownloadAttempts[key]
+					if (current != null && current.attemptId == currentAttemptId && !current.streamStarted && !hasContent(key)) {
+						debug("No response within 5s from ${targetNode.remoteAddress} for ${key.name}, trying next node")
+						tryNextNodeForDownload(key)
+					}
+				} catch (_: InterruptedException) {}
+			}
+			true
+		} catch (e: Exception) {
+			logNodeError(targetNode, "Failed to request content ${key.name}: ${e.message}")
+			tryNextNodeForDownload(key)
+		}
 	}
 
 	/** In-memory map of peer key to last query server time received. */
@@ -1709,6 +1833,10 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			} else false
 		}
 		pendingPeerContent.values.forEach { map -> map.entries.removeIf { it.value == node } }
+		val affectedAttempts = activeDownloadAttempts.values.filter { it.currentNode == node }
+		affectedAttempts.forEach { attempt ->
+			tryNextNodeForDownload(attempt.key)
+		}
 	}
 
 	/**
@@ -1727,8 +1855,8 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			if (hasContent(key)) return@forEach
 
 			// If client mode and content size exceeds autoDownloadThresholdBytes, wait for manual download
-			val contentLength = getContentSize(key)
-			if (!relayEnabled && autoDownloadThresholdBytes > 0L && contentLength > autoDownloadThresholdBytes) {
+			val contentLength = getKnownContentSize(key)
+			if (!relayEnabled && autoDownloadThresholdBytes > 0L && (contentLength > autoDownloadThresholdBytes || contentLength == 0L)) {
 				return@forEach
 			}
 
@@ -1789,6 +1917,10 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 				if (type == EncryptedContentMessage.type) {
 					val contentLength = dis.readLong()
 					val eMeta = EncryptedContentMetaData.read(dis)
+					activeDownloadAttempts[eMeta.key]?.let { attempt ->
+						attempt.streamStarted = true
+					}
+					contentHolders.computeIfAbsent(eMeta.key) { ConcurrentHashMap.newKeySet() }.add(node)
 					val offset = if (dis.available() >= 8) {
 						try { dis.readLong() } catch (_: Exception) { 0L }
 					} else 0L

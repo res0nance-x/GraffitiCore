@@ -48,3 +48,24 @@ class ContentRequestMessage(
 	}
 }
 
+// Sent by B to A when A requested content for keys that B does not hold.
+class ContentNotFoundMessage(
+	val keys: List<EncryptedMetaKey>
+) : Writable {
+	override fun write(dos: DataOutputStream) {
+		StringWritable(type).write(dos)
+		ListWritable(keys).write(dos)
+	}
+
+	companion object {
+		val type = "contentnotfound"
+		fun read(dis: DataInputStream): ContentNotFoundMessage {
+			val type = StringWritable.read(dis).str
+			if (type != this.type) error("Invalid message type: $type")
+			val keys = ListWritable.read(dis, EncryptedMetaKey::read).list
+			return ContentNotFoundMessage(keys)
+		}
+	}
+}
+
+
