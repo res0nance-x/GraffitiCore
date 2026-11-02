@@ -67,11 +67,16 @@ B:      Verifies / requests peer if needed, then issues ContentRequestMessage
 // - Relay mode: verifies author signature; recipient additionally verifies content hash.
 // - Deleted & Ignored: drops deleted keys and filters out ignored identities/content.
 
-// Liveness (application-level keepalive):
-// - Every PING_INTERVAL_MS (60s), sends PingMessage; peer replies with priority PongMessage.
-// - Any inbound block resets TCPNode.lastActivityMs.
-// - Idle nodes silent for PING_TIMEOUT_MS (180s) are closed (skipped if actively transferring).
-// - onNodeConnected / onNodeDisconnected callbacks are fired for UI / WebSocket notifications.
+// Liveness & Connection Control (Client-Focused):
+// - Outbound (client-initiated) connections are responsible for keepalive pings and reconnects.
+// - Inbound (server-accepted) connections are passive: the server responds to PingMessage with
+//   PongMessage, does not send pings or idle-timeout inbound connections, and removes dead
+//   inbound connections when EOF is reached or when forwarding/sending fails.
+// - In foreground/active mode, outbound connections send PingMessage every PING_INTERVAL_MS (60s)
+//   and close/reconnect after PING_TIMEOUT_MS (180s) of silence.
+// - In background mode (mobile battery saver when screen is off, unplugged, and not running as
+//   a server/relay), idle outbound connections are closed after sync completes and periodically
+//   reconnected every BACKGROUND_SYNC_INTERVAL_MS (15m), or immediately on foreground resume.
  */
 
 class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false) {
@@ -90,8 +95,11 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	val contentHolders = ConcurrentHashMap<EncryptedMetaKey, MutableSet<TCPNode>>()
 
 	companion object {
-		const val PING_INTERVAL_MS = 60_000L  // send a ping every 60 s
-		const val PING_TIMEOUT_MS = 3 * PING_INTERVAL_MS  // close after 180 s of silence (3 missed pings)
+		const val PING_INTERVAL_MS = 60_000L  // client sends a ping every 60 s in active mode
+		const val PING_TIMEOUT_MS = 3 * PING_INTERVAL_MS  // client closes after 180 s of silence (3 missed pings)
+		const val BACKGROUND_IDLE_GRACE_MS = 15_000L // keep outbound connection open at least 15 s during background sync
+		const val BACKGROUND_QUIET_MS = 5_000L // require 5 s of no read/write activity before background disconnect
+		const val BACKGROUND_SYNC_INTERVAL_MS = 15 * 60 * 1000L // reconnect every 15 minutes in background mode
 		const val MAX_STREAM_SIZE = 100 * 1024 * 1024 * 1024L // 100 GB
 		const val DEFAULT_STREAM_TIMEOUT_MS = 300_000L // 5 minutes
 		const val SMALL_CONTENT_THRESHOLD_BYTES = 256L
@@ -827,17 +835,22 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		val node = connectionMap[addr]
 		if (node != null && !node.isClosed()) {
 			pendingReconnects.remove(addr)
+			outboundTargets[addr] = autoSync
 			return node
 		}
 		pendingReconnects.remove(addr)
 		explicitlyDisconnected.remove(addr)
+		outboundTargets[addr] = autoSync
 		val socket = Socket()
 		try {
 			socket.tcpNoDelay = true
 		} catch (_: Exception) {}
 		socket.connect(addr)
 		val newNode = TCPNode(socket, blockHandler)
-		newNode.onTransferStateChanged = { checkAndNotifyTransferState() }
+		newNode.onTransferStateChanged = {
+			checkAndNotifyTransferState()
+			wakeReconnectManager()
+		}
 		newNode.onClose = {
 			val alias = nodePeerMap[newNode]?.key?.name ?: "unknown"
 			val wasRelay = nodeRelayMap[newNode] == true
@@ -847,19 +860,30 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			checkAndNotifyTransferState()
 			notifyNodeDisconnected(newNode)
 
-			if (!explicitlyDisconnected.remove(addr)) {
+			if (!explicitlyDisconnected.remove(addr) && outboundTargets.containsKey(addr)) {
 				val now = System.currentTimeMillis()
-				pendingReconnects.computeIfAbsent(addr) {
-					log("Scheduling auto-reconnect for $addr (first attempt in 2s)")
-					ReconnectTarget(
-						addr = addr,
-						firstFailedAtMs = now,
-						nextAttemptMs = now + 2000L,
-						attemptCount = 0,
-						isRelay = wasRelay,
-						autoSync = autoSync
-					)
+				val delayMs = if (backgroundMode) BACKGROUND_SYNC_INTERVAL_MS else 2000L
+				pendingReconnects.compute(addr) { _, existing ->
+					if (existing != null && backgroundMode) {
+						existing.apply {
+							nextAttemptMs = now + BACKGROUND_SYNC_INTERVAL_MS
+							attemptCount = 0
+						}
+					} else {
+						if (!backgroundMode) {
+							log("Scheduling auto-reconnect for $addr (first attempt in ${delayMs / 1000}s)")
+						}
+						ReconnectTarget(
+							addr = addr,
+							firstFailedAtMs = now,
+							nextAttemptMs = now + delayMs,
+							attemptCount = 0,
+							isRelay = wasRelay,
+							autoSync = outboundTargets[addr] ?: autoSync
+						)
+					}
 				}
+				wakeReconnectManager()
 			}
 		}
 		connectionMap[addr] = newNode
@@ -868,14 +892,20 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		}
 		notifyNodeConnected(newNode, false)
 		sendChallenge(newNode)
+		wakePingManager()
+		if (backgroundMode) {
+			wakeReconnectManager()
+		}
 		return newNode
 	}
 
 	fun disconnect(addr: InetSocketAddress) {
 		explicitlyDisconnected.add(addr)
+		outboundTargets.remove(addr)
 		pendingReconnects.remove(addr)
 		connectionMap[addr]?.close()
 		tcpServer?.nodeList?.firstOrNull { !it.isClosed() && it.remoteAddress == addr }?.close()
+		wakeReconnectManager()
 	}
 
 	private fun syncNode(node: TCPNode) {
@@ -906,6 +936,9 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	fun setRelayEnabled(enabled: Boolean) {
 		if (relayEnabled == enabled) return
 		relayEnabled = enabled
+		if (enabled && backgroundMode) {
+			setBackgroundMode(false)
+		}
 		resetPeerQueryTimes()
 		restartDiscoveryServers()
 		if (enabled) {
@@ -944,6 +977,25 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		runCatching { node.send(queryAll) }
 	}
 
+	private fun removeDeadNode(node: TCPNode) {
+		val removedInbound = tcpServer?.nodeList?.remove(node) == true
+		var removedOutbound = false
+		synchronized(connectionMap) {
+			val iter = connectionMap.entries.iterator()
+			while (iter.hasNext()) {
+				if (iter.next().value == node) {
+					iter.remove()
+					removedOutbound = true
+				}
+			}
+		}
+		cleanupNodeState(node)
+		if (removedInbound || removedOutbound) {
+			checkAndNotifyTransferState()
+			notifyNodeDisconnected(node)
+		}
+	}
+
 	// Pushes a newly stored message's metadata to all currently connected peers.
 	// Each peer will automatically request content if they want it.
 	fun pushNewMessage(metaKey: EncryptedMetaKey, excludeNode: TCPNode? = null) {
@@ -957,9 +1009,17 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		}
 		val contentExists = smallContentCache.containsKey(metaKey) || File(contentDir, "$metaKey").exists()
 		if (!contentExists) return // Must have the content before we push/relay it!
+		if (pendingReconnects.isNotEmpty()) {
+			retryPendingConnectionsImmediately()
+		}
 		val header = QueryResponseMessage(0L).serialize()
 		val body = ListWritable(listOf(eMeta.toHeader(getContentSize(eMeta.key)))).serialize()
-		allNodes.filter { !it.isClosed() && it != excludeNode }.forEach { node ->
+		allNodes.forEach { node ->
+			if (node == excludeNode) return@forEach
+			if (node.isClosed()) {
+				removeDeadNode(node)
+				return@forEach
+			}
 			val query = nodeQueryMap[node]
 			val isAskingAll = query?.isAskingAllRecipients() == true
 			if (isAskingAll && isIgnoredForRelay(eMeta)) {
@@ -967,7 +1027,16 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			}
 			val isRelay = nodeRelayMap[node] ?: false
 			if (isRelay || (query != null && query.matches(eMeta))) {
-				node.send(header, body)
+				try {
+					node.send(header, body)
+					if (node.isClosed()) {
+						removeDeadNode(node)
+					}
+				} catch (e: Exception) {
+					logNodeError(node, "Failed to forward message to node, removing: ${e.message}")
+					node.close()
+					removeDeadNode(node)
+				}
 			}
 		}
 	}
@@ -1143,6 +1212,9 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			tcpServer = it
 			it.start(false)
 			log("TCP server started on ${it.peerAddressInfo}")
+			if (backgroundMode) {
+				setBackgroundMode(false)
+			}
 			notifyMulticastStateChanged()
 			// Advertise the server identity key so that peers discovering us
 			// see the stable server avatar/name, not an IP-hash key.
@@ -1173,6 +1245,20 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		activeStreamVerifiers.values.forEach { it.close() }
 		activeStreamVerifiers.clear()
 		log("Server stopped")
+	}
+
+	fun shutdown() {
+		outboundTargets.clear()
+		pendingReconnects.clear()
+		val outboundNodes = synchronized(connectionMap) {
+			val list = connectionMap.values.toList()
+			connectionMap.clear()
+			list
+		}
+		closeAll(outboundNodes)
+		stopTCPServer()
+		wakeReconnectManager()
+		wakePingManager()
 	}
 
 	fun getIdentityByKey(key: IdentityKey): Identity? =
@@ -1361,7 +1447,27 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	// They vanish when the application exits.
 	private val ephemeralIdentities = CopyOnWriteArrayList<Identity>()
 	private val connectionMap = Collections.synchronizedMap(mutableMapOf<InetSocketAddress, TCPNode>())
+	private val outboundTargets = ConcurrentHashMap<InetSocketAddress, Boolean>()
 	private val nodesWithoutAutoSync = Collections.synchronizedSet(mutableSetOf<TCPNode>())
+
+	@Volatile
+	private var backgroundMode: Boolean = false
+
+	fun isBackgroundMode(): Boolean = backgroundMode
+
+	fun setBackgroundMode(enabled: Boolean) {
+		val effective = enabled && serverPort == null && !relayEnabled
+		if (backgroundMode == effective) return
+		backgroundMode = effective
+		if (effective) {
+			log("P2P entering background connection mode (periodic client sync every ${BACKGROUND_SYNC_INTERVAL_MS / 60000}m)")
+			wakeReconnectManager()
+		} else {
+			log("P2P exiting background connection mode — restoring persistent outbound connections")
+			retryPendingConnectionsImmediately()
+			wakePingManager()
+		}
+	}
 
 	data class ReconnectTarget(
 		val addr: InetSocketAddress,
@@ -1376,6 +1482,20 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	private val explicitlyDisconnected = Collections.synchronizedSet(mutableSetOf<InetSocketAddress>())
 	@Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
 	private val reconnectSignal = java.lang.Object()
+	@Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
+	private val pingSignal = java.lang.Object()
+
+	private fun wakeReconnectManager() {
+		synchronized(reconnectSignal) {
+			reconnectSignal.notifyAll()
+		}
+	}
+
+	private fun wakePingManager() {
+		synchronized(pingSignal) {
+			pingSignal.notifyAll()
+		}
+	}
 
 	// ── Connection lifecycle callbacks ────────────────────────────────────────
 	private val onNodeConnectedListeners = mutableListOf<(node: TCPNode, inbound: Boolean) -> Unit>()
@@ -1853,7 +1973,13 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		thread(isDaemon = true, name = "GraffitiPing") {
 			while (!Thread.interrupted()) {
 				try {
-					Thread.sleep(PING_INTERVAL_MS)
+					val hasActiveOutbound = !backgroundMode && synchronized(connectionMap) {
+						connectionMap.values.any { !it.isClosed() }
+					}
+					val sleepMs = if (hasActiveOutbound) PING_INTERVAL_MS else 30 * 60 * 1000L
+					synchronized(pingSignal) {
+						pingSignal.wait(sleepMs)
+					}
 					pingAndCleanup()
 				} catch (_: InterruptedException) {
 					break
@@ -1866,9 +1992,15 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		thread(isDaemon = true, name = "GraffitiReconnect") {
 			while (!Thread.interrupted()) {
 				try {
+					val waitMs = computeNextReconnectWaitMs()
 					synchronized(reconnectSignal) {
-						reconnectSignal.wait(1000L)
+						if (waitMs == Long.MAX_VALUE) {
+							reconnectSignal.wait()
+						} else if (waitMs > 0L) {
+							reconnectSignal.wait(waitMs)
+						}
 					}
+					processBackgroundIdleDisconnects()
 					processPendingReconnects()
 				} catch (_: InterruptedException) {
 					break
@@ -1879,26 +2011,103 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		}
 	}
 
+	private fun computeNextReconnectWaitMs(): Long {
+		val now = System.currentTimeMillis()
+		var waitMs = Long.MAX_VALUE
+		if (backgroundMode && serverPort == null && !relayEnabled) {
+			val hasOpenOutbound = synchronized(connectionMap) {
+				connectionMap.values.any { !it.isClosed() }
+			}
+			if (hasOpenOutbound) {
+				waitMs = BACKGROUND_QUIET_MS
+			}
+		}
+		if (pendingReconnects.isNotEmpty()) {
+			val earliestDue = pendingReconnects.values.minOfOrNull { it.nextAttemptMs }
+			if (earliestDue != null) {
+				val dueIn = (earliestDue - now).coerceAtLeast(0L)
+				waitMs = minOf(waitMs, dueIn)
+			}
+		}
+		return waitMs
+	}
+
+	private fun isOutboundSyncIdle(now: Long): Boolean {
+		if (isAnyTransferActive()) return false
+		if (inFlightNodeRequests.isNotEmpty()) return false
+		if (batchPendingKeys.isNotEmpty()) return false
+		if (pendingPeerContent.isNotEmpty()) return false
+		if (nodeChallengeMap.isNotEmpty()) return false
+		if (activeWatermarkSupplier?.invoke() != null) return false
+
+		val openOutbound = synchronized(connectionMap) {
+			connectionMap.values.filter { !it.isClosed() }
+		}
+		if (openOutbound.isEmpty()) return false
+		return openOutbound.all { node ->
+			(now - node.connectedAtMs) >= BACKGROUND_IDLE_GRACE_MS &&
+				(now - node.lastActivityMs) >= BACKGROUND_QUIET_MS &&
+				(now - node.lastWriteMs) >= BACKGROUND_QUIET_MS
+		}
+	}
+
+	private fun processBackgroundIdleDisconnects() {
+		if (!backgroundMode || serverPort != null || relayEnabled) return
+		val now = System.currentTimeMillis()
+		if (!isOutboundSyncIdle(now)) return
+
+		val toClose = synchronized(connectionMap) {
+			connectionMap.entries.filter { !it.value.isClosed() }.map { it.key to it.value }
+		}
+		for ((addr, node) in toClose) {
+			val wasRelay = nodeRelayMap[node] == true
+			val autoSync = outboundTargets[addr] ?: true
+			pendingReconnects[addr] = ReconnectTarget(
+				addr = addr,
+				firstFailedAtMs = now,
+				nextAttemptMs = now + BACKGROUND_SYNC_INTERVAL_MS,
+				attemptCount = 0,
+				isRelay = wasRelay,
+				autoSync = autoSync
+			)
+			log("Background mode: closing idle outbound connection to $addr (next sync in ${BACKGROUND_SYNC_INTERVAL_MS / 60000}m)")
+			node.close()
+		}
+	}
+
 	fun retryPendingConnectionsImmediately() {
 		val now = System.currentTimeMillis()
-		pendingReconnects.values.forEach { it.nextAttemptMs = now }
-		synchronized(reconnectSignal) {
-			reconnectSignal.notifyAll()
+		outboundTargets.forEach { (addr, autoSync) ->
+			val existing = connectionMap[addr]
+			if (existing == null || existing.isClosed()) {
+				pendingReconnects.compute(addr) { _, target ->
+					(target ?: ReconnectTarget(
+						addr = addr,
+						firstFailedAtMs = now,
+						nextAttemptMs = now,
+						attemptCount = 0,
+						autoSync = autoSync
+					)).apply {
+						nextAttemptMs = now
+						attemptCount = 0
+					}
+				}
+			}
 		}
+		pendingReconnects.values.forEach { it.nextAttemptMs = now }
+		wakeReconnectManager()
 	}
 
 	private fun processPendingReconnects() {
 		if (pendingReconnects.isEmpty()) return
 		val now = System.currentTimeMillis()
-		val maxDurationMs = 5 * 60 * 1000L // 5 minutes
 
 		val toAttempt = mutableListOf<ReconnectTarget>()
 		val iterator = pendingReconnects.entries.iterator()
 		while (iterator.hasNext()) {
 			val entry = iterator.next()
 			val target = entry.value
-			if (now - target.firstFailedAtMs > maxDurationMs) {
-				log("Auto-reconnect expired for ${target.addr} after 5 minutes")
+			if (!outboundTargets.containsKey(target.addr) || explicitlyDisconnected.contains(target.addr)) {
 				iterator.remove()
 				continue
 			}
@@ -1914,21 +2123,30 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 				continue
 			}
 			target.attemptCount++
-			val backoffMs = when (target.attemptCount) {
-				1 -> 5_000L
-				2 -> 10_000L
-				3 -> 20_000L
-				else -> 30_000L
+			val backoffMs = if (backgroundMode) {
+				when (target.attemptCount) {
+					1 -> 10_000L
+					else -> BACKGROUND_SYNC_INTERVAL_MS
+				}
+			} else {
+				when (target.attemptCount) {
+					1 -> 5_000L
+					2 -> 10_000L
+					3 -> 20_000L
+					4 -> 30_000L
+					else -> 60_000L
+				}
 			}
 			target.nextAttemptMs = now + backoffMs
 			async {
 				try {
-					debug("Attempting auto-reconnect to ${target.addr} (attempt ${target.attemptCount})...")
+					debug("Attempting auto-reconnect to ${target.addr} (attempt ${target.attemptCount}, background=$backgroundMode)...")
 					getTCPNode(target.addr, target.autoSync)
 					pendingReconnects.remove(target.addr)
 					log("Auto-reconnect succeeded for ${target.addr}")
 				} catch (e: Exception) {
 					debug("Auto-reconnect failed for ${target.addr}: ${e.message}")
+					wakeReconnectManager()
 				}
 			}
 		}
@@ -1936,30 +2154,39 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 
 	private fun pingAndCleanup() {
 		val now = System.currentTimeMillis()
-		val pingHeader = StringWritable(PingMessage.type).serialize()
-		allNodes.forEach { node ->
-			if (!node.isClosed()) {
-				if (now - node.lastActivityMs > PING_TIMEOUT_MS) {
-					if (node.isTransferring()) {
-						debug("Node ${node.remoteAddress} silent on read for ${(now - node.lastActivityMs) / 1000}s but actively transferring — sending ping probe")
+		// Client-focused keepalive: only outbound (client-initiated) connections send pings
+		// and enforce PING_TIMEOUT_MS when not in background periodic-sync mode.
+		if (!backgroundMode) {
+			val pingHeader = StringWritable(PingMessage.type).serialize()
+			val outboundNodes = synchronized(connectionMap) { connectionMap.values.toList() }
+			outboundNodes.forEach { node ->
+				if (!node.isClosed()) {
+					if (now - node.lastActivityMs > PING_TIMEOUT_MS) {
+						if (node.isTransferring()) {
+							debug("Outbound node ${node.remoteAddress} silent on read for ${(now - node.lastActivityMs) / 1000}s but actively transferring — sending ping probe")
+							try {
+								node.sendPriority(pingHeader)
+							} catch (_: Exception) {}
+						} else {
+							logNodeError(node, "Outbound connection silent for ${(now - node.lastActivityMs) / 1000}s, closing")
+							node.close()   // fires onClose → onNodeDisconnected + map removal + auto-reconnect
+						}
+					} else {
 						try {
 							node.sendPriority(pingHeader)
-						} catch (_: Exception) {}
-					} else {
-						logNodeError(node, "Silent for ${(now - node.lastActivityMs) / 1000}s, closing")
-						node.close()   // fires onClose → onNodeDisconnected + map removal
-					}
-				} else {
-					try {
-						node.sendPriority(pingHeader)
-					} catch (_: Exception) {
+						} catch (_: Exception) {
+						}
 					}
 				}
 			}
 		}
-		// Belt-and-suspenders: prune entries that closed without firing their onClose.
-		synchronized(connectionMap) { connectionMap.entries.removeIf { it.value.isClosed() } }
-		tcpServer?.nodeList?.removeIf { it.isClosed() }
+		// Passive server cleanup: prune any inbound or outbound nodes that have closed.
+		val closedOutbound = synchronized(connectionMap) {
+			connectionMap.values.filter { it.isClosed() }
+		}
+		closedOutbound.forEach { removeDeadNode(it) }
+		val closedInbound = tcpServer?.nodeList?.filter { it.isClosed() }.orEmpty()
+		closedInbound.forEach { removeDeadNode(it) }
 		// Clean up orphaned temp files older than 30 minutes
 		cleanTempFiles(maxAgeMs = 30 * 60 * 1000L)
 	}
