@@ -485,12 +485,42 @@
            border-color: var(--accent);
        }
 
-       .ctrl-btn.play-btn {
-           width: 50px;
-           height: 50px;
-           background: var(--accent);
-           color: #000;
-           border: none;
+       .auto-play-toggle-label {
+           display: inline-flex;
+           align-items: center;
+           gap: 0.5rem;
+           font-size: 0.82rem;
+           font-weight: 600;
+           color: var(--text-main);
+           cursor: pointer;
+           user-select: none;
+           padding: 0 0.85rem;
+           background: var(--card-bg);
+           border: 1px solid var(--border-color);
+           border-radius: 21px;
+           transition: all 0.2s ease;
+           height: 42px;
+           box-sizing: border-box;
+       }
+
+       .auto-play-toggle-label:hover {
+           border-color: var(--accent);
+           color: var(--accent);
+       }
+
+       .auto-play-toggle-label.active,
+       .auto-play-toggle-label:has(input:checked) {
+           border-color: var(--accent);
+           background: rgba(56, 189, 248, 0.12);
+           color: var(--accent);
+       }
+
+       .auto-play-toggle-label input[type="checkbox"] {
+           accent-color: var(--accent);
+           width: 16px;
+           height: 16px;
+           cursor: pointer;
+           margin: 0;
        }
 
        .ctrl-btn svg {
@@ -707,12 +737,7 @@
 			<span class="item-type-badge" id="typeBadge">-</span>
 			<span class="item-title" id="itemTitle">Loading...</span>
 		</div>
-		<div class="header-actions">
-			<label class="toggle-label">
-				<input type="checkbox" id="autoAdvanceCheck" checked>
-				Auto-play
-			</label>
-		</div>
+		<div class="header-actions"></div>
 	</header>
 
 	<!-- Stage Area -->
@@ -742,14 +767,10 @@
 						<path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/>
 					</svg>
 				</button>
-				<button class="ctrl-btn play-btn" id="playBtn" title="Play/Pause (Space)">
-					<svg id="playIcon" viewBox="0 0 24 24">
-						<path d="M8 5v14l11-7z"/>
-					</svg>
-					<svg id="pauseIcon" viewBox="0 0 24 24" style="display:none;">
-						<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
-					</svg>
-				</button>
+				<label class="auto-play-toggle-label" for="autoPlayToggle" title="Auto-play Slideshow (Space)">
+					<input type="checkbox" id="autoPlayToggle" autocomplete="off">
+					<span>Auto-play</span>
+				</label>
 				<button class="ctrl-btn" id="nextBtn" title="Next (Right Arrow)">
 					<svg viewBox="0 0 24 24">
 						<path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/>
@@ -780,7 +801,7 @@
 	let allFiles = [];
 	let filteredFiles = [];
 	let currentIndex = 0;
-	let isPlaying = true;
+	let isAutoPlay = false;
 	let isListView = false;
 	let currentMediaElement = null;
 
@@ -866,12 +887,7 @@
 	}
 
 	function stopCurrentMedia() {
-		if (timerAnimFrame) {
-			cancelAnimationFrame(timerAnimFrame);
-			timerAnimFrame = null;
-		}
-		document.getElementById('progressBar').style.width = '0%';
-		document.getElementById('timerStatus').textContent = '';
+		stopStaticTimer();
 		if (currentMediaElement) {
 			currentMediaElement.pause?.();
 			currentMediaElement.src = '';
@@ -879,13 +895,24 @@
 		}
 	}
 
+	function stopStaticTimer() {
+		if (timerAnimFrame) {
+			cancelAnimationFrame(timerAnimFrame);
+			timerAnimFrame = null;
+		}
+		document.getElementById('progressBar').style.width = '0%';
+		document.getElementById('timerStatus').textContent = '';
+	}
+
 	function startStaticTimer(duration) {
-		stopCurrentMedia();
+		stopStaticTimer();
+		if (!isAutoPlay) return;
+
 		timerRemaining = duration;
 		timerStartTime = performance.now();
 
 		function step(now) {
-			if (!isPlaying) return;
+			if (!isAutoPlay) return;
 			const elapsed = now - timerStartTime;
 			const remaining = Math.max(0, timerRemaining - elapsed);
 			const progress = Math.min(100, ((duration - remaining) / duration) * 100);
@@ -893,13 +920,13 @@
 			document.getElementById('timerStatus').textContent = `(${(remaining / 1000).toFixed(1)}s)`;
 			if (remaining <= 0) {
 				document.getElementById('progressBar').style.width = '100%';
-				if (document.getElementById('autoAdvanceCheck').checked) nextItem();
+				if (isAutoPlay) nextItem();
 			} else {
 				timerAnimFrame = requestAnimationFrame(step);
 			}
 		}
 
-		if (isPlaying) timerAnimFrame = requestAnimationFrame(step);
+		timerAnimFrame = requestAnimationFrame(step);
 	}
 
 	function formatAudioTime(seconds) {
@@ -986,16 +1013,10 @@
 
 		audio.addEventListener('play', () => {
 			updatePlayState(true);
-			isPlaying = true;
-			updatePlayPauseUI();
 		});
 
 		audio.addEventListener('pause', () => {
 			updatePlayState(false);
-			if (currentMediaElement === audio) {
-				isPlaying = false;
-				updatePlayPauseUI();
-			}
 		});
 
 		audio.addEventListener('timeupdate', updateProgress);
@@ -1011,9 +1032,12 @@
 		playBtn.onclick = (e) => {
 			e.preventDefault();
 			e.stopPropagation();
-			togglePlayPause();
+			if (audio.paused) {
+				audio.play().catch(() => {});
+			} else {
+				audio.pause();
+			}
 		};
-
 		rewindBtn.onclick = (e) => {
 			e.preventDefault();
 			e.stopPropagation();
@@ -1094,7 +1118,7 @@
 				iframe.className = 'html-stage-frame';
 				iframe.src = file.path;
 				stage.appendChild(iframe);
-				startStaticTimer(HOLD_DURATION);
+				if (isAutoPlay) startStaticTimer(HOLD_DURATION);
 				break;
 			}
 			case 'video': {
@@ -1102,27 +1126,17 @@
 				video.className = 'media-element';
 				video.src = file.path;
 				video.controls = true;
-				video.autoplay = isPlaying;
-				video.addEventListener('play', () => {
-					isPlaying = true;
-					updatePlayPauseUI();
-				});
-				video.addEventListener('pause', () => {
-					if (currentMediaElement === video && !video.ended) {
-						isPlaying = false;
-						updatePlayPauseUI();
-					}
-				});
+				video.autoplay = isAutoPlay;
 				video.onended = () => {
-					if (document.getElementById('autoAdvanceCheck').checked && allFiles.length > 1) {
+					if (isAutoPlay && allFiles.length > 1) {
 						nextItem();
-					} else {
-						isPlaying = false;
-						updatePlayPauseUI();
 					}
 				};
 				stage.appendChild(video);
 				currentMediaElement = video;
+				if (isAutoPlay) {
+					video.play().catch(() => {});
+				}
 				break;
 			}
 			case 'audio': {
@@ -1131,14 +1145,19 @@
 				card.innerHTML = `<div class="audio-file-name">${file.path}</div>`;
 				const audio = document.createElement('audio');
 				audio.src = file.path;
-				audio.autoplay = isPlaying;
+				audio.autoplay = isAutoPlay;
 				audio.onended = () => {
-					if (document.getElementById('autoAdvanceCheck').checked) nextItem();
+					if (isAutoPlay && allFiles.length > 1) {
+						nextItem();
+					}
 				};
 				card.appendChild(audio);
 				attachCustomAudioPlayer(audio);
 				stage.appendChild(card);
 				currentMediaElement = audio;
+				if (isAutoPlay) {
+					audio.play().catch(() => {});
+				}
 				break;
 			}
 			case 'image': {
@@ -1146,7 +1165,7 @@
 				img.className = 'media-element';
 				img.src = file.path;
 				stage.appendChild(img);
-				startStaticTimer(HOLD_DURATION);
+				if (isAutoPlay) startStaticTimer(HOLD_DURATION);
 				break;
 			}
 			case 'text': {
@@ -1159,7 +1178,7 @@
 				}).catch(err => {
 					viewer.textContent = 'Error: ' + err;
 				});
-				startStaticTimer(HOLD_DURATION);
+				if (isAutoPlay) startStaticTimer(HOLD_DURATION);
 				break;
 			}
 			default: {
@@ -1167,11 +1186,10 @@
 				infoCard.className = 'info-card';
 				infoCard.innerHTML = `<h3>${file.path}</h3><div class="info-row"><span class="info-label">Type</span><span class="info-value">${file.type || 'Unknown'}</span></div><div class="info-row"><span class="info-label">Size</span><span class="info-value">${formatBytes(file.length)}</span></div><a href="${file.path}" download class="btn-download">Download</a>`;
 				stage.appendChild(infoCard);
-				startStaticTimer(HOLD_DURATION);
+				if (isAutoPlay) startStaticTimer(HOLD_DURATION);
 				break;
 			}
 		}
-		updatePlayPauseUI();
 	}
 
 	function nextItem() {
@@ -1182,27 +1200,37 @@
 		if (allFiles.length > 0) loadItem((currentIndex - 1 + allFiles.length) % allFiles.length);
 	}
 
-	function togglePlayPause() {
-		isPlaying = !isPlaying;
-		if (currentMediaElement) {
-			if (isPlaying) currentMediaElement.play(); else currentMediaElement.pause();
-		} else if (timerAnimFrame || timerRemaining > 0) {
-			if (isPlaying) {
-				timerStartTime = performance.now() - (HOLD_DURATION - timerRemaining);
-				startStaticTimer(timerRemaining);
-			} else {
-				if (timerAnimFrame) cancelAnimationFrame(timerAnimFrame);
-				timerAnimFrame = null;
+	function onAutoPlayToggled() {
+		const toggle = document.getElementById('autoPlayToggle');
+		isAutoPlay = toggle ? toggle.checked : false;
+		updateAutoPlayToggleUI();
+
+		if (isAutoPlay) {
+			if (allFiles.length > 0) {
+				const file = allFiles[currentIndex];
+				const mType = getMediaType(file);
+				if (['html', 'image', 'text', 'binary'].includes(mType)) {
+					startStaticTimer(HOLD_DURATION);
+				} else if (currentMediaElement) {
+					if (currentMediaElement.ended) {
+						nextItem();
+					} else if (currentMediaElement.paused) {
+						currentMediaElement.play?.().catch(() => {});
+					}
+				}
 			}
+		} else {
+			stopStaticTimer();
 		}
-		updatePlayPauseUI();
 	}
 
-	function updatePlayPauseUI() {
-		document.getElementById('playIcon').style.display = isPlaying ? 'none' : 'block';
-		document.getElementById('pauseIcon').style.display = isPlaying ? 'block' : 'none';
+	function updateAutoPlayToggleUI() {
+		const toggle = document.getElementById('autoPlayToggle');
+		const label = toggle ? toggle.closest('.auto-play-toggle-label') : null;
+		if (label) {
+			label.classList.toggle('active', isAutoPlay);
+		}
 	}
-
 	function viewRawCurrentItem() {
 		if (allFiles.length === 0 || !allFiles[currentIndex]) return;
 		const file = allFiles[currentIndex];
@@ -1233,7 +1261,11 @@
 		if (e.target.tagName === 'INPUT') return;
 		if (e.code === 'Space') {
 			e.preventDefault();
-			togglePlayPause();
+			const toggle = document.getElementById('autoPlayToggle');
+			if (toggle) {
+				toggle.checked = !toggle.checked;
+				onAutoPlayToggled();
+			}
 		} else if (e.code === 'ArrowRight') {
 			e.preventDefault();
 			nextItem();
@@ -1246,7 +1278,7 @@
 		}
 	});
 
-	document.getElementById('playBtn').onclick = togglePlayPause;
+	document.getElementById('autoPlayToggle').onchange = onAutoPlayToggled;
 	document.getElementById('nextBtn').onclick = nextItem;
 	document.getElementById('prevBtn').onclick = prevItem;
 	document.getElementById('rawBtn').onclick = viewRawCurrentItem;
@@ -1254,6 +1286,13 @@
 	document.getElementById('searchInput').oninput = renderFileList;
 
 	async function init() {
+		isAutoPlay = false;
+		const toggle = document.getElementById('autoPlayToggle');
+		if (toggle) {
+			toggle.checked = false;
+		}
+		updateAutoPlayToggleUI();
+
 		try {
 			const res = await fetch('pack_list');
 			if (!res.ok) throw new Error('Failed to fetch content list');
