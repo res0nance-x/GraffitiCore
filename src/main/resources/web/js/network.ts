@@ -44,7 +44,7 @@ function avatarImg(key: string | null | undefined, size = 32): HTMLImageElement 
 async function loadNodeIdentity(): Promise<void> {
    try {
       const info = await graffiti.nodeInfo();
-      updateNodeDisplay(info.peerKey, info.peerName, info.ips || []);
+      updateNodeDisplay(info.peerKey, info.peerName, info.ips || [], info.portalDir);
       const portInput = document.getElementById('server-port-input') as HTMLInputElement;
       if (portInput) {
          portInput.value = String(info.defaultP2PPort ?? 0);
@@ -55,10 +55,14 @@ async function loadNodeIdentity(): Promise<void> {
 }
 
 
-function updateNodeDisplay(peerKey: string, peerName: string, ips: string[]): void {
+function updateNodeDisplay(peerKey: string, peerName: string, ips: string[], portalDir?: string): void {
    (document.getElementById('node-avatar') as HTMLImageElement).src = graffiti.avatarUrl(peerKey);
    (document.getElementById('node-name') as HTMLElement).textContent = peerName;
    (document.getElementById('node-key') as HTMLElement).textContent = ips.join(', ');
+   const portalDirEl = document.getElementById('node-portal-dir');
+   if (portalDirEl && portalDir) {
+      portalDirEl.textContent = portalDir;
+   }
 }
 
 function relayInputs(): [HTMLInputElement, HTMLInputElement] {
@@ -163,10 +167,23 @@ function buildConnectionCard(key: string, c: ConnectionData): HTMLDivElement {
             </div>
         </div>
         <div class="net-item-actions">
+            <button class="btn-portal" type="button">Portal</button>
             <button class="btn-leave" type="button">Leave</button>
         </div>`;
 
    div.querySelector<HTMLElement>('.net-item-user')!.prepend(avatarImg(avatarKey));
+
+   div.querySelector<HTMLButtonElement>('.btn-portal')!.addEventListener('click', async (e: MouseEvent) => {
+      const btn = e.currentTarget as HTMLButtonElement;
+      btn.disabled = true;
+      try {
+         await graffiti.openPortal({ host: c.host, port: c.port, peerKey: c.peerKey });
+      } catch (err) {
+         alert(`Failed to open portal: ${(err as Error).message}`);
+      } finally {
+         btn.disabled = false;
+      }
+   });
 
    div.querySelector<HTMLButtonElement>('.btn-leave')!.addEventListener('click', async () => {
       try {
@@ -447,6 +464,18 @@ function wireButtons(): void {
 
    document.getElementById('btn-discover')!.addEventListener('click', () => {
       void triggerDiscovery(true);
+   });
+
+   document.getElementById('btn-open-my-portal')?.addEventListener('click', async (e: MouseEvent) => {
+      const btn = e.currentTarget as HTMLButtonElement;
+      btn.disabled = true;
+      try {
+         await graffiti.openPortal({ self: true });
+      } catch (err) {
+         alert(`Failed to open portal: ${(err as Error).message}`);
+      } finally {
+         btn.disabled = false;
+      }
    });
 
    document.getElementById('btn-server-start')!.addEventListener('click', async () => {

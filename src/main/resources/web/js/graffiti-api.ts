@@ -97,6 +97,7 @@ export interface NodeInfo extends ApiOk {
    peerName: string;
    defaultP2PPort: number;
    ips: string[];
+   portalDir?: string;
 }
 
 export interface NodeRelayStatus extends ApiOk {
@@ -595,9 +596,13 @@ export const graffiti = {
       return parseJson<ApiOk>(res);
    },
 
-   // ── Pack Viewing ────────────────────────────────────────────────────────
+   // ── Pack & Portal Viewing ───────────────────────────────────────────────
    openPack(params: OpenPackParams): Promise<OpenPackResponse> {
       return putJson('/api/pack/open', params);
+   },
+
+   openPortal(params: { host?: string; port?: number; peerKey?: string; self?: boolean } = {}): Promise<OpenPackResponse> {
+      return putJson('/api/portal/open', params);
    },
 
    closePack(sessionId: string): Promise<ApiOk> {

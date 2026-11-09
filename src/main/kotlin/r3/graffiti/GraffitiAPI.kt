@@ -12,6 +12,7 @@ import r3.org.json.JSONArray
 import r3.org.json.JSONObject
 import r3.pack.BinaryPack
 import r3.pack.DirPack
+import r3.pack.Pack
 import r3.pke.*
 import r3.source.FileSink
 import r3.source.FileSource
@@ -140,6 +141,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/store" -> handleStore(header, content)
 			"/api/pack/open" -> openPackApi(header, content)
 			"/api/pack/close" -> closePackApi(header)
+			"/api/portal/open" -> openPortalApi(header, content)
 			"/api/pack/create/begin" -> beginPackCreation(header)
 			"/api/pack/create/file" -> content?.let { uploadPackFile(header, it) } ?: err("No file content provided")
 			"/api/pack/create/finish" -> finishPackCreation(header)
@@ -265,17 +267,72 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		return ok { put("version", ver) }
 	}
 
-	// ── Pack Viewing API ──────────────────────────────────────────────────────
+	// ── Pack & Portal Viewing API ─────────────────────────────────────────────
 	private val onOpenPackListeners =
 		mutableListOf<(source: r3.source.Source, fileName: String, password: String?) -> Pair<String, Int>>()
+	private val onOpenPackInstanceListeners =
+		mutableListOf<(pack: Pack, title: String) -> Pair<String, Int>>()
 	private val onClosePackListeners = mutableListOf<(sessionId: String) -> Unit>()
 
 	fun addOnOpenPackListener(listener: (source: r3.source.Source, fileName: String, password: String?) -> Pair<String, Int>) {
 		onOpenPackListeners.add(listener)
 	}
 
+	fun addOnOpenPackInstanceListener(listener: (pack: Pack, title: String) -> Pair<String, Int>) {
+		onOpenPackInstanceListeners.add(listener)
+	}
+
 	fun addOnClosePackListener(listener: (sessionId: String) -> Unit) {
 		onClosePackListeners.add(listener)
+	}
+
+	private fun openPortalApi(header: JSONObject, content: Content?): Content {
+		val bodyParams = content?.let {
+			try {
+				JSONObject(it.readString())
+			} catch (_: Exception) {
+				null
+			}
+		}
+		val params = bodyParams ?: header.optJSONObject("param")
+		val isSelf = params?.optBoolean("self", false) == true ||
+			header.optBoolean("self", false) ||
+			params?.optString("self") == "true" ||
+			header.optString("self") == "true"
+		val host = (params?.optString("host") ?: header.optString("host", "")).trim()
+		val port = params?.optInt("port", 0)?.takeIf { it > 0 } ?: header.optInt("port", 0)
+		val peerKeyStr = (params?.optString("peerKey") ?: header.optString("peerKey", "")).trim()
+
+		val (portalPack: Pack, title: String) = if (isSelf || (host.isEmpty() && port == 0 && peerKeyStr.isEmpty())) {
+			Pair(p2p.createPortalPack(null), "${p2p.serverIdentity.key.name} Portal")
+		} else {
+			val node = when {
+				host.isNotEmpty() && port > 0 -> p2p.findConnectedNode(host, port)
+				peerKeyStr.isNotEmpty() -> p2p.getNodeForPeer(PeerKey(peerKeyStr))
+				else -> null
+			} ?: return err("Connected node not found for portal request")
+			val alias = p2p.getNodeAlias(node)
+			Pair(p2p.createPortalPack(node), "$alias Portal")
+		}
+
+		if (onOpenPackInstanceListeners.isEmpty()) {
+			return err("Portal viewer handler not registered", Status.INTERNAL_ERROR)
+		}
+		var lastException: Exception? = null
+		for (listener in onOpenPackInstanceListeners) {
+			try {
+				val (sessionId, listenPort) = listener(portalPack, title)
+				return ok {
+					put("sessionId", sessionId)
+					put("port", listenPort)
+					put("url", "http://localhost:$listenPort/")
+				}
+			} catch (e: Exception) {
+				lastException = e
+				log(e)
+			}
+		}
+		return err(lastException?.message ?: "Failed to open portal")
 	}
 
 	private fun openPackApi(header: JSONObject, content: Content?): Content {
@@ -1193,6 +1250,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			put("peerName", p2p.serverIdentity.key.name)
 			put("defaultP2PPort", p2p.defaultP2PPort)
 			put("ips", JSONArray(getLocalIPs()))
+			put("portalDir", p2p.portalDir.absolutePath)
 		}
 	}
 
