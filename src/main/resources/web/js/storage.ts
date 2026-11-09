@@ -208,10 +208,19 @@ async function loadStorageInfo(): Promise<void> {
                </div>
             </div>
             <div class="net-item-actions">
+               <button class="btn-export-storage" type="button" title="Export all messages for ${escHtml(item.name)} as a portable file">Export</button>
                <button class="btn-purge-half" type="button">Purge 1/2</button>
                <button class="btn-purge-all" style="color: red; border-color: red;" type="button">Purge All</button>
             </div>
          `;
+
+         card.querySelector<HTMLButtonElement>('.btn-export-storage')?.addEventListener('click', async () => {
+            try {
+               await graffiti.exportMessages({ identity: item.key });
+            } catch (e) {
+               alert(`Export failed: ${(e as Error).message}`);
+            }
+         });
 
          card.querySelector<HTMLButtonElement>('.btn-purge-half')!.addEventListener('click', async () => {
             if (!confirm(`Purge oldest half of messages for "${item.name}"?`)) return;
@@ -321,6 +330,30 @@ if (quotaInput) {
          await graffiti.setQuota(bytes);
       } catch (e) {
          alert(`Failed to save quota: ${(e as Error).message}`);
+      }
+   });
+}
+
+// ── Portable Messages Import in Storage Settings ──────────────────────────────
+const storageImportBtn = document.getElementById('btn-storage-import');
+const storageImportInput = document.getElementById('input-storage-import') as HTMLInputElement | null;
+if (storageImportBtn && storageImportInput) {
+   storageImportBtn.addEventListener('click', () => storageImportInput.click());
+   storageImportInput.addEventListener('change', async () => {
+      const file = storageImportInput.files?.[0];
+      if (!file) return;
+      try {
+         const res = await graffiti.importMessages(file);
+         if (res.ok) {
+            alert(`Successfully imported ${res.imported} message(s) (${res.skipped} skipped, ${res.peers} peer(s) imported).`);
+            await loadStorageInfo();
+         } else {
+            alert(`Import failed: ${res.error || 'Unknown error'}`);
+         }
+      } catch (e) {
+         alert(`Import failed: ${(e as Error).message}`);
+      } finally {
+         storageImportInput.value = '';
       }
    });
 }

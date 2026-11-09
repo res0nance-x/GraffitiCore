@@ -540,6 +540,25 @@ export const graffiti = {
       return get('/api/storage/quota', {quota: String(quotaBytes)});
    },
 
+   // ── Portable Messages Export & Import ──────────────────────────────────────────
+   exportMessages(params: { key?: string; keys?: string[]; identity?: string }): Promise<void> {
+      const q: Record<string, string> = {};
+      if (params.key) q.key = params.key;
+      if (params.identity) q.identity = params.identity;
+      if (params.keys && params.keys.length > 0) q.keys = JSON.stringify(params.keys);
+      return download('/api/messages/export', q);
+   },
+
+   async importMessages(file: File): Promise<{ ok: boolean; imported: number; skipped: number; peers: number; error?: string }> {
+      const url = new URL('/api/messages/import', window.location.origin);
+      const res = await fetch(url.toString(), {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/octet-stream' },
+         body: file
+      });
+      return parseJson(res);
+   },
+
 
    // ── Node identity ─────────────────────────────────────────────────────
 

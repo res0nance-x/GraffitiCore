@@ -2063,6 +2063,28 @@ fileInput?.addEventListener('change', async () => {
    await promptPackNameAndSend(items, defaultName);
 });
 
+const importPmsgBtn = document.getElementById('btn-import-pmsg');
+const inputPmsgFile = document.getElementById('input-pmsg-file') as HTMLInputElement | null;
+importPmsgBtn?.addEventListener('click', () => inputPmsgFile?.click());
+inputPmsgFile?.addEventListener('change', async () => {
+   const file = inputPmsgFile?.files?.[0];
+   if (!file) return;
+   setStatus('Importing portable message…');
+   try {
+      const res = await graffiti.importMessages(file);
+      if (res.ok) {
+         setStatus(`Imported ${res.imported} message(s) (${res.skipped} skipped, ${res.peers} peer(s)).`);
+         await queueRefreshMessages();
+      } else {
+         setStatus(`Import failed: ${res.error || 'Unknown error'}`);
+      }
+   } catch (err: any) {
+      setStatus(`Import failed: ${err?.message || err}`);
+   } finally {
+      if (inputPmsgFile) inputPmsgFile.value = '';
+   }
+});
+
 // ── Drag-and-drop ─────────────────────────────────────────────────────────────
 let dragDepth = 0;
 
@@ -2098,6 +2120,23 @@ messagesSection?.addEventListener('drop', async (event: DragEvent) => {
    if (dropped.items.length > 0) {
       if (dropped.items.length === 1 && !dropped.isFolder) {
          const single = dropped.items[0];
+         if (single.file.name.endsWith('.pmsg')) {
+            if (confirm(`Import portable message pack "${single.file.name}"?`)) {
+               setStatus('Importing portable message…');
+               try {
+                  const res = await graffiti.importMessages(single.file);
+                  if (res.ok) {
+                     setStatus(`Imported ${res.imported} message(s) (${res.skipped} skipped, ${res.peers} peer(s)).`);
+                     await queueRefreshMessages();
+                  } else {
+                     setStatus(`Import failed: ${res.error || 'Unknown error'}`);
+                  }
+               } catch (err: any) {
+                  setStatus(`Import failed: ${err?.message || err}`);
+               }
+               return;
+            }
+         }
          await sendPayload({type: 'file', fileName: single.file.name, file: single.file, ...getEnvelope()});
          return;
       }
@@ -3184,6 +3223,14 @@ msgContextMenu?.addEventListener('click', async (e: MouseEvent) => {
       await handleCopy(msg);
    } else if (action === 'download') {
       handleDownload(msg);
+   } else if (action === 'export-portable') {
+      setStatus('Exporting portable message…');
+      try {
+         await graffiti.exportMessages({ key: msg.key });
+         setStatus('Message exported.');
+      } catch (err: any) {
+         setStatus(`Export failed: ${err?.message || err}`);
+      }
    } else if (action === 'toggle-ignore') {
       try {
          const newIgnored = !msg.ignored;

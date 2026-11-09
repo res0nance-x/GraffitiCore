@@ -1,5 +1,6 @@
 package r3.graffiti
 
+import r3.content.BinaryContent
 import r3.content.Content
 import r3.content.ContentMeta
 import r3.encryption.EncryptedContinuousOutputStream
@@ -15,16 +16,19 @@ import r3.net.tcp.TCPNode
 import r3.net.tcp.TCPPack
 import r3.net.tcp.TCPPackClient
 import r3.net.tcp.TCPServer
+import r3.pack.BinaryPack
 import r3.pack.DirPack
 import r3.pke.*
 import r3.source.FileSink
 import r3.source.FileSource
 import r3.source.ListWritable
+import r3.source.Source
 import r3.source.StringWritable
 import r3.thread.async
 import java.io.ByteArrayInputStream
 import java.io.DataInputStream
 import java.io.File
+import java.io.InputStream
 import java.io.RandomAccessFile
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -1484,6 +1488,210 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			}
 		}
 		return hadMeta
+	}
+
+	data class ImportResult(
+		val importedMessages: Int,
+		val skippedMessages: Int,
+		val importedPeers: Int
+	)
+
+	fun getMessagesForIdentity(identityKey: IdentityKey): List<EncryptedMetaKey> {
+		val result = mutableListOf<EncryptedMetaKey>()
+		metaDir.listFiles { f -> f.isFile }.orEmpty().forEach { metaFile ->
+			try {
+				val k = EncryptedMetaKey(metaFile.name)
+				val eMeta = metaCache[k] ?: metaFile.toDataInputStream().use { EncryptedContentMetaData.read(it) }
+				if (eMeta.recipient == identityKey) {
+					result.add(k)
+				}
+			} catch (_: Exception) {}
+		}
+		return result
+	}
+
+	fun exportMessages(keys: Collection<EncryptedMetaKey>, destinationFile: File): Int {
+		val items = mutableListOf<Content>()
+		val peerKeysAdded = mutableSetOf<PeerKey>()
+		var count = 0
+
+		for (key in keys) {
+			val metaFile = File(metaDir, "$key").consistentFile()
+			if (!metaFile.exists()) continue
+
+			val eMeta = metaCache[key] ?: try {
+				metaFile.toDataInputStream().use { EncryptedContentMetaData.read(it) }
+			} catch (_: Exception) {
+				null
+			} ?: continue
+
+			val metaTime = metaTimeCache[key] ?: metaFile.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis()
+
+			// 1. Add meta entry
+			items.add(object : Content, Source by FileSource(metaFile) {
+				override val path: String = "meta/$key"
+				override val ext: String = "meta"
+				override val length: Long = metaFile.length()
+				override val lastModified: Long = metaTime
+				override fun createInputStream(): InputStream = metaFile.inputStream()
+			})
+
+			// 2. Add content entry if present
+			val contentFile = File(contentDir, "$key").consistentFile()
+			if (contentFile.exists() && contentFile.length() > 0) {
+				items.add(object : Content, Source by FileSource(contentFile) {
+					override val path: String = "content/$key"
+					override val ext: String = "content"
+					override val length: Long = contentFile.length()
+					override val lastModified: Long = contentFile.lastModified()
+					override fun createInputStream(): InputStream = contentFile.inputStream()
+				})
+			} else {
+				val smallBytes = smallContentCache[key]
+				if (smallBytes != null && smallBytes.isNotEmpty()) {
+					items.add(BinaryContent(smallBytes, path = "content/$key", ext = "content"))
+				}
+			}
+
+			// 3. Add author peer public key if available
+			if (peerKeysAdded.add(eMeta.author)) {
+				val peer = getPeerByKey(eMeta.author)
+					?: listIdentities().find { it.asPeer().key == eMeta.author }?.asPeer()
+				if (peer != null) {
+					items.add(BinaryContent(peer.serialize(), path = "peer/${eMeta.author}", ext = "peer"))
+				}
+			}
+			count++
+		}
+
+		if (items.isEmpty()) return 0
+
+		destinationFile.parentFile?.mkdirs()
+		val sink = FileSink(destinationFile, append = false)
+		BinaryPack.create(items, sink)
+		return count
+	}
+
+	fun importPack(source: Source): ImportResult {
+		val pack = BinaryPack.open(source)
+		val entries = pack.toList()
+		var importedPeers = 0
+		var importedMessages = 0
+		var skippedMessages = 0
+
+		// 1. Import any peers bundled in the pack
+		for (entry in entries) {
+			if (entry.path.startsWith("peer/")) {
+				try {
+					val peer = entry.createInputStream().use { Peer.read(DataInputStream(it)) }
+					if (getPeerByKey(peer.key) == null) {
+						savePeer(peer)
+						importedPeers++
+					}
+				} catch (e: Exception) {
+					log("Failed to import peer entry ${entry.path}: ${e.message}")
+				}
+			}
+		}
+
+		// 2. Index meta and content entries
+		val metaEntries = mutableMapOf<EncryptedMetaKey, Content>()
+		val contentEntries = mutableMapOf<EncryptedMetaKey, Content>()
+
+		for (entry in entries) {
+			if (entry.path.startsWith("meta/")) {
+				val keyStr = entry.path.removePrefix("meta/")
+				try {
+					val key = EncryptedMetaKey(keyStr)
+					metaEntries[key] = entry
+				} catch (_: Exception) {}
+			} else if (entry.path.startsWith("content/")) {
+				val keyStr = entry.path.removePrefix("content/")
+				try {
+					val key = EncryptedMetaKey(keyStr)
+					contentEntries[key] = entry
+				} catch (_: Exception) {}
+			}
+		}
+
+		val newlyImportedKeys = mutableListOf<EncryptedMetaKey>()
+
+		for ((key, metaEntry) in metaEntries) {
+			if (isMessageDeleted(key)) {
+				skippedMessages++
+				continue
+			}
+
+			val metaFile = File(metaDir, "$key").consistentFile()
+			val contentFile = File(contentDir, "$key").consistentFile()
+			val contentEntry = contentEntries[key]
+
+			val alreadyHasMeta = metaCache.containsKey(key) || metaFile.exists()
+			val alreadyHasContent = hasContent(key)
+
+			if (alreadyHasMeta && (alreadyHasContent || contentEntry == null)) {
+				skippedMessages++
+				continue
+			}
+
+			var metaSaved = false
+			if (!alreadyHasMeta) {
+				try {
+					val metaBytes = metaEntry.createInputStream().use { it.readBytes() }
+					val eMeta = DataInputStream(ByteArrayInputStream(metaBytes)).use { EncryptedContentMetaData.read(it) }
+					if (eMeta.key != key) {
+						log("Key mismatch for portable meta: expected $key but got ${eMeta.key}")
+						skippedMessages++
+						continue
+					}
+					metaFile.writeBytes(metaBytes)
+					val originalTime = metaEntry.lastModified.takeIf { it > 0 } ?: System.currentTimeMillis()
+					metaFile.setLastModified(originalTime)
+
+					metaCache[key] = eMeta
+					metaTimeCache[key] = originalTime
+					metaSaved = true
+				} catch (e: Exception) {
+					log("Failed to write portable meta for $key: ${e.message}")
+					skippedMessages++
+					continue
+				}
+			}
+
+			var contentSaved = false
+			if (contentEntry != null && !alreadyHasContent) {
+				try {
+					contentFile.outputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { out ->
+						contentEntry.createInputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { inp ->
+							inp.copyTo(out, DEFAULT_COPY_BUFFER_SIZE)
+						}
+					}
+					val sz = contentFile.length()
+					totalContentSize.addAndGet(sz)
+					if (sz <= SMALL_CONTENT_THRESHOLD_BYTES && smallContentCache.size < MAX_SMALL_CONTENT_ITEMS) {
+						smallContentCache[key] = contentFile.readBytes()
+					}
+					contentSaved = true
+				} catch (e: Exception) {
+					log("Failed to write portable content for $key: ${e.message}")
+				}
+			}
+
+			if (metaSaved || contentSaved) {
+				importedMessages++
+				newlyImportedKeys.add(key)
+			}
+		}
+
+		if (newlyImportedKeys.isNotEmpty()) {
+			triggerMetaWarmup(newlyImportedKeys)
+			for (k in newlyImportedKeys) {
+				pushNewMessage(k)
+			}
+			checkAndEnforceQuota()
+		}
+
+		return ImportResult(importedMessages, skippedMessages, importedPeers)
 	}
 
 	fun isIgnoredForRelay(eMeta: EncryptedContentMetaData): Boolean {

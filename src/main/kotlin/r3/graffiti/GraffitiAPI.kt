@@ -114,6 +114,8 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/peer/import" -> content?.let { importPeer(header, it) }
 			"/api/peer/remove" -> removePeer(header)
 			"/api/messages" -> listMessages()
+			"/api/messages/export" -> exportMessages(header)
+			"/api/messages/import" -> importMessages(content)
 			"/api/message/meta" -> getMessageMeta(header, content)
 			"/api/messages/meta" -> getMessageMeta(header, content)
 			"/api/messages/refresh" -> refreshMessages(header)
@@ -988,6 +990,69 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		return ok()
 	}
 
+	private fun exportMessages(header: JSONObject): Content {
+		val keysArr = header.optJSONArray("keys")
+		val singleKey = header.optString("key").takeIf { it.isNotEmpty() }
+		val identityKeyStr = header.optString("identity").takeIf { it.isNotEmpty() }
+
+		val keys = mutableListOf<EncryptedMetaKey>()
+		if (singleKey != null) {
+			keys.add(EncryptedMetaKey(singleKey))
+		} else if (keysArr != null) {
+			for (i in 0 until keysArr.length()) {
+				keys.add(EncryptedMetaKey(keysArr.getString(i)))
+			}
+		} else if (identityKeyStr != null) {
+			keys.addAll(p2p.getMessagesForIdentity(IdentityKey(identityKeyStr)))
+		}
+
+		if (keys.isEmpty()) {
+			return err("No messages found to export")
+		}
+
+		val tempPackFile = File.createTempFile("graffiti_export_", ".pmsg", p2p.tmpDir)
+		val exportedCount = p2p.exportMessages(keys, tempPackFile)
+		if (exportedCount == 0 || !tempPackFile.exists() || tempPackFile.length() == 0L) {
+			tempPackFile.delete()
+			return err("No valid messages could be exported")
+		}
+
+		val filename = if (singleKey != null) {
+			val meta = p2p.getDecryptedMeta(EncryptedMetaKey(singleKey))?.first
+			val safeName = meta?.name?.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+			if (!safeName.isNullOrBlank()) "${safeName}.pmsg" else "message_${singleKey.take(8)}.pmsg"
+		} else if (identityKeyStr != null) {
+			val idenName = p2p.getIdentityByKey(IdentityKey(identityKeyStr))?.key?.name?.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+			val safeIden = if (!idenName.isNullOrBlank()) idenName else identityKeyStr.take(8)
+			"${safeIden}_messages.pmsg"
+		} else {
+			"graffiti_messages.pmsg"
+		}
+
+		header.put("exportFilename", filename)
+
+		return FileContent(tempPackFile, path = filename, ext = "pmsg")
+	}
+
+	private fun importMessages(content: Content?): Content {
+		if (content == null) return err("No pack file provided")
+		return try {
+			val result = p2p.importPack(content)
+			stateManager.onMessagesChanged()
+			if (result.importedPeers > 0) {
+				stateManager.onPeersChanged()
+			}
+			ok {
+				put("imported", result.importedMessages)
+				put("skipped", result.skippedMessages)
+				put("peers", result.importedPeers)
+			}
+		} catch (e: Exception) {
+			log("Failed to import portable messages pack: ${e.message}")
+			err("Failed to import portable messages: ${e.message}")
+		}
+	}
+
 	private fun ignoreMessage(header: JSONObject): Content {
 		val keyStr = header.optString("key").takeIf { it.isNotEmpty() } ?: return err("Missing 'key' parameter")
 		val key = EncryptedMetaKey(keyStr)
@@ -1365,5 +1430,10 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 
 	override fun onResponse(header: JSONObject, response: Response) {
 		response.addHeader("Cache-Control", "no-store")
+		val path = header.optString("path")
+		if (path == "/api/messages/export") {
+			val filename = header.optString("exportFilename").takeIf { it.isNotEmpty() } ?: "portable_messages.pmsg"
+			response.addHeader("Content-Disposition", "attachment; filename=\"$filename\"")
+		}
 	}
 }
