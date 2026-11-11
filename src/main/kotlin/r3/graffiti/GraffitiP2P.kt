@@ -27,9 +27,15 @@ import r3.source.StringWritable
 import r3.thread.async
 import java.io.ByteArrayInputStream
 import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.EOFException
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
 import java.io.InputStream
 import java.io.RandomAccessFile
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.SecureRandom
@@ -94,13 +100,17 @@ B:      Verifies / requests peer if needed, then issues ContentRequestMessage
 class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false) {
 	val peerDir = File(graffitiDir, "peer").also { it.mkdirs() }
 	val identityDir = File(graffitiDir, "identity").also { it.mkdirs() }
-	val metaDir = File(graffitiDir, "meta").also { it.mkdirs() }
 	val contentDir = File(graffitiDir, "content").also { it.mkdirs() }
-	val deletedDir = File(graffitiDir, "deleted").also { it.mkdirs() }
-	val ignoredIdentitiesDir = File(graffitiDir, "ignored_identities").also { it.mkdirs() }
-	val ignoredContentDir = File(graffitiDir, "ignored_content").also { it.mkdirs() }
 	val tmpDir = File(graffitiDir, "tmp").also { it.mkdirs() }
 	var portalDir: File = File(graffitiDir, "portal").also { it.mkdirs() }
+	val metaIndexFile = File(graffitiDir, "meta.idx")
+	val metaIndexBakFile = File(graffitiDir, "meta.idx.bak")
+	val deletedIndexFile = File(graffitiDir, "deleted.idx")
+	val ignoredIndexFile = File(graffitiDir, "ignored.idx")
+	private val legacyMetaDir = File(graffitiDir, "meta")
+	private val legacyDeletedDir = File(graffitiDir, "deleted")
+	private val legacyIgnoredIdentitiesDir = File(graffitiDir, "ignored_identities")
+	private val legacyIgnoredContentDir = File(graffitiDir, "ignored_content")
 	var defaultP2PPort: Int = 0
 
 	var relayMaxContentSizeBytes: Long = 50 * 1024 * 1024L // 50MB default for relays
@@ -117,6 +127,12 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		const val DEFAULT_STREAM_TIMEOUT_MS = 300_000L // 5 minutes
 		const val SMALL_CONTENT_THRESHOLD_BYTES = 256L
 		const val MAX_SMALL_CONTENT_ITEMS = 10000
+		const val MAGIC_META_INDEX = 0x47524D49 // "GRMI"
+		const val MAGIC_DELETED_INDEX = 0x47524449 // "GRDI"
+		const val MAGIC_IGNORED_INDEX = 0x47524949 // "GRII"
+		const val INDEX_VERSION: Short = 1
+		const val MAX_META_ENTRY_BYTES = 10 * 1024 * 1024 // 10 MB
+		const val META_INDEX_COMPACT_THRESHOLD = 100
 	}
 
 	// ── Backing maps (caches) ──────────────────────────────────────────────────
@@ -129,6 +145,10 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	private val deletedCache = ConcurrentHashMap.newKeySet<EncryptedMetaKey>()
 	private val ignoredIdentitiesCache = ConcurrentHashMap.newKeySet<IdentityKey>()
 	private val ignoredContentCache = ConcurrentHashMap.newKeySet<EncryptedMetaKey>()
+	private val metaIndexLock = Any()
+	private val deletedIndexLock = Any()
+	private val ignoredIndexLock = Any()
+	private val uncompactedDeletes = AtomicInteger(0)
 	private val activeStreamVerifiers = ConcurrentHashMap<EncryptedMetaKey, StreamingHashVerifier>()
 	private val contentSenderExecutor = Executors.newCachedThreadPool { r ->
 		Thread(r, "Graffiti-ContentSender").apply { isDaemon = true }
@@ -249,20 +269,271 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		}
 	}
 
-	@Synchronized
-	fun purgeOldestHalfOverall(): Int {
-		data class MsgEntry(val key: EncryptedMetaKey, val length: Long, val lastModified: Long)
-
-		val allMessages = mutableListOf<MsgEntry>()
-		metaDir.listFiles { f -> f.isFile }.orEmpty().forEach { metaFile ->
+	private fun replaceFileAtomically(tempFile: File, destFile: File) {
+		try {
+			Files.move(
+				tempFile.toPath(),
+				destFile.toPath(),
+				StandardCopyOption.REPLACE_EXISTING,
+				StandardCopyOption.ATOMIC_MOVE
+			)
+		} catch (_: Exception) {
 			try {
-				val name = metaFile.name
-				val key = EncryptedMetaKey(name)
-				allMessages.add(MsgEntry(key, metaFile.length(), metaFile.lastModified()))
+				Files.move(
+					tempFile.toPath(),
+					destFile.toPath(),
+					StandardCopyOption.REPLACE_EXISTING
+				)
 			} catch (_: Exception) {
+				tempFile.copyTo(destFile, overwrite = true, bufferSize = DEFAULT_COPY_BUFFER_SIZE)
+				tempFile.delete()
 			}
 		}
-		allMessages.sortBy { it.lastModified }
+	}
+
+	private fun loadDeletedIndex(): Boolean = synchronized(deletedIndexLock) {
+		if (!deletedIndexFile.exists()) return false
+		return runCatching {
+			deletedIndexFile.inputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { bis ->
+				DataInputStream(bis).use { dis ->
+					val magic = dis.readInt()
+					if (magic != MAGIC_DELETED_INDEX) throw IOException("Invalid deleted.idx magic")
+					val version = dis.readShort()
+					if (version != INDEX_VERSION) throw IOException("Unsupported deleted.idx version: $version")
+					val keyBuf = ByteArray(32)
+					try {
+						while (true) {
+							val first = dis.read()
+							if (first < 0) break
+							keyBuf[0] = first.toByte()
+							dis.readFully(keyBuf, 1, 31)
+							deletedCache.add(EncryptedMetaKey(keyBuf.copyOf()))
+						}
+					} catch (_: EOFException) {
+					}
+				}
+			}
+			true
+		}.onFailure {
+			log("Failed to load deleted.idx, rebuilding from directory: ${it.message}")
+		}.getOrDefault(false)
+	}
+
+	fun saveDeletedIndex() {
+		synchronized(deletedIndexLock) {
+			runCatching {
+				val tempFile = File(graffitiDir, "deleted.idx.tmp")
+				tempFile.outputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { bos ->
+					DataOutputStream(bos).use { dos ->
+						dos.writeInt(MAGIC_DELETED_INDEX)
+						dos.writeShort(INDEX_VERSION.toInt())
+						for (key in deletedCache) {
+							dos.write(key.arr)
+						}
+					}
+				}
+				replaceFileAtomically(tempFile, deletedIndexFile)
+			}.onFailure {
+				log("Failed to save deleted.idx: ${it.message}")
+			}
+		}
+	}
+
+	private fun appendDeletedIndex(key: EncryptedMetaKey) {
+		synchronized(deletedIndexLock) {
+			if (!deletedIndexFile.exists()) {
+				saveDeletedIndex()
+				return
+			}
+			runCatching {
+				FileOutputStream(deletedIndexFile, true).use { fos ->
+					fos.write(key.arr)
+				}
+			}.onFailure {
+				log("Failed to append to deleted.idx: ${it.message}")
+			}
+		}
+	}
+
+	private fun loadIgnoredIndex(): Boolean = synchronized(ignoredIndexLock) {
+		if (!ignoredIndexFile.exists()) return false
+		return runCatching {
+			ignoredIndexFile.inputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { bis ->
+				DataInputStream(bis).use { dis ->
+					val magic = dis.readInt()
+					if (magic != MAGIC_IGNORED_INDEX) throw IOException("Invalid ignored.idx magic")
+					val version = dis.readShort()
+					if (version != INDEX_VERSION) throw IOException("Unsupported ignored.idx version: $version")
+					val keyBuf = ByteArray(32)
+					val idCount = dis.readInt()
+					for (i in 0 until idCount) {
+						dis.readFully(keyBuf)
+						ignoredIdentitiesCache.add(IdentityKey(keyBuf.copyOf()))
+					}
+					val contentCount = dis.readInt()
+					for (i in 0 until contentCount) {
+						dis.readFully(keyBuf)
+						ignoredContentCache.add(EncryptedMetaKey(keyBuf.copyOf()))
+					}
+				}
+			}
+			true
+		}.onFailure {
+			log("Failed to load ignored.idx: ${it.message}")
+		}.getOrDefault(false)
+	}
+
+	fun saveIgnoredIndex() {
+		synchronized(ignoredIndexLock) {
+			runCatching {
+				val tempFile = File(graffitiDir, "ignored.idx.tmp")
+				tempFile.outputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { bos ->
+					DataOutputStream(bos).use { dos ->
+						dos.writeInt(MAGIC_IGNORED_INDEX)
+						dos.writeShort(INDEX_VERSION.toInt())
+						val idList = ignoredIdentitiesCache.toList()
+						dos.writeInt(idList.size)
+						for (idKey in idList) {
+							dos.write(idKey.arr)
+						}
+						val contentList = ignoredContentCache.toList()
+						dos.writeInt(contentList.size)
+						for (cKey in contentList) {
+							dos.write(cKey.arr)
+						}
+					}
+				}
+				replaceFileAtomically(tempFile, ignoredIndexFile)
+			}.onFailure {
+				log("Failed to save ignored.idx: ${it.message}")
+			}
+		}
+	}
+
+	private fun readMetaIndexStream(file: File): Boolean {
+		if (!file.exists()) return false
+		var staleCount = 0
+		val ok = runCatching {
+			file.inputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { bis ->
+				DataInputStream(bis).use { dis ->
+					val magic = dis.readInt()
+					if (magic != MAGIC_META_INDEX) throw IOException("Invalid meta.idx magic")
+					val version = dis.readShort()
+					if (version != INDEX_VERSION) throw IOException("Unsupported meta.idx version: $version")
+					try {
+						while (true) {
+							val arrivalTime = try {
+								dis.readLong()
+							} catch (_: EOFException) {
+								break
+							}
+							val dataLen = dis.readInt()
+							if (dataLen !in 1..MAX_META_ENTRY_BYTES) {
+								throw IOException("Invalid meta entry length in meta.idx: $dataLen")
+							}
+							val entryBytes = ByteArray(dataLen)
+							dis.readFully(entryBytes)
+							runCatching {
+								val eMeta = entryBytes.toDataInputStream().use { EncryptedContentMetaData.read(it) }
+								if (deletedCache.contains(eMeta.key)) {
+									staleCount++
+								} else {
+									if (metaCache.put(eMeta.key, eMeta) != null) {
+										staleCount++
+									}
+									metaTimeCache[eMeta.key] = arrivalTime
+								}
+							}
+						}
+					} catch (_: EOFException) {
+						staleCount++
+					}
+				}
+			}
+			true
+		}.onFailure {
+			log("Failed to load meta index from ${file.name}: ${it.message}")
+		}.getOrDefault(false)
+
+		if (ok && staleCount >= META_INDEX_COMPACT_THRESHOLD) {
+			saveMetaIndex()
+		} else if (ok && staleCount > 0) {
+			uncompactedDeletes.set(staleCount)
+		}
+		return ok
+	}
+
+	private fun loadMetaIndex(): Boolean = synchronized(metaIndexLock) {
+		if (readMetaIndexStream(metaIndexFile)) return true
+		if (readMetaIndexStream(metaIndexBakFile)) {
+			log("Recovered metadata from meta.idx.bak")
+			saveMetaIndex()
+			return true
+		}
+		return false
+	}
+
+	fun saveMetaIndex() {
+		synchronized(metaIndexLock) {
+			runCatching {
+				val tempFile = File(graffitiDir, "meta.idx.tmp")
+				val sortedEntries = metaCache.entries
+					.filter { !deletedCache.contains(it.key) }
+					.sortedBy { metaTimeCache[it.key] ?: 0L }
+				tempFile.outputStream().buffered(DEFAULT_COPY_BUFFER_SIZE).use { bos ->
+					DataOutputStream(bos).use { dos ->
+						dos.writeInt(MAGIC_META_INDEX)
+						dos.writeShort(INDEX_VERSION.toInt())
+						for ((key, eMeta) in sortedEntries) {
+							val ts = metaTimeCache[key] ?: System.currentTimeMillis()
+							val bytes = eMeta.serialize()
+							dos.writeLong(ts)
+							dos.writeInt(bytes.size)
+							dos.write(bytes)
+						}
+					}
+				}
+				if (metaIndexFile.exists()) {
+					runCatching {
+						metaIndexFile.copyTo(metaIndexBakFile, overwrite = true)
+					}
+				}
+				replaceFileAtomically(tempFile, metaIndexFile)
+				uncompactedDeletes.set(0)
+			}.onFailure {
+				log("Failed to save meta.idx: ${it.message}")
+			}
+		}
+	}
+
+	private fun appendMetaIndex(eMeta: EncryptedContentMetaData, timestamp: Long, serializedBytes: ByteArray? = null) {
+		synchronized(metaIndexLock) {
+			if (!metaIndexFile.exists()) {
+				saveMetaIndex()
+				return
+			}
+			runCatching {
+				val bytes = serializedBytes ?: eMeta.serialize()
+				FileOutputStream(metaIndexFile, true).buffered(DEFAULT_COPY_BUFFER_SIZE).use { bos ->
+					DataOutputStream(bos).use { dos ->
+						dos.writeLong(timestamp)
+						dos.writeInt(bytes.size)
+						dos.write(bytes)
+					}
+				}
+			}.onFailure {
+				log("Failed to append to meta.idx: ${it.message}")
+			}
+		}
+	}
+
+	@Synchronized
+	fun purgeOldestHalfOverall(): Int {
+		data class MsgEntry(val key: EncryptedMetaKey, val lastModified: Long)
+
+		val allMessages = metaCache.keys.map { key ->
+			MsgEntry(key, metaTimeCache[key] ?: 0L)
+		}.sortedBy { it.lastModified }
 		val target = storageQuotaBytes / 2
 		val iter = allMessages.iterator()
 		var count = 0
@@ -270,6 +541,9 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			if (deleteMessage(iter.next().key)) {
 				count++
 			}
+		}
+		if (count > 0 && uncompactedDeletes.get() > 0) {
+			saveMetaIndex()
 		}
 		return count
 	}
@@ -309,43 +583,71 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			runCatching { file.readBytes().toDataInputStream().use { Peer.read(it) } }
 				.getOrNull()?.let { peerCache[it.key] = it }
 		}
-		// Populate metaCache and metaTimeCache from disk
-		metaDir.listFiles { f -> f.isFile }?.forEach { file ->
-			runCatching {
-				val eMeta = file.toDataInputStream().use { EncryptedContentMetaData.read(it) }
-				metaCache[eMeta.key] = eMeta
-				metaTimeCache[eMeta.key] = file.lastModified()
+		// Populate deletedCache from index (fallback to legacyDeletedDir migration)
+		if (!loadDeletedIndex()) {
+			if (legacyDeletedDir.exists()) {
+				legacyDeletedDir.listFiles { f -> f.isFile }?.forEach { file ->
+					runCatching { deletedCache.add(EncryptedMetaKey(file.name)) }
+				}
+				saveDeletedIndex()
+				legacyDeletedDir.deleteRecursively()
 			}
 		}
-		// Populate smallContentCache from disk (up to MAX_SMALL_CONTENT_ITEMS)
-		val smallFiles = contentDir.listFiles { f -> f.isFile && f.length() <= SMALL_CONTENT_THRESHOLD_BYTES }
-		if (smallFiles != null) {
-			for (file in smallFiles) {
-				if (smallContentCache.size >= MAX_SMALL_CONTENT_ITEMS) break
+		// Populate ignored caches from index (fallback to legacy directories migration)
+		if (!loadIgnoredIndex()) {
+			var hasLegacyIgnored = false
+			if (legacyIgnoredIdentitiesDir.exists()) {
+				legacyIgnoredIdentitiesDir.listFiles { f -> f.isFile }?.forEach { file ->
+					runCatching { ignoredIdentitiesCache.add(IdentityKey(file.name)) }
+				}
+				hasLegacyIgnored = true
+				legacyIgnoredIdentitiesDir.deleteRecursively()
+			}
+			if (legacyIgnoredContentDir.exists()) {
+				legacyIgnoredContentDir.listFiles { f -> f.isFile }?.forEach { file ->
+					runCatching { ignoredContentCache.add(EncryptedMetaKey(file.name)) }
+				}
+				hasLegacyIgnored = true
+				legacyIgnoredContentDir.deleteRecursively()
+			}
+			if (hasLegacyIgnored) {
+				saveIgnoredIndex()
+			}
+		}
+		// Populate metaCache and metaTimeCache from index (fallback to legacyMetaDir migration)
+		if (!loadMetaIndex()) {
+			metaCache.clear()
+			metaTimeCache.clear()
+			if (legacyMetaDir.exists()) {
+				legacyMetaDir.listFiles { f -> f.isFile }?.forEach { file ->
+					runCatching {
+						val eMeta = file.toDataInputStream().use { EncryptedContentMetaData.read(it) }
+						if (!deletedCache.contains(eMeta.key)) {
+							metaCache[eMeta.key] = eMeta
+							metaTimeCache[eMeta.key] = file.lastModified()
+						}
+					}
+				}
+				saveMetaIndex()
+				legacyMetaDir.deleteRecursively()
+			}
+		}
+		// Populate smallContentCache (up to MAX_SMALL_CONTENT_ITEMS) and initialize totalContentSize
+		var totalBytes = 0L
+		contentDir.listFiles { f -> f.isFile }?.forEach { file ->
+			val len = file.length()
+			totalBytes += len
+			if (len <= SMALL_CONTENT_THRESHOLD_BYTES && smallContentCache.size < MAX_SMALL_CONTENT_ITEMS) {
 				runCatching {
 					val key = EncryptedMetaKey(file.name)
 					smallContentCache[key] = file.readBytes()
 				}
 			}
 		}
-		// Populate deletedCache from disk
-		deletedDir.listFiles { f -> f.isFile }?.forEach { file ->
-			runCatching { deletedCache.add(EncryptedMetaKey(file.name)) }
-		}
-		// Populate ignoredIdentitiesCache from disk
-		ignoredIdentitiesDir.listFiles { f -> f.isFile }?.forEach { file ->
-			runCatching { ignoredIdentitiesCache.add(IdentityKey(file.name)) }
-		}
-		// Populate ignoredContentCache from disk
-		ignoredContentDir.listFiles { f -> f.isFile }?.forEach { file ->
-			runCatching { ignoredContentCache.add(EncryptedMetaKey(file.name)) }
-		}
-		// Initialize totalContentSize cache
-		totalContentSize.set(contentDir.listFiles().orEmpty().sumOf { it.length() })
+		totalContentSize.set(totalBytes)
 		loadQuota()
 		// Initialize monotonic timestamp counter based on existing files or wall-clock
-		val maxExistingTime = metaDir.listFiles { f -> f.isFile }
-			?.maxOfOrNull { it.lastModified() } ?: 0L
+		val maxExistingTime = metaTimeCache.values.maxOrNull() ?: 0L
 		val now = System.currentTimeMillis()
 		val initialTs = if (maxExistingTime in (now + 1)..(now + 86_400_000L)) {
 			maxExistingTime
@@ -370,7 +672,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 						val serverTime = activeWatermarkSupplier?.invoke()?.let { minOf(it, currentTs) } ?: currentTs
 						val metaList = mutableListOf<EncryptedContentMetaData>()
 						metaCache.values.forEach { eMeta ->
-							val msgTime = metaTimeCache[eMeta.key] ?: File(metaDir, "${eMeta.key}").lastModified()
+							val msgTime = metaTimeCache[eMeta.key] ?: 0L
 							if (msg.queryTime > 0L && msgTime <= msg.queryTime) return@forEach
 							if (isAskingAll && isIgnoredForRelay(eMeta)) return@forEach
 							if (!msg.matches(eMeta)) return@forEach
@@ -430,8 +732,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 									debug("Ignoring meta ${msgHeader.key.name} from ${node.remoteAddress}: author ${msgHeader.author.name} not in whitelist")
 									return@forEach
 								}
-								val metaExists =
-									metaCache.containsKey(msgHeader.key) || File(metaDir, "${msgHeader.key}").exists()
+								val metaExists = metaCache.containsKey(msgHeader.key)
 								val contentExists =
 									smallContentCache.containsKey(msgHeader.key) || File(contentDir, "${msgHeader.key}").exists()
 								if (metaExists && contentExists) return@forEach
@@ -513,12 +814,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 										missingKeys.add(key)
 										return@forEach
 									}
-									val eMeta = metaCache[key] ?: run {
-										val metaFile = File(metaDir, "$key")
-										if (metaFile.exists()) {
-											metaFile.toDataInputStream().use { EncryptedContentMetaData.read(it) }
-										} else null
-									}
+									val eMeta = metaCache[key]
 									if (isAskingAll && eMeta != null && isIgnoredForRelay(eMeta)) {
 										debug("Skipping sending ignored content ${key.name} to ${node.remoteAddress}")
 										missingKeys.add(key)
@@ -597,12 +893,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 								req.keys.forEach { key ->
 									if (node.isClosed()) return@forEach
 									if (isMessageDeleted(key)) return@forEach
-									val eMeta = metaCache[key] ?: run {
-										val metaFile = File(metaDir, "$key")
-										if (metaFile.exists()) {
-											metaFile.toDataInputStream().use { EncryptedContentMetaData.read(it) }
-										} else null
-									}
+									val eMeta = metaCache[key]
 									if (isAskingAll && eMeta != null && isIgnoredForRelay(eMeta)) return@forEach
 									if (eMeta != null) {
 										node.send(EncryptedMetaMessage(eMeta).serialize())
@@ -634,13 +925,12 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 									val time = pendingBatchWatermark.remove(node) ?: 0L
 									if (time > 0L) setPeerQueryTime(node, time)
 								}
+								val isNew = !metaCache.containsKey(eMeta.key)
 								metaCache[eMeta.key] = eMeta
-								val metaFile = File(metaDir, "${eMeta.key}").consistentFile()
-								if (!metaFile.exists()) {
-									metaFile.writeBytes(eMeta.serialize())
+								if (isNew) {
 									val ts = queryOrderTimestamps.remove(eMeta.key) ?: nextMonotonicTimestamp()
-									metaFile.setLastModified(ts)
 									metaTimeCache[eMeta.key] = ts
+									appendMetaIndex(eMeta, ts)
 									contentHolders.computeIfAbsent(eMeta.key) { ConcurrentHashMap.newKeySet() }.add(node)
 									notifyMessageReceived(eMeta.key)
 								} else {
@@ -740,13 +1030,12 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 										val time = pendingBatchWatermark.remove(node) ?: 0L
 										if (time > 0L) setPeerQueryTime(node, time)
 									}
+									val isNew = !metaCache.containsKey(eMeta.key)
 									metaCache[eMeta.key] = eMeta
-									val metaFile = File(metaDir, eMeta.key.toString())
-									if (!metaFile.exists()) {
-										metaFile.writeBytes(eMeta.serialize())
+									if (isNew) {
 										val ts = queryOrderTimestamps.remove(eMeta.key) ?: nextMonotonicTimestamp()
-										metaFile.setLastModified(ts)
 										metaTimeCache[eMeta.key] = ts
+										appendMetaIndex(eMeta, ts)
 									} else {
 										queryOrderTimestamps.remove(eMeta.key)
 									}
@@ -834,7 +1123,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 								pendingMap.forEach { (metaKey, targetNode) ->
 									val activeNode = if (!targetNode.isClosed()) targetNode else allNodes.firstOrNull { !it.isClosed() }
 									if (activeNode != null && !isMessageDeleted(metaKey)) {
-										val metaExists = metaCache.containsKey(metaKey) || File(metaDir, "$metaKey").exists()
+										val metaExists = metaCache.containsKey(metaKey)
 										val contentExists =
 											smallContentCache.containsKey(metaKey) || File(contentDir, "$metaKey").exists()
 										if (!metaExists || !contentExists) {
@@ -1132,14 +1421,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	// Pushes a newly stored message's metadata to all currently connected peers.
 	// Each peer will automatically request content if they want it.
 	fun pushNewMessage(metaKey: EncryptedMetaKey, excludeNode: TCPNode? = null) {
-		val eMeta = metaCache[metaKey] ?: try {
-			val metaFile = File(metaDir, "$metaKey")
-			if (!metaFile.exists()) return
-			metaFile.toDataInputStream().use { EncryptedContentMetaData.read(it) }
-		} catch (e: Exception) {
-			debug("pushNewMessage: failed to read meta for ${metaKey.name}: ${e.message}")
-			return
-		}
+		val eMeta = metaCache[metaKey] ?: return
 		val contentExists = smallContentCache.containsKey(metaKey) || File(contentDir, "$metaKey").exists()
 		if (!contentExists) return // Must have the content before we push/relay it!
 		if (pendingReconnects.isNotEmpty()) {
@@ -1297,13 +1579,10 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 
 		val fileSize = contentFile.length()
 		totalContentSize.addAndGet(fileSize)
-		val metaDest = File(metaDir, eMeta.key.toString()).consistentFile()
-		metaDest.writeBytes(eMeta.serialize())
 		val ts = timestamp
-		metaDest.setLastModified(ts)
-
 		metaCache[eMeta.key] = eMeta
 		metaTimeCache[eMeta.key] = ts
+		appendMetaIndex(eMeta, ts)
 		decryptedMetaCache[eMeta.key] = Pair(meta, pass)
 		if (fileSize <= SMALL_CONTENT_THRESHOLD_BYTES && smallContentCache.size < MAX_SMALL_CONTENT_ITEMS) {
 			smallContentCache[eMeta.key] = contentFile.readBytes()
@@ -1392,6 +1671,9 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		stopTCPServer()
 		wakeReconnectManager()
 		wakePingManager()
+		if (uncompactedDeletes.get() > 0) {
+			saveMetaIndex()
+		}
 	}
 
 	fun getIdentityByKey(key: IdentityKey): Identity? =
@@ -1407,17 +1689,17 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	fun getMetaTimeByKey(key: EncryptedMetaKey): Long? =
 		metaTimeCache[key]
 
+	fun listAllMeta(): Collection<EncryptedContentMetaData> =
+		metaCache.values
+
+	fun getMessageKeysInTimeOrder(): List<String> =
+		metaCache.keys
+			.sortedBy { metaTimeCache[it] ?: 0L }
+			.map { it.toString() }
+
 	fun getDecryptedMeta(key: EncryptedMetaKey): Pair<ContentMeta, Password256>? {
 		decryptedMetaCache[key]?.let { return it }
-		val eMeta = metaCache[key] ?: run {
-			val metaFile = File(metaDir, "$key").consistentFile()
-			if (!metaFile.exists()) return null
-			try {
-				metaFile.toDataInputStream().use { EncryptedContentMetaData.read(it) }
-			} catch (_: Exception) {
-				return null
-			}
-		}
+		val eMeta = metaCache[key] ?: return null
 		val recipientIdentity = getIdentityByKey(eMeta.recipient) ?: return null
 		return try {
 			val pair = eMeta.decrypt(recipientIdentity)
@@ -1448,35 +1730,23 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		smallContentCache.containsKey(key) || File(contentDir, "$key").exists()
 
 	fun isMessageDeleted(key: EncryptedMetaKey): Boolean =
-		deletedCache.contains(key) || File(deletedDir, "$key").exists()
+		deletedCache.contains(key)
 
 	@Synchronized
 	fun deleteMessage(key: EncryptedMetaKey): Boolean {
 		setContentIgnored(key, false)
 		queryOrderTimestamps.remove(key)
-		val hadMeta = metaCache.containsKey(key) || isMessageDeleted(key) || File(metaDir, "$key").exists()
+		val hadMeta = metaCache.containsKey(key) || isMessageDeleted(key)
 		pendingContentRequests.remove(key)
 		decryptedMetaCache.remove(key)
-		metaCache.remove(key)
+		val removedMeta = metaCache.remove(key) != null
 		metaTimeCache.remove(key)
 		smallContentCache.remove(key)
-		deletedCache.add(key)
-		val metaFile = File(metaDir, "$key")
-		val deletedMetaFile = File(deletedDir, "$key")
-		if (metaFile.exists()) {
-			if (!metaFile.renameTo(deletedMetaFile)) {
-				runCatching {
-					deletedMetaFile.writeBytes(metaFile.readBytes())
-					metaFile.delete()
-				}.onFailure {
-					log("Failed to move meta ${key.name} to deleted directory: ${it.message}")
-					return false
-				}
-			}
-		} else if (!deletedMetaFile.exists()) {
-			runCatching {
-				deletedMetaFile.createNewFile()
-			}
+		if (deletedCache.add(key)) {
+			appendDeletedIndex(key)
+		}
+		if (removedMeta && uncompactedDeletes.incrementAndGet() >= META_INDEX_COMPACT_THRESHOLD) {
+			saveMetaIndex()
 		}
 		val contentFile = File(contentDir, "$key")
 		val size = if (contentFile.exists()) contentFile.length() else 0L
@@ -1497,17 +1767,9 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	)
 
 	fun getMessagesForIdentity(identityKey: IdentityKey): List<EncryptedMetaKey> {
-		val result = mutableListOf<EncryptedMetaKey>()
-		metaDir.listFiles { f -> f.isFile }.orEmpty().forEach { metaFile ->
-			try {
-				val k = EncryptedMetaKey(metaFile.name)
-				val eMeta = metaCache[k] ?: metaFile.toDataInputStream().use { EncryptedContentMetaData.read(it) }
-				if (eMeta.recipient == identityKey) {
-					result.add(k)
-				}
-			} catch (_: Exception) {}
-		}
-		return result
+		return metaCache.values
+			.filter { it.recipient == identityKey }
+			.map { it.key }
 	}
 
 	fun exportMessages(keys: Collection<EncryptedMetaKey>, destinationFile: File): Int {
@@ -1516,24 +1778,16 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		var count = 0
 
 		for (key in keys) {
-			val metaFile = File(metaDir, "$key").consistentFile()
-			if (!metaFile.exists()) continue
-
-			val eMeta = metaCache[key] ?: try {
-				metaFile.toDataInputStream().use { EncryptedContentMetaData.read(it) }
-			} catch (_: Exception) {
-				null
-			} ?: continue
-
-			val metaTime = metaTimeCache[key] ?: metaFile.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis()
+			val eMeta = metaCache[key] ?: continue
+			val metaTime = metaTimeCache[key] ?: System.currentTimeMillis()
+			val metaBytes = eMeta.serialize()
 
 			// 1. Add meta entry
-			items.add(object : Content, Source by FileSource(metaFile) {
+			items.add(object : Content, Source by r3.source.BinarySource(metaBytes) {
 				override val path: String = "meta/$key"
 				override val ext: String = "meta"
-				override val length: Long = metaFile.length()
+				override val length: Long = metaBytes.size.toLong()
 				override val lastModified: Long = metaTime
-				override fun createInputStream(): InputStream = metaFile.inputStream()
 			})
 
 			// 2. Add content entry if present
@@ -1622,11 +1876,10 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 				continue
 			}
 
-			val metaFile = File(metaDir, "$key").consistentFile()
 			val contentFile = File(contentDir, "$key").consistentFile()
 			val contentEntry = contentEntries[key]
 
-			val alreadyHasMeta = metaCache.containsKey(key) || metaFile.exists()
+			val alreadyHasMeta = metaCache.containsKey(key)
 			val alreadyHasContent = hasContent(key)
 
 			if (alreadyHasMeta && (alreadyHasContent || contentEntry == null)) {
@@ -1644,12 +1897,11 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 						skippedMessages++
 						continue
 					}
-					metaFile.writeBytes(metaBytes)
 					val originalTime = metaEntry.lastModified.takeIf { it > 0 } ?: System.currentTimeMillis()
-					metaFile.setLastModified(originalTime)
 
 					metaCache[key] = eMeta
 					metaTimeCache[key] = originalTime
+					appendMetaIndex(eMeta, originalTime, metaBytes)
 					metaSaved = true
 				} catch (e: Exception) {
 					log("Failed to write portable meta for $key: ${e.message}")
@@ -1710,15 +1962,13 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 
 	fun isIdentityIgnored(key: IdentityKey): Boolean = ignoredIdentitiesCache.contains(key)
 	fun setIdentityIgnored(key: IdentityKey, ignored: Boolean): Boolean {
-		val file = File(ignoredIdentitiesDir, "$key")
 		val changed = if (ignored) {
-			val added = ignoredIdentitiesCache.add(key)
-			runCatching { file.createNewFile() }
-			added
+			ignoredIdentitiesCache.add(key)
 		} else {
-			val removed = ignoredIdentitiesCache.remove(key)
-			runCatching { if (file.exists()) file.delete() }
-			removed
+			ignoredIdentitiesCache.remove(key)
+		}
+		if (changed) {
+			saveIgnoredIndex()
 		}
 		if (!ignored) {
 			pushMessagesForIdentity(key)
@@ -1728,15 +1978,13 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 
 	fun isContentIgnored(key: EncryptedMetaKey): Boolean = ignoredContentCache.contains(key)
 	fun setContentIgnored(key: EncryptedMetaKey, ignored: Boolean): Boolean {
-		val file = File(ignoredContentDir, "$key")
 		val changed = if (ignored) {
-			val added = ignoredContentCache.add(key)
-			runCatching { file.createNewFile() }
-			added
+			ignoredContentCache.add(key)
 		} else {
-			val removed = ignoredContentCache.remove(key)
-			runCatching { if (file.exists()) file.delete() }
-			removed
+			ignoredContentCache.remove(key)
+		}
+		if (changed) {
+			saveIgnoredIndex()
 		}
 		if (!ignored) {
 			pushNewMessage(key)

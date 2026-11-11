@@ -710,7 +710,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 	/** Builds the display JSON for a single message. Shared by listMessages and WS push. */
 	private fun buildMsgJson(eMeta: EncryptedContentMetaData, meta: ContentMeta, fileTime: Long? = null): JSONObject {
 		val effectiveFileTime = fileTime
-			?: File(p2p.metaDir, "${eMeta.key}").lastModified().takeIf { it > 0 }
+			?: p2p.getMetaTimeByKey(eMeta.key)
 			?: System.currentTimeMillis()
 		return JSONObject()
 			.put("key", eMeta.key.toString())
@@ -732,14 +732,13 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		data class Entry(val fileTime: Long, val key: EncryptedMetaKey, val json: JSONObject)
 
 		val entries = mutableListOf<Entry>()
-		p2p.metaDir.listFiles { f -> f.isFile }.orEmpty().forEach { metaFile ->
+		p2p.listAllMeta().forEach { eMeta ->
 			try {
-				val key = EncryptedMetaKey(metaFile.name)
-				val eMeta = p2p.getMetaByKey(key) ?: DataInputStream(metaFile.inputStream()).use { EncryptedContentMetaData.read(it) }
+				val key = eMeta.key
 				if (identities[eMeta.recipient] == null) return@forEach
-				val fileTime = p2p.getMetaTimeByKey(key) ?: metaFile.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis()
+				val fileTime = p2p.getMetaTimeByKey(key) ?: System.currentTimeMillis()
 				val obj = JSONObject()
-					.put("key", eMeta.key.toString())
+					.put("key", key.toString())
 					.put("author", eMeta.author.name)
 					.put("authorKey", eMeta.author.toString())
 					.put("recipient", eMeta.recipient.name)
@@ -748,7 +747,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 					.put("hasContent", p2p.hasContent(key))
 					.put("ignored", p2p.isContentIgnored(key))
 				entries.add(Entry(fileTime, key, obj))
-			} catch (_: Exception) { /* skip unreadable meta files */
+			} catch (_: Exception) {
 			}
 		}
 		val sortedEntries = entries.sortedBy { it.fileTime }
@@ -790,9 +789,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 						val pair = p2p.getDecryptedMeta(k)
 						if (pair != null) {
 							val (meta, _) = pair
-							val fileTime = p2p.getMetaTimeByKey(k)
-								?: File(p2p.metaDir, "$k").lastModified().takeIf { it > 0 }
-								?: meta.created
+							val fileTime = p2p.getMetaTimeByKey(k) ?: meta.created
 							metasArr.put(
 								JSONObject()
 									.put("key", k.toString())
@@ -814,9 +811,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 				val k = EncryptedMetaKey(singleKey)
 				val pair = p2p.getDecryptedMeta(k) ?: return err("Metadata not found or cannot decrypt")
 				val (meta, _) = pair
-				val fileTime = p2p.getMetaTimeByKey(k)
-					?: File(p2p.metaDir, "$k").lastModified().takeIf { it > 0 }
-					?: meta.created
+				val fileTime = p2p.getMetaTimeByKey(k) ?: meta.created
 				val obj = JSONObject()
 					.put("key", k.toString())
 					.put("name", meta.name)
@@ -856,11 +851,9 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			sizeMap[iden.key] = 0L
 		}
 
-		p2p.metaDir.listFiles { f -> f.isFile }.orEmpty().forEach { metaFile ->
+		p2p.listAllMeta().forEach { eMeta ->
 			try {
-				val eMeta = DataInputStream(metaFile.inputStream()).use { EncryptedContentMetaData.read(it) }
-				val contentFile = File(p2p.contentDir, eMeta.key.toString())
-				val contentSize = if (contentFile.exists()) contentFile.length() else 0L
+				val contentSize = p2p.getContentSize(eMeta.key)
 				sizeMap[eMeta.recipient] = sizeMap.getOrDefault(eMeta.recipient, 0L) + contentSize
 			} catch (_: Exception) {
 			}
@@ -951,11 +944,11 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 
 		val matchedMessages = mutableListOf<MsgEntry>()
 
-		p2p.metaDir.listFiles { f -> f.isFile }.orEmpty().forEach { metaFile ->
+		p2p.listAllMeta().forEach { eMeta ->
 			try {
-				val eMeta = DataInputStream(metaFile.inputStream()).use { EncryptedContentMetaData.read(it) }
 				if (eMeta.recipient == targetKey) {
-					matchedMessages.add(MsgEntry(eMeta.key, metaFile.lastModified()))
+					val time = p2p.getMetaTimeByKey(eMeta.key) ?: 0L
+					matchedMessages.add(MsgEntry(eMeta.key, time))
 				}
 			} catch (_: Exception) {
 			}
@@ -975,6 +968,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		}
 
 		if (count > 0) {
+			p2p.saveMetaIndex()
 			stateManager.onMessagesChanged()
 		}
 

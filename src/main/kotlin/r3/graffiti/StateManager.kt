@@ -73,10 +73,7 @@ class StateManager(
 	}
 
 	fun getMessageKeysInTimeOrder(): List<String> {
-		val files = p2p.metaDir.listFiles { f -> f.isFile }.orEmpty()
-		return files
-			.sortedBy { it.lastModified() }
-			.map { it.name }
+		return p2p.getMessageKeysInTimeOrder()
 	}
 
 	fun getStateJson(): JSONObject {
