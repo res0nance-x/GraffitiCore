@@ -116,35 +116,25 @@ class CommandQueue(
 					command.statusMessage = "Compiling pack archive: ${payload.packName}..."
 					onCommandUpdated?.invoke(command)
 
-					val tempPackFile = File(p2p.tmpDir, "pack_${command.id}.pack")
-					try {
-						val dirPack = DirPack(payload.stagingDir)
-						val sink = FileSink(tempPackFile, append = false)
-						BinaryPack.create(dirPack, sink)
-
-						command.progress = 30
-						command.statusMessage = "Encrypting pack archive..."
-						onCommandUpdated?.invoke(command)
-
-						val wrappedContent = MutableMetaDataContent(FileContent(tempPackFile)).apply {
-							path = payload.packName
-							ext = "pack"
+					p2p.encryptPackFromStagingDir(
+						stagingDir = payload.stagingDir,
+						packName = payload.packName,
+						tempId = command.id,
+						authorIdentity = iden,
+						recipientPeer = peer,
+						timestamp = command.sentTimestamp,
+						onPackCompiled = {
+							command.progress = 30
+							command.statusMessage = "Encrypting pack archive..."
+							onCommandUpdated?.invoke(command)
+						},
+						onProgress = { pct, statusMsg ->
+							val scaled = 30 + ((pct * 65) / 100).coerceIn(0, 65)
+							command.progress = scaled
+							command.statusMessage = statusMsg
+							onCommandUpdated?.invoke(command)
 						}
-						p2p.pkeEncrypt(
-							wrappedContent, iden, peer, timestamp = command.sentTimestamp,
-							onProgress = { pct, statusMsg ->
-								val scaled = 30 + ((pct * 65) / 100).coerceIn(0, 65)
-								command.progress = scaled
-								command.statusMessage = statusMsg
-								onCommandUpdated?.invoke(command)
-							}
-						)
-					} finally {
-						payload.stagingDir.deleteRecursively()
-						if (tempPackFile.exists()) {
-							tempPackFile.delete()
-						}
-					}
+					)
 				}
 
 				is CommandPayload.Forward -> {

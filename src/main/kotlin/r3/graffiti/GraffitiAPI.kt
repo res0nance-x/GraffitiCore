@@ -528,17 +528,14 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			return err("No peer found for ${session.peerKey}")
 		}
 
-		val tempPackFile = File(p2p.tmpDir, "pack_${session.sessionId}.pack")
 		try {
-			val dirPack = DirPack(session.stagingDir)
-			val sink = FileSink(tempPackFile, append = false)
-			BinaryPack.create(dirPack, sink)
-
-			val wrappedContent = MutableMetaDataContent(FileContent(tempPackFile)).apply {
-				path = session.packName
-				ext = "pack"
-			}
-			val encKey = p2p.pkeEncrypt(wrappedContent, iden, peer)
+			val encKey = p2p.encryptPackFromStagingDir(
+				stagingDir = session.stagingDir,
+				packName = session.packName,
+				tempId = session.sessionId,
+				authorIdentity = iden,
+				recipientPeer = peer
+			)
 			p2p.pushNewMessage(encKey)
 			stateManager.onMessagesChanged()
 			return ok { put("key", encKey.toString()) }
@@ -546,10 +543,6 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			log("Pack creation failed: ${e.message}")
 			return err("Failed to build pack archive: ${e.message}")
 		} finally {
-			session.stagingDir.deleteRecursively()
-			if (tempPackFile.exists()) {
-				tempPackFile.delete()
-			}
 			stateManager.setEncoding(false)
 		}
 	}
