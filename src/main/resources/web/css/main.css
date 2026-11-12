@@ -938,6 +938,22 @@ input {
     white-space: nowrap;
 }
 
+.badge-bridge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.1rem 0.4rem;
+    border-radius: var(--radius-badge, 0.25rem);
+    background: #2196f3;
+    color: #ffffff;
+    vertical-align: middle;
+    margin-left: 0.4rem;
+    opacity: 0.85;
+    cursor: default;
+    white-space: nowrap;
+}
+
 /* ── Checkbox label inside dialogs ───────────────────────────────────────── */
 
 .dialog-checkbox-label {

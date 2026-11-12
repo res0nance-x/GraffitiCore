@@ -1,6 +1,6 @@
 import {graffiti} from './graffiti-api.js';
 import {onWsEvent, onWsOpen} from './app.js';
-import {applyNodesState, applyRelayState, applyServerState, updateNetTransferIndicator} from './network.js';
+import {applyBridgeState, applyNodesState, applyRelayState, applyServerState, updateNetTransferIndicator} from './network.js';
 import {applyContactsState, applyWhitelistState} from './identity.js';
 import {
    applyActiveCommandsState,
@@ -15,6 +15,7 @@ let lastIdentitiesVersion = -1;
 let lastPeersVersion = -1;
 let lastMessagesVersion = -1;
 let lastRelay: boolean | undefined = undefined;
+let lastBridge: boolean | undefined = undefined;
 let lastWhitelist: boolean | undefined = undefined;
 
 let isSyncing = false;
@@ -60,10 +61,14 @@ export async function syncState(forced = false): Promise<void> {
          applyMessagesState(state.messageKeys);
       }
 
-      // 5. Relay
+      // 5. Relay & Bridge
       if (typeof state.relay === 'boolean' && (forced || state.relay !== lastRelay)) {
          lastRelay = state.relay;
          applyRelayState(state.relay);
+      }
+      if (typeof state.bridge === 'boolean' && (forced || state.bridge !== lastBridge)) {
+         lastBridge = state.bridge;
+         applyBridgeState(state.bridge);
       }
 
       // 6. Whitelist

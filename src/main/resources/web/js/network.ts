@@ -17,6 +17,7 @@ interface DiscoveredNode {
    port: number;
    name: string;
    relay?: boolean;
+   bridge?: boolean;
 }
 
 /** Map of nodeKey (host:port) → ConnectionData */
@@ -102,6 +103,46 @@ async function loadRelayMode(): Promise<void> {
    }
 }
 
+function bridgeInputs(): [HTMLInputElement, HTMLInputElement] {
+   return [
+      document.getElementById('bridge-mode-off') as HTMLInputElement,
+      document.getElementById('bridge-mode-on') as HTMLInputElement,
+   ];
+}
+
+function setBridgeUi(bridge: boolean): void {
+   const [off, on] = bridgeInputs();
+   if (!off || !on) return;
+   off.checked = !bridge;
+   on.checked = bridge;
+}
+
+function setBridgeStatus(text: string, isError = false): void {
+   const el = document.getElementById('bridge-mode-status') as HTMLElement | null;
+   if (!el) return;
+   el.textContent = text;
+   el.hidden = false;
+   el.style.color = isError ? '#ff6b6b' : '';
+}
+
+function clearBridgeStatus(): void {
+   const el = document.getElementById('bridge-mode-status') as HTMLElement | null;
+   if (!el) return;
+   el.hidden = true;
+   el.textContent = '';
+   el.style.color = '';
+}
+
+async function loadBridgeMode(): Promise<void> {
+   try {
+      const status = await graffiti.nodeBridgeStatus();
+      setBridgeUi(status.bridge);
+      clearBridgeStatus();
+   } catch (e) {
+      setBridgeStatus(`Failed to load bridge mode: ${(e as Error).message}`, true);
+   }
+}
+
 // ── Connections list ─────────────────────────────────────────────────────────
 
 const connBody = () => document.getElementById('tbl-connections-body') as HTMLElement;
@@ -149,11 +190,13 @@ function buildConnectionCard(key: string, c: ConnectionData): HTMLDivElement {
    const name = c.peerName ?? '…';
    const avatarKey = c.peerKey ?? null;
    const relayBadgeHtml = c.relay ? ` <span class="badge-relay">Relay</span>` : '';
+   const bridgeBadgeHtml = c.bridge ? ` <span class="badge-bridge">Bridge</span>` : '';
+   const bridgedBadgeHtml = (c.bridged || c.port < 0) ? ` <span class="badge-bridge">Bridged</span>` : '';
 
    div.innerHTML = `
         <div class="net-item-header">
             <div class="net-item-user">
-                <span class="net-item-name">${escHtml(name)}${relayBadgeHtml}</span>
+                <span class="net-item-name">${escHtml(name)}${relayBadgeHtml}${bridgeBadgeHtml}${bridgedBadgeHtml}</span>
             </div>
         </div>
         <div class="net-item-details">
@@ -229,11 +272,13 @@ function buildDiscoverCard(d: DiscoveredNode): HTMLDivElement {
       ? `<span class="status-connected">● Connected</span>`
       : `<button class="btn-connect" type="button">Connect</button>`;
    const relayBadgeHtml = d.relay ? ` <span class="badge-relay">Relay</span>` : '';
+   const bridgeBadgeHtml = d.bridge ? ` <span class="badge-bridge">Bridge</span>` : '';
+   const bridgedBadgeHtml = d.port < 0 ? ` <span class="badge-bridge">Bridged</span>` : '';
 
    div.innerHTML = `
         <div class="net-item-header">
             <div class="net-item-user">
-                <span class="net-item-name">${escHtml(d.name)}${relayBadgeHtml}</span>
+                <span class="net-item-name">${escHtml(d.name)}${relayBadgeHtml}${bridgeBadgeHtml}${bridgedBadgeHtml}</span>
             </div>
         </div>
         <div class="net-item-details">
@@ -338,6 +383,11 @@ export function applyRelayState(relay: boolean): void {
    setRelayStatus(`Relay mode is ${relay ? 'ON' : 'OFF'}.`);
 }
 
+export function applyBridgeState(bridge: boolean): void {
+   setBridgeUi(bridge);
+   setBridgeStatus(`Bridge mode is ${bridge ? 'ON' : 'OFF'}.`);
+}
+
 export function applyServerState(running: boolean, port: number): void {
    if (running) setServerRunning(port);
    else setServerStopped();
@@ -352,6 +402,7 @@ onWsEvent('discover_result', (msg: Record<string, unknown>) => {
       port: msg.port as number,
       name: (msg.name as string) ?? peerNameFromKey(msg.key as string),
       relay: Boolean(msg.relay),
+      bridge: Boolean(msg.bridge),
    };
    discovered.set(msg.key as string, d);
    renderDiscoverRow(d);
@@ -418,8 +469,8 @@ function wireButtons(): void {
          statusEl.hidden = false;
          return;
       }
-      if (!port || port < 1 || port > 65535) {
-         statusEl.textContent = 'Enter a valid port (1–65535).';
+      if (!port || port < -65535 || port > 65535) {
+         statusEl.textContent = 'Enter a valid port (1–65535, or negative virtual port).';
          statusEl.hidden = false;
          return;
       }
@@ -526,6 +577,32 @@ function wireButtons(): void {
       if (relayOn.checked) void setRelay(true);
    });
 
+   const [bridgeOff, bridgeOn] = bridgeInputs();
+   if (bridgeOff && bridgeOn) {
+      const setBridge = async (enabled: boolean) => {
+         bridgeOff.disabled = true;
+         bridgeOn.disabled = true;
+         setBridgeStatus('Updating bridge mode...');
+         try {
+            const status = await graffiti.setNodeBridge(enabled);
+            setBridgeUi(status.bridge);
+            setBridgeStatus(`Bridge mode is ${status.bridge ? 'ON' : 'OFF'}.`);
+         } catch (e) {
+            setBridgeStatus(`Failed to update bridge mode: ${(e as Error).message}`, true);
+            await loadBridgeMode();
+         } finally {
+            bridgeOff.disabled = false;
+            bridgeOn.disabled = false;
+         }
+      };
+      bridgeOff.addEventListener('change', () => {
+         if (bridgeOff.checked) void setBridge(false);
+      });
+      bridgeOn.addEventListener('change', () => {
+         if (bridgeOn.checked) void setBridge(true);
+      });
+   }
+
    const androidServiceField = document.getElementById('field-android-service');
    if (androidServiceField && (window as any).Android?.stopService) {
       androidServiceField.hidden = false;
@@ -562,7 +639,7 @@ onSectionShow('section-network', async () => {
    if (androidServiceField && (window as any).Android?.stopService) {
       androidServiceField.hidden = false;
    }
-   await Promise.all([loadNodeIdentity(), loadRelayMode(), loadConnections(), loadServerStatus()]);
+   await Promise.all([loadNodeIdentity(), loadRelayMode(), loadBridgeMode(), loadConnections(), loadServerStatus()]);
 });
 
 // Run discover on app start (when WebSocket connection is open)
@@ -579,7 +656,7 @@ updateNetworkNavIcon();
 void loadConnections();
 
 async function handleForegroundNetwork(): Promise<void> {
-   await Promise.all([loadConnections(), loadServerStatus(), loadRelayMode()]);
+   await Promise.all([loadConnections(), loadServerStatus(), loadRelayMode(), loadBridgeMode()]);
 }
 
 document.addEventListener('visibilitychange', () => {

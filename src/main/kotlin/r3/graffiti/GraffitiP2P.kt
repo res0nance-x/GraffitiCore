@@ -10,6 +10,8 @@ import r3.io.*
 import r3.key.hash256
 import r3.math.EncryptedSequence
 import r3.net.discover.*
+import r3.net.tcp.BridgeTCPNode
+import r3.net.tcp.TCPBlock
 import r3.net.tcp.TCPBlockHandler
 import r3.net.tcp.TCPInputStream
 import r3.net.tcp.TCPNode
@@ -97,7 +99,11 @@ B:      Verifies / requests peer if needed, then issues ContentRequestMessage
 //   reconnected every BACKGROUND_SYNC_INTERVAL_MS (15m), or immediately on foreground resume.
  */
 
-class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false) {
+class GraffitiP2P(
+	val graffitiDir: File,
+	relayEnabledAtStartup: Boolean = false,
+	bridgeEnabledAtStartup: Boolean = false
+) {
 	val peerDir = File(graffitiDir, "peer").also { it.mkdirs() }
 	val identityDir = File(graffitiDir, "identity").also { it.mkdirs() }
 	val contentDir = File(graffitiDir, "content").also { it.mkdirs() }
@@ -233,6 +239,9 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 
 	@Volatile
 	private var relayEnabled = relayEnabledAtStartup
+
+	@Volatile
+	private var bridgeEnabled = bridgeEnabledAtStartup
 
 	// ── Storage Size ───────────────────────────────────────────────
 	val totalContentSize = AtomicLong(0L)
@@ -1057,11 +1066,13 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 					ChallengeMessage.type -> {
 						val msg = ChallengeMessage.read(rawHead.toDataInputStream())
 						try {
+							val isVirtual = node is BridgeTCPNode
 							node.send(
 								ChallengeResponseMessage(
 									serverIdentity.asPeer(),
 									serverIdentity.sign(msg.nonce),
-									relayEnabled
+									isRelay = if (isVirtual) false else relayEnabled,
+									isBridge = if (isVirtual) false else bridgeEnabled
 								).serialize()
 							)
 						} catch (e: Exception) {
@@ -1077,14 +1088,25 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 						if (ourNonce != null && msg.isValidFor(ourNonce)) {
 							nodePeerMap[node] = msg.peer
 							nodeRelayMap[node] = msg.isRelay
-							nodeQueryTimeMap[node.remoteAddress]?.let { addrTime ->
-								peerQueryTimeMap.putIfAbsent(msg.peer.key, addrTime)
+							nodeBridgeMap[node] = msg.isBridge
+							if (node !is BridgeTCPNode) {
+								getOrAssignBridgeVirtualPort(msg.peer.key)
+								nodeQueryTimeMap[node.remoteAddress]?.let { addrTime ->
+									peerQueryTimeMap.putIfAbsent(msg.peer.key, addrTime)
+								}
 							}
 							notifyNodeIdentified(node, msg.peer)
 							logConnected(node, msg.peer.key.name)
 							if (node !in nodesWithoutAutoSync) {
 								syncNode(node)
 								reconcileMissingContent(node)
+							}
+							if (msg.isBridge && node !is BridgeTCPNode) {
+								contentSenderExecutor.execute {
+									try {
+										requestBridgePeerList(node)
+									} catch (_: Exception) {}
+								}
 							}
 						} else {
 							logNodeError(node, "Auth failed")
@@ -1212,6 +1234,38 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 						}
 						pendingPortalChunkRequests.remove(resp.requestId)?.second?.complete(data)
 					}
+					// BridgeDiscovery: client asking this Bridge for its connected peers + virtual ports
+					BridgeListRequestMessage.type -> {
+						val req = BridgeListRequestMessage.read(rawHead.toDataInputStream())
+						val entries = if (bridgeEnabled && node !is BridgeTCPNode) {
+							directNodes
+								.filter { it != node && !it.isClosed() }
+								.mapNotNull { n ->
+									val peer = nodePeerMap[n] ?: return@mapNotNull null
+									val vPort = getOrAssignBridgeVirtualPort(peer.key)
+									BridgePeerEntry(peer.key, vPort)
+								}
+						} else {
+							emptyList()
+						}
+						try {
+							node.sendPriority(BridgeListResponseMessage(req.requestId, entries).serialize())
+							debug("Served BridgeListResponse (${entries.size} peers) to ${node.remoteAddress}")
+						} catch (e: Exception) {
+							logNodeError(node, "Error serving BridgeListRequest: ${e.message}")
+						}
+					}
+					// BridgeDiscovery response from a connected Bridge
+					BridgeListResponseMessage.type -> {
+						val resp = BridgeListResponseMessage.read(rawHead.toDataInputStream())
+						val bridgeHost = node.remoteAddress.address?.hostAddress ?: node.remoteAddress.hostString
+						resp.entries.forEach { entry ->
+							if (entry.virtualPort < 0 && entry.peerKey.arr.size == 32) {
+								bridgeDirectory[Pair(bridgeHost, entry.virtualPort)] = Pair(node, entry.peerKey)
+							}
+						}
+						pendingBridgeListRequests.remove(resp.requestId)?.second?.complete(resp.entries)
+					}
 
 
 					else -> debug("Unknown message type: $type from ${node.remoteAddress}")
@@ -1269,6 +1323,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		} catch (_: Exception) {}
 		socket.connect(addr)
 		val newNode = TCPNode(socket, blockHandler)
+		newNode.bridgeBlockInterceptor = ::handleBridgeRawBlock
 		newNode.onTransferStateChanged = {
 			checkAndNotifyTransferState()
 			wakeReconnectManager()
@@ -1330,6 +1385,58 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		wakeReconnectManager()
 	}
 
+	fun disconnect(host: String, port: Int) {
+		if (port < 0) {
+			disconnectBridgedPeer(host, port)
+		} else {
+			disconnect(InetSocketAddress(java.net.InetAddress.getByName(host), port))
+		}
+	}
+
+	fun connectBridgedPeer(host: String, virtualPort: Int, autoSync: Boolean = true): BridgeTCPNode {
+		require(virtualPort < 0) { "Virtual bridge port must be negative, got $virtualPort" }
+		val resolvedIp = try {
+			java.net.InetAddress.getByName(host.trim()).hostAddress ?: host.trim()
+		} catch (_: Exception) {
+			host.trim()
+		}
+		var mapping = bridgeDirectory[Pair(resolvedIp, virtualPort)] ?: bridgeDirectory[Pair(host.trim(), virtualPort)]
+		if (mapping == null || mapping.first.isClosed()) {
+			val candidateBridge = directNodes.firstOrNull { n ->
+				!n.isClosed() && isNodeBridge(n) &&
+					(n.remoteAddress.address?.hostAddress == resolvedIp || n.remoteAddress.hostString == host.trim())
+			}
+			if (candidateBridge != null) {
+				requestBridgePeerList(candidateBridge)
+				mapping = bridgeDirectory[Pair(resolvedIp, virtualPort)] ?: bridgeDirectory[Pair(host.trim(), virtualPort)]
+			}
+		}
+		val (bridgeNode, targetPeerKey) = mapping
+			?: error("Bridged peer at $host:$virtualPort is not available on any connected bridge")
+		if (bridgeNode.isClosed()) {
+			error("Bridge connection to $host is closed")
+		}
+		return getOrCreateBridgeNode(
+			carrierNode = bridgeNode,
+			remotePeerKey = targetPeerKey,
+			virtualPort = virtualPort,
+			inbound = false,
+			autoSync = autoSync
+		)
+	}
+
+	fun disconnectBridgedPeer(host: String, virtualPort: Int) {
+		val resolvedIp = try {
+			java.net.InetAddress.getByName(host.trim()).hostAddress ?: host.trim()
+		} catch (_: Exception) {
+			host.trim()
+		}
+		bridgeNodes.values.filter { vNode ->
+			!vNode.isClosed() && vNode.remotePort == virtualPort &&
+				(vNode.remoteAddress.address?.hostAddress == resolvedIp || vNode.remoteAddress.hostString == host.trim())
+		}.forEach { it.close() }
+	}
+
 	private fun syncNode(node: TCPNode) {
 		if (node.isClosed()) return
 		val myIdentityKeys = listIdentities().map { it.key }.toSet()
@@ -1368,12 +1475,42 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		}
 	}
 
+	fun isBridgeEnabled(): Boolean = bridgeEnabled
+	fun setBridgeEnabled(enabled: Boolean) {
+		if (bridgeEnabled == enabled) return
+		bridgeEnabled = enabled
+		if (enabled && backgroundMode) {
+			setBackgroundMode(false)
+		}
+		if (!enabled) {
+			// Notify all active bridged pairs that this bridge is shutting down bridging
+			val snapshot = activeBridgePairs.entries.map { it.key to it.value.toSet() }
+			activeBridgePairs.clear()
+			for ((peerA, partners) in snapshot) {
+				val nodeA = getDirectNodeForPeer(peerA) ?: continue
+				val vPortA = peerToBridgeVirtualPort[peerA] ?: -1
+				for (peerB in partners) {
+					try {
+						nodeA.sendPriority(BridgeTCPNode.createCloseFromPeerBlock(peerB.arr, vPortA))
+					} catch (_: Exception) {}
+				}
+			}
+		}
+		restartDiscoveryServers()
+	}
+
 	private fun restartDiscoveryServers() {
 		val port = serverPort ?: return
 		mcd?.close()
 		sd?.close()
 		val discoverInfo =
-			PeerAddressInfo(ServerKey(serverIdentity.key.arr), tcpServer!!.peerAddressInfo.addrList, port, relayEnabled)
+			PeerAddressInfo(
+				ServerKey(serverIdentity.key.arr),
+				tcpServer!!.peerAddressInfo.addrList,
+				port,
+				relayEnabled,
+				bridgeEnabled
+			)
 		mcd = MulticastDiscoverServer(discoverInfo)
 		mcd?.start(true)
 		sd = ScanDiscoverServer(discoverInfo)
@@ -1411,8 +1548,9 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 				}
 			}
 		}
+		val removedBridged = bridgeNodes.entries.removeIf { it.value == node }
 		cleanupNodeState(node)
-		if (removedInbound || removedOutbound) {
+		if (removedInbound || removedOutbound || removedBridged) {
 			checkAndNotifyTransferState()
 			notifyNodeDisconnected(node)
 		}
@@ -1608,6 +1746,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			address = InetSocketAddress(port),
 			serverKey = ServerKey(serverIdentity.key.arr),
 			onAccept = { node ->
+				node.bridgeBlockInterceptor = ::handleBridgeRawBlock
 				node.onTransferStateChanged = { checkAndNotifyTransferState() }
 				node.onClose = {
 					val alias = nodePeerMap[node]?.key?.name ?: "unknown"
@@ -1635,7 +1774,8 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 					ServerKey(serverIdentity.key.arr),
 					it.peerAddressInfo.addrList,
 					it.peerAddressInfo.port,
-					relayEnabled
+					relayEnabled,
+					bridgeEnabled
 				)
 			mcd = MulticastDiscoverServer(discoverInfo)
 			mcd?.start(true)
@@ -1662,6 +1802,9 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	fun shutdown() {
 		outboundTargets.clear()
 		pendingReconnects.clear()
+		val virtualNodes = bridgeNodes.values.toList()
+		bridgeNodes.clear()
+		closeAll(virtualNodes)
 		val outboundNodes = synchronized(connectionMap) {
 			val list = connectionMap.values.toList()
 			connectionMap.clear()
@@ -2041,7 +2184,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	fun isBackgroundMode(): Boolean = backgroundMode
 
 	fun setBackgroundMode(enabled: Boolean) {
-		val effective = enabled && serverPort == null && !relayEnabled
+		val effective = enabled && serverPort == null && !relayEnabled && !bridgeEnabled
 		if (backgroundMode == effective) return
 		backgroundMode = effective
 		if (effective) {
@@ -2235,11 +2378,13 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	private fun buildCandidateNodes(key: EncryptedMetaKey): List<TCPNode> {
 		val knownHolders = contentHolders[key]?.filter { !it.isClosed() }.orEmpty()
 		val openNodes = allNodes.filter { !it.isClosed() }
-		val holderDirect = knownHolders.filter { !isNodeRelay(it) }
+		val holderDirect = knownHolders.filter { !isNodeRelay(it) && it !is BridgeTCPNode }
+		val holderBridged = knownHolders.filter { !isNodeRelay(it) && it is BridgeTCPNode }
 		val holderRelays = knownHolders.filter { isNodeRelay(it) }
-		val otherDirect = openNodes.filter { !isNodeRelay(it) }
+		val otherDirect = openNodes.filter { !isNodeRelay(it) && it !is BridgeTCPNode && !isNodeBridge(it) }
+		val otherBridged = openNodes.filter { !isNodeRelay(it) && it is BridgeTCPNode }
 		val otherRelays = openNodes.filter { isNodeRelay(it) }
-		return (holderDirect + holderRelays + otherDirect + otherRelays).distinct()
+		return (holderDirect + holderBridged + holderRelays + otherDirect + otherBridged + otherRelays).distinct()
 	}
 
 	fun requestContentDownload(key: EncryptedMetaKey): Boolean {
@@ -2322,11 +2467,14 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			val t = peerQueryTimeMap[peerKey]
 			if (t != null) return t
 		}
+		if (node is BridgeTCPNode) return 0L
 		return nodeQueryTimeMap[node.remoteAddress] ?: 0L
 	}
 
 	fun setPeerQueryTime(node: TCPNode, time: Long) {
-		nodeQueryTimeMap[node.remoteAddress] = time
+		if (node !is BridgeTCPNode) {
+			nodeQueryTimeMap[node.remoteAddress] = time
+		}
 		val peerKey = nodePeerMap[node]?.key
 		if (peerKey != null) {
 			peerQueryTimeMap[peerKey] = time
@@ -2351,12 +2499,48 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	private val batchPendingKeys = ConcurrentHashMap<TCPNode, MutableSet<EncryptedMetaKey>>()
 
 	private fun cleanupNodeState(node: TCPNode) {
-		nodePeerMap.remove(node)
+		val disconnectedPeerKey = nodePeerMap.remove(node)?.key
 		nodeRelayMap.remove(node)
+		nodeBridgeMap.remove(node)
 		nodeChallengeMap.remove(node)
 		nodeQueryMap.remove(node)
 		nodesWithoutAutoSync.remove(node)
-		nodeQueryTimeMap.remove(node.remoteAddress)
+		if (node !is BridgeTCPNode) {
+			nodeQueryTimeMap.remove(node.remoteAddress)
+		}
+
+		if (node !is BridgeTCPNode) {
+			// 1. If we are a client and a Bridge carrier connection closed, close all virtual BridgeTCPNodes riding on it
+			val deadVirtualNodes = bridgeNodes.entries
+				.filter { it.key.first == node }
+				.map { it.value }
+			deadVirtualNodes.forEach { vNode ->
+				vNode.closeFromRemote()
+			}
+			bridgeDirectory.entries.removeIf { it.value.first == node }
+
+			// 2. If we are a Bridge and a direct client disconnected, notify any peers actively bridged to it
+			if (disconnectedPeerKey != null) {
+				val partners = activeBridgePairs.remove(disconnectedPeerKey).orEmpty()
+				val vPort = peerToBridgeVirtualPort[disconnectedPeerKey] ?: -1
+				for (partnerKey in partners) {
+					activeBridgePairs[partnerKey]?.remove(disconnectedPeerKey)
+					val partnerNode = getDirectNodeForPeer(partnerKey)
+					if (partnerNode != null && !partnerNode.isClosed()) {
+						try {
+							partnerNode.sendPriority(BridgeTCPNode.createCloseFromPeerBlock(disconnectedPeerKey.arr, vPort))
+						} catch (_: Exception) {}
+					}
+				}
+			}
+		}
+
+		pendingBridgeListRequests.entries.removeIf { (_, pair) ->
+			if (pair.first == node) {
+				pair.second.complete(emptyList())
+				true
+			} else false
+		}
 
 		pendingBatchWatermark.remove(node)
 		batchPendingKeys.remove(node)
@@ -2542,6 +2726,12 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 
 	fun findConnectedNode(host: String, port: Int): TCPNode? {
 		val normalizedHost = host.trim()
+		if (port < 0) {
+			return bridgeNodes.values.firstOrNull { node ->
+				!node.isClosed() && node.remotePort == port &&
+					(node.remoteAddress.address?.hostAddress == normalizedHost || node.remoteAddress.hostString == normalizedHost)
+			}
+		}
 		synchronized(connectionMap) {
 			connectionMap.entries.firstOrNull { (addr, node) ->
 				!node.isClosed() && addr.port == port &&
@@ -2737,6 +2927,220 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	private val nodeRelayMap = ConcurrentHashMap<TCPNode, Boolean>()
 	fun isNodeRelay(node: TCPNode): Boolean = nodeRelayMap[node] ?: false
 
+	private val nodeBridgeMap = ConcurrentHashMap<TCPNode, Boolean>()
+	fun isNodeBridge(node: TCPNode): Boolean = nodeBridgeMap[node] ?: false
+
+	// ── Bridge Virtual Nodes & Routing State ──────────────────────────────────
+	private val nextBridgeVirtualPort = AtomicInteger(-1)
+	private val peerToBridgeVirtualPort = ConcurrentHashMap<PeerKey, Int>()
+	private val bridgeRequestCounter = AtomicLong(1L)
+	private val pendingBridgeListRequests =
+		ConcurrentHashMap<Long, Pair<TCPNode, CompletableFuture<List<BridgePeerEntry>>>>()
+
+	/** Maps (bridgeHostIp, virtualPort) -> (bridgeCarrierNode, targetPeerKey) discovered via BridgeDiscovery. */
+	private val bridgeDirectory = ConcurrentHashMap<Pair<String, Int>, Pair<TCPNode, PeerKey>>()
+
+	/** Maps (bridgeCarrierNode, remotePeerKey) -> active virtual BridgeTCPNode. */
+	private val bridgeNodes = ConcurrentHashMap<Pair<TCPNode, PeerKey>, BridgeTCPNode>()
+
+	/** Tracks whether each active virtual BridgeTCPNode was initiated inbound (from remote peer) or outbound. */
+	private val bridgeNodeInboundMap = ConcurrentHashMap<BridgeTCPNode, Boolean>()
+
+	/** On a Bridge server, tracks which PeerKeys have active bridged sessions with each other for disconnect cleanup. */
+	private val activeBridgePairs = ConcurrentHashMap<PeerKey, MutableSet<PeerKey>>()
+
+	private fun getOrAssignBridgeVirtualPort(peerKey: PeerKey): Int {
+		return peerToBridgeVirtualPort.computeIfAbsent(peerKey) {
+			nextBridgeVirtualPort.getAndDecrement()
+		}
+	}
+
+	private val directNodes: List<TCPNode>
+		get() = synchronized(connectionMap) { connectionMap.values.toList() } + (tcpServer?.nodeList ?: emptyList())
+
+	private fun getDirectNodeForPeer(peerKey: PeerKey): TCPNode? {
+		return directNodes.firstOrNull { !it.isClosed() && nodePeerMap[it]?.key == peerKey }
+	}
+
+	private fun getOrCreateBridgeNode(
+		carrierNode: TCPNode,
+		remotePeerKey: PeerKey,
+		virtualPort: Int,
+		inbound: Boolean,
+		autoSync: Boolean = true
+	): BridgeTCPNode {
+		val key = Pair(carrierNode, remotePeerKey)
+		val existing = bridgeNodes[key]
+		if (existing != null && !existing.isClosed()) {
+			return existing
+		}
+		val resolvedPort = if (virtualPort < 0) virtualPort else getOrAssignBridgeVirtualPort(remotePeerKey)
+		val bridgeHost = carrierNode.remoteAddress.address?.hostAddress ?: carrierNode.remoteAddress.hostString
+		bridgeDirectory[Pair(bridgeHost, resolvedPort)] = Pair(carrierNode, remotePeerKey)
+
+		val newNode = BridgeTCPNode(
+			carrierNode = carrierNode,
+			remotePeerKeyBytes = remotePeerKey.arr.copyOf(),
+			blockHandler = blockHandler,
+			virtualPort = resolvedPort
+		)
+		var Created = false
+		val actualNode = bridgeNodes.compute(key) { _, cur ->
+			if (cur != null && !cur.isClosed()) {
+				cur
+			} else {
+				Created = true
+				newNode
+			}
+		}!!
+		if (!Created) return actualNode
+
+		bridgeNodeInboundMap[actualNode] = inbound
+		actualNode.onTransferStateChanged = {
+			checkAndNotifyTransferState()
+		}
+		actualNode.onClose = {
+			val alias = nodePeerMap[actualNode]?.key?.name ?: remotePeerKey.name
+			logDisconnected(actualNode, alias)
+			bridgeNodes.remove(key, actualNode)
+			bridgeNodeInboundMap.remove(actualNode)
+			cleanupNodeState(actualNode)
+			checkAndNotifyTransferState()
+			notifyNodeDisconnected(actualNode)
+		}
+		if (!autoSync) {
+			nodesWithoutAutoSync.add(actualNode)
+		}
+		notifyNodeConnected(actualNode, inbound)
+		sendChallenge(actualNode)
+		return actualNode
+	}
+
+	private fun handleBridgeRawBlock(carrierNode: TCPNode, block: TCPBlock) {
+		try {
+			when (block.id) {
+				TCPBlock.BRIDGE_TO_PEER_ID,
+				TCPBlock.BRIDGE_TO_PEER_PRIORITY_ID,
+				TCPBlock.BRIDGE_TO_PEER_CLOSE_ID -> {
+					val targetKeyBytes = BridgeTCPNode.extractPeerKeyBytes(block) ?: return
+					if (!bridgeEnabled) {
+						if (block.id != TCPBlock.BRIDGE_TO_PEER_CLOSE_ID) {
+							try {
+								carrierNode.sendPriority(BridgeTCPNode.createCloseFromPeerBlock(targetKeyBytes))
+							} catch (_: Exception) {}
+						}
+						return
+					}
+					val senderPeer = nodePeerMap[carrierNode] ?: return
+					val targetPeerKey = PeerKey(targetKeyBytes)
+					val targetNode = getDirectNodeForPeer(targetPeerKey)
+					val senderVirtualPort = getOrAssignBridgeVirtualPort(senderPeer.key)
+					if (targetNode == null || targetNode.isClosed()) {
+						if (block.id != TCPBlock.BRIDGE_TO_PEER_CLOSE_ID) {
+							try {
+								carrierNode.sendPriority(BridgeTCPNode.createCloseFromPeerBlock(targetKeyBytes))
+							} catch (_: Exception) {}
+						}
+						return
+					}
+					val rewritten = BridgeTCPNode.rewriteForRecipient(block, senderPeer.key.arr, senderVirtualPort) ?: return
+					if (block.id == TCPBlock.BRIDGE_TO_PEER_CLOSE_ID) {
+						activeBridgePairs[senderPeer.key]?.remove(targetPeerKey)
+						activeBridgePairs[targetPeerKey]?.remove(senderPeer.key)
+						targetNode.offerBridgeBlock(rewritten, priority = true, timeoutMs = 2_000L)
+						return
+					}
+					activeBridgePairs.computeIfAbsent(senderPeer.key) { ConcurrentHashMap.newKeySet() }.add(targetPeerKey)
+					activeBridgePairs.computeIfAbsent(targetPeerKey) { ConcurrentHashMap.newKeySet() }.add(senderPeer.key)
+
+					val isPriority = block.id == TCPBlock.BRIDGE_TO_PEER_PRIORITY_ID
+					val timeoutMs = if (isPriority) 2_000L else 5_000L
+					val forwarded = targetNode.offerBridgeBlock(rewritten, priority = isPriority, timeoutMs = timeoutMs)
+					if (!forwarded) {
+						log("Bridge: congestion forwarding from ${senderPeer.key.name} to ${targetPeerKey.name}, closing bridged session")
+						activeBridgePairs[senderPeer.key]?.remove(targetPeerKey)
+						activeBridgePairs[targetPeerKey]?.remove(senderPeer.key)
+						val targetVirtualPort = getOrAssignBridgeVirtualPort(targetPeerKey)
+						try {
+							carrierNode.sendPriority(BridgeTCPNode.createCloseFromPeerBlock(targetKeyBytes, targetVirtualPort))
+						} catch (_: Exception) {}
+						try {
+							targetNode.offerBridgeBlock(
+								BridgeTCPNode.createCloseFromPeerBlock(senderPeer.key.arr, senderVirtualPort),
+								priority = true,
+								timeoutMs = 1_000L
+							)
+						} catch (_: Exception) {}
+					}
+				}
+
+				TCPBlock.BRIDGE_FROM_PEER_ID,
+				TCPBlock.BRIDGE_FROM_PEER_PRIORITY_ID,
+				TCPBlock.BRIDGE_FROM_PEER_CLOSE_ID -> {
+					val sourceKeyBytes = BridgeTCPNode.extractPeerKeyBytes(block) ?: return
+					val sourcePeerKey = PeerKey(sourceKeyBytes)
+					val sourceVirtualPort = BridgeTCPNode.extractVirtualPort(block)
+					if (sourceVirtualPort < 0) {
+						val bridgeHost = carrierNode.remoteAddress.address?.hostAddress ?: carrierNode.remoteAddress.hostString
+						bridgeDirectory[Pair(bridgeHost, sourceVirtualPort)] = Pair(carrierNode, sourcePeerKey)
+					}
+					if (block.id == TCPBlock.BRIDGE_FROM_PEER_CLOSE_ID) {
+						val vNode = bridgeNodes.remove(Pair(carrierNode, sourcePeerKey))
+						vNode?.closeFromRemote()
+						return
+					}
+					val innerBlock = BridgeTCPNode.unwrapInnerBlock(block) ?: return
+					val vNode = getOrCreateBridgeNode(
+						carrierNode = carrierNode,
+						remotePeerKey = sourcePeerKey,
+						virtualPort = sourceVirtualPort,
+						inbound = true,
+						autoSync = true
+					)
+					vNode.receiveUnwrappedBlock(innerBlock)
+				}
+			}
+		} catch (e: Exception) {
+			logNodeError(carrierNode, "Error handling bridge block: ${e.message}")
+		}
+	}
+
+	fun requestBridgePeerList(bridgeNode: TCPNode, timeoutMs: Long = 3_000L): List<BridgePeerEntry> {
+		if (bridgeNode.isClosed()) return emptyList()
+		val reqId = bridgeRequestCounter.getAndIncrement()
+		val future = CompletableFuture<List<BridgePeerEntry>>()
+		pendingBridgeListRequests[reqId] = Pair(bridgeNode, future)
+		return try {
+			bridgeNode.sendPriority(BridgeListRequestMessage(reqId).serialize())
+			future.get(timeoutMs, TimeUnit.MILLISECONDS)
+		} catch (e: Exception) {
+			debug("BridgeListRequest to ${bridgeNode.remoteAddress} timed out or failed: ${e.message}")
+			emptyList()
+		} finally {
+			pendingBridgeListRequests.remove(reqId)
+		}
+	}
+
+	fun discoverBridgedPeers(found: (PeerAddressInfo) -> Unit) {
+		val bridges = directNodes.filter { !it.isClosed() && isNodeBridge(it) }
+		for (bridgeNode in bridges) {
+			val entries = requestBridgePeerList(bridgeNode)
+			val bridgeAddr = bridgeNode.remoteAddress.address ?: continue
+			for (entry in entries) {
+				if (entry.peerKey.arr.contentEquals(serverIdentity.key.arr)) continue
+				found(
+					PeerAddressInfo(
+						serverKey = ServerKey(entry.peerKey.arr),
+						addrList = listOf(bridgeAddr),
+						port = entry.virtualPort,
+						isRelay = false,
+						isBridge = false
+					)
+				)
+			}
+		}
+	}
+
 	/** Maps each live TCPNode to the nonce we sent them, consumed when their response arrives. */
 	private val nodeChallengeMap = ConcurrentHashMap<TCPNode, ByteArray>()
 
@@ -2746,9 +3150,11 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	/** The port the TCP server is currently listening on, or null if not running. */
 	val serverPort: Int? get() = tcpServer?.takeIf { !it.socketServer.isClosed }?.socketServer?.localPort
 
-	/** All currently tracked nodes: outgoing (connectionMap) + incoming (server nodeList). */
+	/** All currently tracked nodes: outgoing (connectionMap) + incoming (server nodeList) + virtual (bridgeNodes). */
 	private val allNodes: List<TCPNode>
-		get() = synchronized(connectionMap) { connectionMap.values.toList() } + (tcpServer?.nodeList ?: emptyList())
+		get() = synchronized(connectionMap) { connectionMap.values.toList() } +
+			(tcpServer?.nodeList ?: emptyList()) +
+			bridgeNodes.values.toList()
 
 	// ── Active connection listing ─────────────────────────────────────────────
 	data class ConnectionInfo(
@@ -2756,7 +3162,10 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		val inbound: Boolean,
 		/** PeerKey string from the verified greeting, null if greeting not yet received. */
 		val peerKey: String? = null,
-		val isRelay: Boolean = false
+		val isRelay: Boolean = false,
+		val port: Int = addr.port,
+		val isBridge: Boolean = false,
+		val isBridged: Boolean = false
 	)
 
 	data class ConnectionNodeInfo(
@@ -2767,7 +3176,10 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		val isRelay: Boolean = false,
 		val isTransferring: Boolean = false,
 		val isSending: Boolean = false,
-		val isReceiving: Boolean = false
+		val isReceiving: Boolean = false,
+		val port: Int = addr.port,
+		val isBridge: Boolean = false,
+		val isBridged: Boolean = false
 	)
 
 	fun listConnections(): List<ConnectionInfo> {
@@ -2776,10 +3188,13 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 			connectionMap.forEach { (addr, node) ->
 				if (!node.isClosed()) result.add(
 					ConnectionInfo(
-						addr,
-						false,
-						nodePeerMap[node]?.key?.toString(),
-						nodeRelayMap[node] ?: false
+						addr = addr,
+						inbound = false,
+						peerKey = nodePeerMap[node]?.key?.toString(),
+						isRelay = nodeRelayMap[node] ?: false,
+						port = addr.port,
+						isBridge = nodeBridgeMap[node] ?: false,
+						isBridged = false
 					)
 				)
 			}
@@ -2787,10 +3202,26 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		tcpServer?.nodeList?.forEach { node ->
 			if (!node.isClosed()) result.add(
 				ConnectionInfo(
-					node.remoteAddress,
-					true,
-					nodePeerMap[node]?.key?.toString(),
-					nodeRelayMap[node] ?: false
+					addr = node.remoteAddress,
+					inbound = true,
+					peerKey = nodePeerMap[node]?.key?.toString(),
+					isRelay = nodeRelayMap[node] ?: false,
+					port = node.remoteAddress.port,
+					isBridge = nodeBridgeMap[node] ?: false,
+					isBridged = false
+				)
+			)
+		}
+		bridgeNodes.values.forEach { vNode ->
+			if (!vNode.isClosed()) result.add(
+				ConnectionInfo(
+					addr = vNode.remoteAddress,
+					inbound = bridgeNodeInboundMap[vNode] ?: false,
+					peerKey = (nodePeerMap[vNode]?.key ?: PeerKey(vNode.remotePeerKeyBytes)).toString(),
+					isRelay = false,
+					port = vNode.remotePort,
+					isBridge = false,
+					isBridged = true
 				)
 			)
 		}
@@ -2812,7 +3243,10 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 							isRelay = nodeRelayMap[node] ?: false,
 							isTransferring = node.isTransferring(),
 							isSending = node.isSending(),
-							isReceiving = node.isReceiving()
+							isReceiving = node.isReceiving(),
+							port = addr.port,
+							isBridge = nodeBridgeMap[node] ?: false,
+							isBridged = false
 						)
 					)
 				}
@@ -2830,7 +3264,30 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 						isRelay = nodeRelayMap[node] ?: false,
 						isTransferring = node.isTransferring(),
 						isSending = node.isSending(),
-						isReceiving = node.isReceiving()
+						isReceiving = node.isReceiving(),
+						port = node.remoteAddress.port,
+						isBridge = nodeBridgeMap[node] ?: false,
+						isBridged = false
+					)
+				)
+			}
+		}
+		bridgeNodes.values.forEach { vNode ->
+			if (!vNode.isClosed()) {
+				val peerKey = nodePeerMap[vNode]?.key ?: PeerKey(vNode.remotePeerKeyBytes)
+				result.add(
+					ConnectionNodeInfo(
+						addr = vNode.remoteAddress,
+						inbound = bridgeNodeInboundMap[vNode] ?: false,
+						peerKey = peerKey.toString(),
+						peerName = peerKey.name,
+						isRelay = false,
+						isTransferring = vNode.isTransferring(),
+						isSending = vNode.isSending(),
+						isReceiving = vNode.isReceiving(),
+						port = vNode.remotePort,
+						isBridge = false,
+						isBridged = true
 					)
 				)
 			}
@@ -2839,7 +3296,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	}
 
 	// ── Async discovery ───────────────────────────────────────────────────────
-	// Runs multicast and scan discovery concurrently on a background thread.
+	// Runs multicast, scan, and bridge discovery on a background thread.
 	// Calls found() for each unique peer as it is discovered; calls done() when finished.
 	fun discoverAsync(scan: Boolean, found: (PeerAddressInfo) -> Unit, done: () -> Unit = {}) {
 		thread(isDaemon = true, name = "GraffitiDiscover") {
@@ -2866,6 +3323,12 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 				Thread.sleep(6000)
 			}
 			mFuture.join()
+			// Query any connected Bridge nodes for their connected peers (after LAN multicast so direct LAN wins)
+			try {
+				discoverBridgedPeers { notify(it) }
+			} catch (e: Exception) {
+				debug("BridgeDiscovery error: ${e.message}")
+			}
 			done()
 		}
 	}
@@ -2915,7 +3378,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	private fun computeNextReconnectWaitMs(): Long {
 		val now = System.currentTimeMillis()
 		var waitMs = Long.MAX_VALUE
-		if (backgroundMode && serverPort == null && !relayEnabled) {
+		if (backgroundMode && serverPort == null && !relayEnabled && !bridgeEnabled) {
 			val hasOpenOutbound = synchronized(connectionMap) {
 				connectionMap.values.any { !it.isClosed() }
 			}
@@ -2953,7 +3416,7 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 	}
 
 	private fun processBackgroundIdleDisconnects() {
-		if (!backgroundMode || serverPort != null || relayEnabled) return
+		if (!backgroundMode || serverPort != null || relayEnabled || bridgeEnabled) return
 		val now = System.currentTimeMillis()
 		if (!isOutboundSyncIdle(now)) return
 
@@ -3088,6 +3551,8 @@ class GraffitiP2P(val graffitiDir: File, relayEnabledAtStartup: Boolean = false)
 		closedOutbound.forEach { removeDeadNode(it) }
 		val closedInbound = tcpServer?.nodeList?.filter { it.isClosed() }.orEmpty()
 		closedInbound.forEach { removeDeadNode(it) }
+		val closedBridged = bridgeNodes.values.filter { it.isClosed() }
+		closedBridged.forEach { removeDeadNode(it) }
 		// Clean up orphaned temp files older than 30 minutes
 		cleanTempFiles(maxAgeMs = 30 * 60 * 1000L)
 	}

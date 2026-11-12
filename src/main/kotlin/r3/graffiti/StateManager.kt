@@ -57,6 +57,10 @@ class StateManager(
 		notifyChanged()
 	}
 
+	fun onBridgeChanged() {
+		notifyChanged()
+	}
+
 	fun onWhitelistChanged() {
 		notifyChanged()
 	}
@@ -93,9 +97,11 @@ class StateManager(
 		p2p.listDetailedConnections().forEach { node ->
 			val nObj = JSONObject()
 				.put("host", node.addr.address.hostAddress)
-				.put("port", node.addr.port)
+				.put("port", node.port)
 				.put("inbound", node.inbound)
 				.put("relay", node.isRelay)
+				.put("bridge", node.isBridge)
+				.put("bridged", node.isBridged)
 				.put("isTransferring", node.isTransferring)
 				.put("isSending", node.isSending)
 				.put("isReceiving", node.isReceiving)
@@ -142,6 +148,7 @@ class StateManager(
 
 		// Server info & flags
 		root.put("relay", p2p.isRelayEnabled())
+		root.put("bridge", p2p.isBridgeEnabled())
 		root.put("whitelist", p2p.isWhitelistEnabled())
 		val serverPort = p2p.serverPort
 		root.put("server", JSONObject()

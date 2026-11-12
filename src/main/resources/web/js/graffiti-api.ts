@@ -63,6 +63,8 @@ export interface ConnectionEntry {
    peerKey?: string;
    peerName?: string;
    relay?: boolean;
+   bridge?: boolean;
+   bridged?: boolean;
 }
 
 export interface NodeStateEntry extends ConnectionEntry {
@@ -84,6 +86,7 @@ export interface AppStateResponse extends ApiOk {
    messagesVersion: number;
    messageKeys: string[];
    relay?: boolean;
+   bridge?: boolean;
    whitelist?: boolean;
    server?: {
       running: boolean;
@@ -102,6 +105,10 @@ export interface NodeInfo extends ApiOk {
 
 export interface NodeRelayStatus extends ApiOk {
    relay: boolean;
+}
+
+export interface NodeBridgeStatus extends ApiOk {
+   bridge: boolean;
 }
 
 
@@ -578,6 +585,15 @@ export const graffiti = {
          e = "false"
       }
       return get('/api/node/relay', {enabled: e}) as Promise<NodeRelayStatus>;
+   },
+
+   nodeBridgeStatus(): Promise<NodeBridgeStatus> {
+      return get('/api/node/bridge');
+   },
+
+   setNodeBridge(enabled: boolean): Promise<NodeBridgeStatus> {
+      const e = enabled ? 'true' : 'false';
+      return get('/api/node/bridge', {enabled: e}) as Promise<NodeBridgeStatus>;
    },
 
    async getStore(key: string): Promise<string> {

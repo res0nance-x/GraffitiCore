@@ -64,6 +64,19 @@ Network
 						</fieldset>
 
 						<fieldset style="flex: 1 1 200px">
+							<legend style="font-size:0.9rem">Bridge mode</legend>
+							<label style="margin-right:1rem">
+								<input checked id="bridge-mode-off" name="bridge-mode" type="radio" value="off">
+								Off
+							</label>
+							<label>
+								<input id="bridge-mode-on" name="bridge-mode" type="radio" value="on">
+								On
+							</label>
+							<p class="status-text" hidden id="bridge-mode-status" style="margin-top:0.5rem"></p>
+						</fieldset>
+
+						<fieldset style="flex: 1 1 200px">
 							<legend style="font-size:0.9rem">Server</legend>
 							<div id="server-stopped">
 								<p style="margin:0 0 0.5rem 0">Status: <span class="status-text">Not running</span></p>
@@ -140,7 +153,7 @@ Network
 								type="text">
 						</label>
 						<label style="display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0;">Port
-							<input id="manual-connect-port" max="65535" min="1" style="width: 7.5ch;" type="number" value="38214">
+							<input id="manual-connect-port" max="65535" min="-65535" style="width: 7.5ch;" type="number" value="38214">
 						</label>
 						<button id="btn-manual-connect" style="flex-shrink: 0;" type="button">Connect</button>
 					</div>

@@ -42,7 +42,12 @@ class ChallengeMessage(val nonce: ByteArray) : Writable {
  *
  * The recipient verifies with [isValidFor], passing the nonce they originally sent.
  */
-class ChallengeResponseMessage(val peer: Peer, val signature: Signature, val isRelay: Boolean = false) : Writable {
+class ChallengeResponseMessage(
+	val peer: Peer,
+	val signature: Signature,
+	val isRelay: Boolean = false,
+	val isBridge: Boolean = false
+) : Writable {
 	fun isValidFor(nonce: ByteArray): Boolean = try {
 		peer.verify(nonce, signature)
 	} catch (_: Exception) {
@@ -54,6 +59,7 @@ class ChallengeResponseMessage(val peer: Peer, val signature: Signature, val isR
 		peer.write(dos)
 		signature.write(dos)
 		dos.writeBoolean(isRelay)
+		dos.writeBoolean(isBridge)
 	}
 
 	companion object {
@@ -68,7 +74,12 @@ class ChallengeResponseMessage(val peer: Peer, val signature: Signature, val isR
 			} catch (e: Exception) {
 				false
 			}
-			return ChallengeResponseMessage(peer, signature, isRelay)
+			val isBridge = try {
+				dis.readBoolean()
+			} catch (e: Exception) {
+				false
+			}
+			return ChallengeResponseMessage(peer, signature, isRelay, isBridge)
 		}
 	}
 }

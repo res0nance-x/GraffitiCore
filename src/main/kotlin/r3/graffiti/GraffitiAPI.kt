@@ -137,6 +137,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			"/api/client/disconnect" -> disconnect(header)
 			"/api/node/info" -> info(header)
 			"/api/node/relay" -> relay(header)
+			"/api/node/bridge" -> bridge(header)
 			"/api/server/status" -> status(header)
 			"/api/connections" -> connections()
 			"/api/discover" -> if (header.optBoolean("scan")) discover(true) else discover(false)
@@ -302,14 +303,14 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			params?.optString("self") == "true" ||
 			header.optString("self") == "true"
 		val host = (params?.optString("host") ?: header.optString("host", "")).trim()
-		val port = params?.optInt("port", 0)?.takeIf { it > 0 } ?: header.optInt("port", 0)
+		val port = params?.optInt("port", 0)?.takeIf { it != 0 } ?: header.optInt("port", 0)
 		val peerKeyStr = (params?.optString("peerKey") ?: header.optString("peerKey", "")).trim()
 
 		val (portalPack: Pack, title: String) = if (isSelf || (host.isEmpty() && port == 0 && peerKeyStr.isEmpty())) {
 			Pair(p2p.createPortalPack(null), "${p2p.serverIdentity.key.name} Portal")
 		} else {
 			val node = when {
-				host.isNotEmpty() && port > 0 -> p2p.findConnectedNode(host, port)
+				host.isNotEmpty() && port != 0 -> p2p.findConnectedNode(host, port)
 				peerKeyStr.isNotEmpty() -> p2p.getNodeForPeer(PeerKey(peerKeyStr))
 				else -> null
 			} ?: return err("Connected node not found for portal request")
@@ -917,7 +918,11 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			try {
 				val addr = InetAddress.getByName(node)
 				if (addr.isLinkLocalAddress) continue
-				p2p.getTCPNode(InetSocketAddress(addr, port))
+				if (port < 0) {
+					p2p.connectBridgedPeer(node, port)
+				} else {
+					p2p.getTCPNode(InetSocketAddress(addr, port))
+				}
 				p2p.syncAllConnectedNodes()
 				return ok()
 			} catch (e: Exception) {
@@ -931,7 +936,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 	private fun disconnect(header: JSONObject): Content {
 		val node = header.getString("node")
 		val port = header.getInt("port")
-		p2p.disconnect(InetSocketAddress(InetAddress.getByName(node), port))
+		p2p.disconnect(node, port)
 		return ok()
 	}
 
@@ -1239,9 +1244,11 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 		p2p.listConnections().forEach { info ->
 			val obj = JSONObject()
 				.put("host", info.addr.address.hostAddress)
-				.put("port", info.addr.port)
+				.put("port", info.port)
 				.put("inbound", info.inbound)
 				.put("relay", info.isRelay)
+				.put("bridge", info.isBridge)
+				.put("bridged", info.isBridged)
 			if (info.peerKey != null) {
 				obj.put("peerKey", info.peerKey)
 				obj.put("peerName", PeerKey(info.peerKey).name)
@@ -1270,6 +1277,7 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 						.put("key", info.serverKey.toString())
 						.put("name", info.serverKey.name)
 						.put("relay", info.isRelay)
+						.put("bridge", info.isBridge)
 				)
 			},
 			done = {
@@ -1321,6 +1329,16 @@ class GraffitiAPI(val p2p: GraffitiP2P, val sendToAll: (JSONObject) -> Unit) : C
 			stateManager.onRelayChanged()
 		}
 		return ok { put("relay", p2p.isRelayEnabled()) }
+	}
+
+	private fun bridge(header: JSONObject): Content {
+		val hasEnabled = header.has("enabled")
+		if (hasEnabled) {
+			val enabled = header.getBoolean("enabled")
+			p2p.setBridgeEnabled(enabled)
+			stateManager.onBridgeChanged()
+		}
+		return ok { put("bridge", p2p.isBridgeEnabled()) }
 	}
 
 	private fun status(header: JSONObject): Content {
