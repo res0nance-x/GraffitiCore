@@ -656,7 +656,6 @@ class GraffitiP2P(
 				val hashOk = verifier.finish()
 				val sigOk = eMeta.verify(peer)
 				if (hashOk && sigOk) {
-					log("Streaming inline verification succeeded for ${eMeta.key.name}")
 					true
 				} else {
 					logNodeError(node, "Streaming inline verification failed for ${eMeta.key.name}: hashOk=$hashOk, sigOk=$sigOk")

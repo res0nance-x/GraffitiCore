@@ -9,206 +9,130 @@
 
 <body>
 	<h3 id='what-is-graffiti'>What is Graffiti?</h3>
-	<p>Graffiti is a secure, decentralized, peer-to-peer (P2P) messaging and media sharing application. It allows you to
-		communicate directly with other nodes across local networks or the internet without relying on central servers,
-		corporate cloud providers, or third-party databases. All communications are encrypted end-to-end using public
-		key
-		cryptography, ensuring that only the intended recipients can read your messages and files.</p>
+	<p>Graffiti is a secure, decentralized, peer-to-peer (P2P) messaging, live media streaming, and content sharing application. It allows you to communicate directly with other nodes across local networks or the internet without relying on central servers, corporate cloud providers, or third-party databases. All communications are end-to-end encrypted (E2EE) using public-key cryptography, ensuring that only intended recipients can read your messages and files.</p>
+	<p>Because Graffiti connects nodes directly and stores data locally on your device, you retain absolute ownership over your communications and digital footprint. Graffiti works seamlessly over local Wi-Fi and LAN connections even when disconnected from the internet, making it ideal for offline mesh communication, privacy-first collaboration, and community networks.</p>
+
 	<h3 id='topic-identities-vs-direct-peers'>Topic Identities vs. Direct Peers</h3>
-	<p>Graffiti offers two primary ways to direct messages: to a <strong>Topic Identity</strong> or directly to a
-		<strong>Peer&#39;s
-			Public Key</strong>.</p>
+	<p>Graffiti offers two primary ways to direct messages: to a <strong>Topic Identity</strong> or directly to a <strong>Peer&#39;s Public Key</strong>.</p>
 	<p>The standard and recommended way to communicate on Graffiti is via <strong>Topic Identities</strong>:
-		<code>My Identity</code> → <code>Shared Topic Identity</code> → <code>Friend&#39;s Identity</code>
+		<code>My Identity</code> &rarr; <code>Shared Topic Identity</code> &rarr; <code>Friend&#39;s Identity</code>
 	</p>
 	<h4 id='why-we-use-topic-identities'>Why We Use Topic Identities</h4>
-	<p>In public key encryption, when you encrypt a message directly to your friend&#39;s public key (a Peer), only
-		their
-		private key can decrypt it. As a result, you cannot read the messages you have sent unless the client creates
-		and
-		tracks redundant local copies.</p>
+	<p>In traditional public-key encryption, when you encrypt a message directly to your friend&#39;s public key, only their private key can decrypt it. As a result, you cannot read the messages you sent unless the client maintains separate, redundant local copies.</p>
 	<p>Graffiti solves this cleanly through <strong>deterministic Topic Identities</strong>:</p>
 	<ul>
 		<li>
-			<p><strong>Deterministic Seeds:</strong> Identities can be created repeatably on any device using a secret
-				&quot;seed
-				phrase&quot; (a password or passphrase). For example, a group of friends discussing scooters can create
-				a shared
-				seed phrase such as <code>&quot;sportscooters BJr93077&quot;</code>.</p>
+			<p><strong>Deterministic Seeds:</strong> Identities are generated repeatably on any device using a secret &quot;seed phrase&quot; (passphrase). For example, a group of friends discussing scooters can create a shared seed phrase such as <code>&quot;sportscooters BJr93077&quot;</code>.</p>
 		</li>
 		<li>
-			<p><strong>Unique Avatar &amp; Alias:</strong> This seed generates a shared Identity with an alias and a
-				unique
-				avatar fingerprint:</p>
+			<p><strong>Unique Avatar &amp; Alias:</strong> Each seed generates a shared identity with an alias and a unique avatar fingerprint:</p>
 			<p><strong>Alias:</strong> <code>evertor</code><br /><img src="evertor.svg" alt="evertor"></p>
 		</li>
 		<li>
-			<p><strong>Group Forum:</strong> Share the seed phrase out-of-band (in person, over the phone, or via secure
-				email). Everyone with the seed imports the Topic Identity and can immediately participate in the forum.
-			</p>
+			<p><strong>Group Forum:</strong> Share the seed phrase out-of-band (in person, over encrypted channels, or by voice). Everyone who imports the Topic Identity can immediately participate in the forum.</p>
 		</li>
 		<li>
-			<p><strong>Readable Sent History:</strong> Because you hold the topic key, you can decrypt and read all
-				messages
-				in the topic—including your own sent messages.</p>
+			<p><strong>Readable Sent History:</strong> Because you hold the topic key, you can decrypt and read all messages in the topic&mdash;including your own sent messages.</p>
 		</li>
 		<li>
-			<p><strong>Effortless Relaying:</strong> Relays can cache and forward messages for a shared topic without
-				needing
-				to know the identities or keys of everyone subscribed to it.</p>
+			<p><strong>Effortless Relaying:</strong> Relays can cache and forward messages for a shared topic without needing to know the identities or keys of the participants.</p>
 		</li>
 		<li>
-			<p><strong>Clear Authorship:</strong> Messages sent to a topic are digitally signed by your personal sender
-				identity. Friends always recognize who wrote each message by your unique personal alias and avatar.</p>
+			<p><strong>Clear Authorship:</strong> Messages sent to a topic are digitally signed by your personal sender identity. Friends always recognize who wrote each message by your unique personal alias and avatar.</p>
 		</li>
 		<li>
-			<p><strong>Private Conversations:</strong> For 1-on-1 chats, you can either share a private two-person topic
-				seed
-				or send directly to your friend&#39;s Peer public key.</p>
+			<p><strong>Private Conversations:</strong> For 1-on-1 chats, you can either share a private two-person topic seed or send directly to your friend&#39;s Peer public key.</p>
 		</li>
-
 	</ul>
+
 	<h3 id='the-net-tab-network--connections'>The Net Tab (Network &amp; Connections)</h3>
-	<p>The <strong>Net</strong> tab manages your node&#39;s server status, network discovery, and active peer
-		connections.
-	</p>
+	<p>The <strong>Net</strong> tab manages your node&#39;s network presence, server listener, connection bridging, personal portal, discovery, and active peer connections.</p>
 	<ul>
 		<li>
-			<p><strong>My Node:</strong> Displays your device&#39;s node name, listening port, and unique device avatar.
-				Friends use this avatar to visually recognize and reconnect to your specific server.</p>
+			<p><strong>My Node:</strong> Displays your device&#39;s node name, listening port, local and discovered IP addresses, and unique device avatar. Friends use this avatar fingerprint to visually recognize and verify your specific node.</p>
 		</li>
 		<li>
-			<p><strong>Server Mode:</strong> Determines whether you accept incoming connections from other peers.
-				Starting
-				the node server opens a local port (typically <code>38214</code>). You can always connect outbound to
-				others as a
-				client without running a server.</p>
+			<p><strong>Server Mode:</strong> Determines whether your node accepts incoming connections from other peers. Starting the node server opens a local TCP port (default <code>38214</code>). You can always connect outbound to other nodes as a client without running an incoming server.</p>
 		</li>
 		<li>
-			<p><strong>Relay Mode:</strong> Controls message forwarding. In standard client mode, your node only
-				downloads
-				messages intended for identities you currently hold. Enabling <strong>Relay mode</strong> allows your
-				node to act
-				as a store-and-forward peer, caching encrypted payloads for any network identity and forwarding them to
-				peers upon
-				synchronization.</p>
+			<p><strong>Relay Mode:</strong> Controls store-and-forward message caching. In standard client mode, your node only downloads messages intended for identities you currently hold. Enabling <strong>Relay mode</strong> allows your node to act as a store-and-forward relay, caching encrypted payloads for any network identity and forwarding them to peers during synchronization.</p>
 		</li>
 		<li>
-			<p><strong>Nearby Nodes &amp; Discovery:</strong> Automatically discovers Graffiti nodes on your local area
-				network.</p>
+			<p><strong>Bridge Mode:</strong> Enables pass-through connection routing. When Bridge mode is enabled, your node acts as a transparent intermediary bridge that allows nodes behind NAT, firewalls, or private networks to connect to one another. Connected nodes discover each other as &quot;Bridged&quot; peers (indicated with virtual ports) and establish end-to-end mutually authenticated P2P tunnels through the bridge. The bridge node routes virtual packets without needing to store messages or decrypt tunnel traffic.</p>
+		</li>
+		<li>
+			<p><strong>Node Portal:</strong> Built-in decentralized personal website and content host. Every node has a local <code>portal</code> folder (displayed in the portal card). Any HTML pages (such as <code>index.html</code>), scripts, stylesheets, documents, or media files placed into this folder are automatically hosted by your node. Connected peers (direct or bridged) can browse your personal portal website or media library with one click on the <strong>Portal</strong> button next to your connection. You can preview your own live portal anytime using <strong>View My Portal</strong>.</p>
+		</li>
+		<li>
+			<p><strong>Nearby Nodes &amp; Discovery:</strong> Automatically scans for Graffiti nodes on your local area network:</p>
 			<ul>
-				<li><em>Multicast Discovery:</em> Very fast and the preferred method for discovering local peers
-					automatically
-					on startup or via manual discovery.
-				</li>
-				<li><em>Full IP Scan:</em> Scans the entire local subnet. Takes longer, but finds devices on networks
-					where
-					multicast traffic is blocked or unsupported.
-				</li>
-
+				<li><em>Quick (Multicast):</em> Very fast and the preferred method for discovering local peers automatically on startup or via manual discovery.</li>
+				<li><em>Full (IP Scan):</em> Scans the entire local subnet. Useful on enterprise or guest networks where multicast or mDNS packets are restricted or blocked.</li>
 			</ul>
 		</li>
 		<li>
-			<p><strong>Active Connections:</strong> Displays all currently connected nodes with their IP address, port,
-				peer
-				key, and connection direction (inbound when acting as a server, or outbound when acting as a client).
-			</p>
+			<p><strong>Active Connections:</strong> Displays all currently connected nodes with their peer alias, IP address, port, connection direction (inbound when acting as a server, or outbound when acting as a client), and status badges (<code>Relay</code>, <code>Bridge</code>, or <code>Bridged</code>). Includes quick actions to disconnect or open a peer&#39;s Portal.</p>
 		</li>
 		<li>
-			<p><strong>Manual Peer Connection:</strong> Connect directly to any peer by entering their IP address (or
-				hostname) and port. This is useful when discovery is disabled or when connecting to a remote node across
-				the
-				internet. Nodes on the public internet must have a publicly reachable IP and open port; Graffiti does
-				not perform
-				NAT traversal.</p>
+			<p><strong>Manual Peer Connection:</strong> Connect directly to any peer by entering their IP address (or hostname) and port. This is used when discovery is disabled or when connecting to a remote node across the internet. Nodes reachable over the public internet require an open or forwarded port; alternatively, two private nodes can connect via any shared Bridge node.</p>
 		</li>
-
+		<li>
+			<p><strong>Background Service (Android):</strong> Displays the status of the Android foreground service and lets you stop or manage background operation directly from the network screen.</p>
+		</li>
 	</ul>
+
 	<h3 id='the-messages-tab-composing--media'>The Messages Tab (Composing &amp; Media)</h3>
-	<p>The <strong>Messages</strong> tab is your central communication hub. The message timeline is filtered by the
-		recipient selected in the <strong>To</strong> field.</p>
+	<p>The <strong>Messages</strong> tab is your central communication hub. The message timeline is filtered by the recipient selected in the <strong>To</strong> field.</p>
 	<ul>
 		<li>
 			<p><strong>From &amp; To Selection:</strong></p>
 			<ul>
-				<li><strong>From:</strong> The personal Identity you want to send as. Your friends will see this
-					identity&#39;s
-					alias and avatar as the message author.
-				</li>
-				<li><strong>To:</strong> The recipient topic Identity or peer public key. Selecting a conversation loads
-					its
-					message history.
-				</li>
-
+				<li><strong>From:</strong> The personal Identity you want to author messages as. Your friends will see this identity&#39;s alias and avatar as the message author.</li>
+				<li><strong>To:</strong> The recipient Topic Identity or direct peer contact. Selecting a recipient loads its conversation history and attachments.</li>
 			</ul>
 		</li>
 		<li>
-			<p><strong>Rich Markdown Support:</strong> You can format message text using Markdown:</p>
+			<p><strong>Rich Markdown Support:</strong> Format message text using Markdown:</p>
 			<ul>
 				<li>Headers (<code>#</code>, <code>##</code>, <code>###</code>)</li>
-				<li>Emphasis (<strong>bold</strong>, <em>italic</em>,
-					<del>strikethrough</del>
-					)
-				</li>
+				<li>Emphasis (<strong>bold</strong>, <em>italic</em>, <del>strikethrough</del>)</li>
 				<li>Lists (ordered <code>1.</code> and unordered <code>*</code>, <code>-</code>)</li>
 				<li>Quotes (<code>&gt; blockquote</code>)</li>
 				<li>Code (<code>`inline code`</code> and <code>```</code> fenced code blocks)</li>
 				<li>Links (<code>[Title](url)</code> and automatic URL detection)</li>
-
 			</ul>
 		</li>
 		<li>
 			<p><strong>Sending Files &amp; Attachments:</strong></p>
 			<ul>
-				<li><em>PC / Desktop:</em> Click the <strong>Send File</strong> button to select one or multiple files, drag-and-drop
-					files or folders directly onto the message timeline, or paste files/images directly from your clipboard
-					(<code>Ctrl+V</code>). Selecting, dropping, or pasting multiple files automatically packages them into a compact <code>.pack</code> archive.
-				</li>
-				<li><em>Android / Mobile:</em> Use the <strong>Send File</strong> button (with multi-file selection support), or use your device&#39;s
-					system <strong>Share</strong> menu from any app (gallery, file manager, etc.) to share files directly into
-					Graffiti. Sharing multiple files automatically bundles them into a <code>.pack</code> archive.
-				</li>
-
+				<li><em>PC / Desktop:</em> Click the <strong>Send File</strong> button to select one or multiple files, drag-and-drop files or folders directly onto the message timeline, or paste images and files directly from your clipboard (<code>Ctrl+V</code>). Selecting, dropping, or pasting multiple files automatically packages them into a compact, seekable <code>.pack</code> archive.</li>
+				<li><em>Android / Mobile:</em> Use the <strong>Send File</strong> button with multi-file selection support, or use your device&#39;s system <strong>Share</strong> menu from any app (gallery, file manager, browser, etc.) to share files directly into Graffiti. Sharing multiple files automatically bundles them into a <code>.pack</code> archive.</li>
 			</ul>
 		</li>
 		<li>
-			<p><strong>Inline Media Viewing:</strong> Graffiti automatically identifies and previews recognized file
-				types:
-			</p>
+			<p><strong>Inline Media Viewing &amp; Playback:</strong> Graffiti automatically identifies and previews recognized content types:</p>
 			<ul>
-				<li><em>Text / Code / Logs:</em> Rendered inline with syntax blocks; large files can be expanded in the
-					full-screen Content Viewer.
-				</li>
-				<li><em>Images:</em> Rendered inline with full-screen pinch, zoom, and pan controls.</li>
-				<li><em>Audio &amp; Video:</em> Played directly within the application using the integrated browser
-					player.
-				</li>
-				<li><em>Pack Archives:</em> Explored and streamed directly within the application.</li>
-
+				<li><em>Text / Code / Logs:</em> Rendered inline with syntax blocks; large files can be expanded in the full-screen Content Viewer.</li>
+				<li><em>Images:</em> Rendered inline with a full-screen viewer featuring pinch, zoom, and pan controls.</li>
+				<li><em>Audio &amp; Video:</em> Played directly within the application using the integrated media player, with background audio playback support.</li>
+				<li><em>Pack Archives:</em> Explored, browsed, and streamed directly within the application without extracting files to disk.</li>
 			</ul>
 		</li>
 		<li>
-			<p><strong>Message Context Menu Actions:</strong> Right-click any message on desktop (or long-press on
-				mobile touch devices) to open a contextual action menu with convenient message operations:</p>
+			<p><strong>Message Context Menu Actions:</strong> Right-click any message on desktop (or long-press on mobile touch devices) to open a contextual action menu:</p>
 			<ul>
-				<li><em>View in Full Viewer:</em> Opens the message content or attachment in the full-screen Content
-					Viewer for detailed reading, zoomable image inspection, media playback, or exploring pack archives.
-				</li>
-				<li><em>Forward:</em> Re-encrypts and forwards the message or attachment to another Topic Identity or
-					Peer contact using your currently selected sender identity.</li>
-				<li><em>Quote:</em> Quotes the message content into the message composition box, preformatted as a
-					Markdown blockquote, allowing you to reply directly with context.</li>
-				<li><em>Copy:</em> Copies the message text directly to your clipboard (available for text-based
-					messages).</li>
-				<li><em>Download:</em> Downloads the attached file or message payload directly to your device storage.
-				</li>
-				<li><em>Delete:</em> Permanently deletes the message and its local payload from your node's storage.
-				</li>
+				<li><em>View in Full Viewer:</em> Opens the message content or attachment in the full-screen viewer for detailed reading, zoomable image inspection, media playback, or exploring pack archives.</li>
+				<li><em>Forward:</em> Re-encrypts and forwards the message or attachment to another Topic Identity or Peer contact using your currently selected sender identity.</li>
+				<li><em>Quote:</em> Quotes the message content into the message composition box, preformatted as a Markdown blockquote.</li>
+				<li><em>Copy:</em> Copies the message text or link directly to your clipboard.</li>
+				<li><em>Download:</em> Downloads the attached file or message payload directly to your device storage.</li>
+				<li><em>Delete:</em> Permanently deletes the message and its local payload from your node&#39;s storage.</li>
 			</ul>
 		</li>
 	</ul>
+
 	<h3 id='pack-files-pack--epack'>Pack Files (.pack, .epack, .mhtml &amp; .zip)</h3>
-	<p>Graffiti supports viewing and streaming archive packages directly without extracting them to disk. In addition to native <strong>Pack files</strong> (<code>.pack</code> and password-encrypted <code>.epack</code>), web archives (<strong>MHTML</strong> / <code>.mhtml</code>, <code>.mht</code>) and <strong>ZIP</strong> archives (<code>.zip</code>) can be launched directly as pack formats.</p>
+	<p>Graffiti features native support for viewing and streaming archive packages directly without extracting them to disk. In addition to native <strong>Pack files</strong> (<code>.pack</code> and password-encrypted <code>.epack</code>), web archives (<strong>MHTML</strong> / <code>.mhtml</code>, <code>.mht</code>) and <strong>ZIP</strong> archives (<code>.zip</code>) can be launched directly as pack formats.</p>
 	<ul>
 		<li>
 			<p><strong>Instant Streaming &amp; Seeking:</strong> Pack files support random position seeking and in-place streaming. You can jump forward and backward in multi-gigabyte media without waiting for a full file download or disk extraction.</p>
@@ -223,103 +147,83 @@
 			<p><strong>ZIP Archives (.zip):</strong> Standard ZIP files are accessed in-place as packs, allowing you to browse embedded websites (with <code>index.html</code>) or view media files directly in the Pack Viewer.</p>
 		</li>
 		<li>
-			<p><strong>Rich Collections:</strong> A pack file can bundle an entire website, interactive web app, photo
-				gallery, or music album into a single portable package.</p>
+			<p><strong>Node Portals as Packs:</strong> Live node portals leverage the same virtual pack streaming architecture to serve personal websites directly to peers without temporary extraction.</p>
 		</li>
 		<li>
-			<p><strong>Pack Tools &amp; Source Code:</strong> Graffiti includes built-in Pack creation for multi-file attachments. For advanced pack authoring, encryption, and custom archives, you
-				can also use the dedicated PackManager desktop tool:</p>
+			<p><strong>Rich Collections:</strong> A pack file can bundle an entire website, interactive web app, photo gallery, or music album into a single portable package.</p>
+		</li>
+		<li>
+			<p><strong>Pack Tools &amp; Source Code:</strong> Graffiti includes built-in Pack creation for multi-file attachments. For advanced pack authoring, encryption, and custom archives, you can use the dedicated PackManager desktop tool:</p>
 			<ul>
-				<li>PackManager Web Overview &amp; Download - https://www.res0nance.cc/packmanager/index.html</li>
-				<li>PackManager GitHub Repository - https://github.com/res0nance-x/PackManager</li>
-				<li>PackViewer GitHub Repository - https://github.com/res0nance-x/PackViewer</li>
+				<li>PackManager Web Overview &amp; Download &mdash; <a href="https://www.res0nance.cc/packmanager/index.html">https://www.res0nance.cc/packmanager/index.html</a></li>
+				<li>PackManager GitHub Repository &mdash; <a href="https://github.com/res0nance-x/PackManager">https://github.com/res0nance-x/PackManager</a></li>
+				<li>PackViewer GitHub Repository &mdash; <a href="https://github.com/res0nance-x/PackViewer">https://github.com/res0nance-x/PackViewer</a></li>
 			</ul>
 		</li>
-
 	</ul>
+
 	<h3 id='the-identity-tab-personal-keys-topic-keys--peers'>The Identity Tab (Personal Keys, Topic Keys &amp; Peers)</h3>
-	<p>Accounts in Graffiti are called <strong>Identities</strong>. The <strong>ID</strong> tab is where you
-		create,
-		import, and manage personal author identities, shared topic identities, and direct peer contacts.</p>
+	<p>Accounts in Graffiti are called <strong>Identities</strong>. The <strong>ID</strong> tab is where you create, import, and manage personal author identities, shared topic identities, and direct peer contacts.</p>
 	<ul>
 		<li>
-			<p><strong>Seed Phrases:</strong> Identities are generated deterministically from a secret seed phrase
-				(passphrase). This seed functions like a master cryptographic key. Anyone who learns or guesses your
-				seed phrase
-				can read your messages and impersonate that identity. Always use long, unique, unguessable seed phrases
-				for
-				private communications.</p>
+			<p><strong>Seed Phrases:</strong> Identities are generated deterministically from a secret seed phrase (passphrase). This seed functions like a master cryptographic key. Anyone who learns or guesses your seed phrase can read your messages and impersonate that identity. Always use long, unique, unguessable seed phrases for private communications.</p>
 		</li>
 		<li>
 			<p><strong>Aliases vs. Avatars:</strong> Each identity has:</p>
 			<ul>
-				<li>A text <strong>Alias</strong>: convenient for human reference, but not guaranteed to be globally
-					unique.
-				</li>
-				<li>An <strong>Avatar</strong> shape and color palette: mathematically generated directly from the
-					public key,
-					guaranteeing a unique visual fingerprint for every identity.
-				</li>
-
+				<li>A text <strong>Alias</strong>: convenient for human reference, but not guaranteed to be globally unique.</li>
+				<li>An <strong>Avatar</strong> shape and color palette: mathematically generated directly from the public key, guaranteeing a unique visual fingerprint for every identity.</li>
 			</ul>
 		</li>
 		<li>
 			<p><strong>Saved vs. Ephemeral Identities:</strong></p>
 			<ul>
-				<li><em>Saved to Disk:</em> Stored locally in encrypted app storage for everyday convenience across
-					restarts.
-				</li>
-				<li><em>Ephemeral:</em> Held strictly in volatile memory and wiped as soon as Graffiti is closed. This
-					provides
-					maximum security for sensitive conversations, though you will need to re-enter your seed phrase the
-					next
-					time you open the app. You can mix and match saved and ephemeral identities on the same node.
-				</li>
-
+				<li><em>Saved to Disk:</em> Stored locally in encrypted app storage for everyday convenience across restarts.</li>
+				<li><em>Ephemeral:</em> Held strictly in volatile memory and wiped as soon as Graffiti is closed. This provides maximum operational security for sensitive conversations, though you will need to re-enter your seed phrase the next time you open the app. You can mix and match saved and ephemeral identities on the same node.</li>
 			</ul>
 		</li>
-
 	</ul>
+
 	<h3 id='peers-friends--assisted-relaying'>Peers (Friends &amp; Assisted Relaying)</h3>
-	<p>Located directly below the identities table in the <strong>ID</strong> tab, the <strong>Peers</strong> section manages the public keys of your friends and contacts without needing their seed
-		phrases.</p>
-	<p>Because of Graffiti&#39;s topic identity model, you may not always need to manage individual peers. However,
-		importing a friend&#39;s public key provides two important capabilities:</p>
-	<ol start=''>
-		<li><strong>Direct One-on-One Messaging:</strong> You can address messages directly to your friend&#39;s public
-			key.
-			The message is encrypted so that only their private key can read it (meaning you will not be able to read
-			your
-			sent copies).
-		</li>
-		<li><strong>Peer-Assisted Caching:</strong> Even when you are not running in full Relay mode, your node will
-			automatically request and cache messages on behalf of any Peers you hold whenever you synchronize with
-			relays or
-			peers. When you later connect with your friend, your node automatically serves those cached messages to
-			them.
-		</li>
-
+	<p>Located directly below the identities table in the <strong>ID</strong> tab, the <strong>Peers</strong> section manages the public keys of your friends and contacts without needing their seed phrases.</p>
+	<p>Because of Graffiti&#39;s topic identity model, you may not always need to manage individual peers. However, importing a friend&#39;s public key provides two important capabilities:</p>
+	<ol>
+		<li><strong>Direct One-on-One Messaging:</strong> You can address messages directly to your friend&#39;s public key. The message is encrypted so that only their private key can read it (meaning you will not be able to read your sent copies).</li>
+		<li><strong>Peer-Assisted Caching:</strong> Even when you are not running in full Relay mode, your node will automatically request and cache messages on behalf of any Peers you hold whenever you synchronize with relays or peers. When you later connect with your friend, your node automatically serves those cached messages to them.</li>
 	</ol>
-	<h3 id='the-settings-tab-appearance--storage'>The Settings Tab (Appearance &amp; Storage)</h3>
-	<p>The <strong>Settings</strong> tab lets you customize the user interface and storage limits.</p>
-	<ul>
-		<li><strong>Appearance:</strong> Choose from curated color themes (Dark, Slate, Amber, Forest, Cyberpunk, and
-			Light),
-			adjust the application font size, and customize font families.
-		</li>
-		<li><strong>Global Storage Quota:</strong> Set a maximum storage threshold for cached messages and media. When
-			total
-			storage exceeds this quota, Graffiti automatically prunes older cached content until usage drops below the
-			limit.
-		</li>
-		<li><strong>Per-Identity Storage Pruning:</strong> Manage storage footprint per identity. You can prune the
-			older 50%
-			of messages for a specific identity or clear its message history entirely.
-		</li>
-		<li><strong>About &amp; Documentation:</strong> Check the current software version / build date and open this
-			documentation viewer.
-		</li>
 
+	<h3 id='the-settings-tab-appearance--storage'>The Settings Tab (Appearance, Storage &amp; System)</h3>
+	<p>The <strong>Settings</strong> tab lets you customize the user interface, manage disk storage quotas, backup or transfer messages, and configure background system behavior.</p>
+	<ul>
+		<li>
+			<p><strong>Appearance &amp; Typography:</strong> Customize the visual style and readability of the application:</p>
+			<ul>
+				<li><em>Themes:</em> Choose from OLED-friendly dark themes (Dark Sage / Mint, Dark Lavender, Dark Sky / Cyan, Dark Amber, Dark Rose, Dark Monochrome) or clean light themes (Light Purple, Light Sage, Light Ocean, Light Amber, Light Rose).</li>
+				<li><em>Font Size:</em> Scale font sizing from 50% up to 200% for optimal readability across phones, tablets, and desktop displays.</li>
+				<li><em>Font Family:</em> Switch between Default, Sans-serif, Serif, Monospace, or System UI fonts.</li>
+			</ul>
+		</li>
+		<li>
+			<p><strong>Storage Management &amp; Quotas:</strong> Monitor and control disk space used by messages and media attachments:</p>
+			<ul>
+				<li><em>Total Storage Used:</em> Live tracking of total disk space consumed across all identities.</li>
+				<li><em>Storage Quota (MB):</em> Set a maximum storage threshold. When total disk usage exceeds this limit, Graffiti automatically prunes older cached messages and payloads until usage drops back below the quota.</li>
+				<li><em>Per-Identity Controls:</em> Inspect storage consumption for each individual identity, with one-click actions to <strong>Purge 1/2</strong> (removes the oldest 50% of cached messages) or <strong>Purge All</strong> (clears all message history for that identity).</li>
+			</ul>
+		</li>
+		<li>
+			<p><strong>Portable Messages Import &amp; Export:</strong> Easily transfer, backup, or restore conversations between devices:</p>
+			<ul>
+				<li><em>Export Messages:</em> In the storage list, click <strong>Export</strong> next to any identity to package all of its messages, metadata, and media attachments into a standalone portable message file (<code>.pmsg</code> / <code>.pack</code>).</li>
+				<li><em>Import Messages:</em> Click the <strong>Import Messages</strong> button in Storage settings to import any portable message archive. Messages are verified, deduplicated against existing records, and imported alongside associated peer public keys.</li>
+			</ul>
+		</li>
+		<li>
+			<p><strong>Background Execution &amp; Battery (Android):</strong> When running on Android, this card displays battery optimization status and provides a shortcut to configure <strong>Unrestricted Battery</strong> usage. Disabling battery restrictions ensures Android does not terminate background network sockets or pause synchronization when your screen turns off.</p>
+		</li>
+		<li>
+			<p><strong>About:</strong> Check the currently installed software version and build date, and open this documentation viewer.</p>
+		</li>
 	</ul>
 </body>
 
