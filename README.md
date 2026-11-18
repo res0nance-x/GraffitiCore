@@ -7,3 +7,10 @@
   * `r3.graffiti.GraffitiP2P`: Mesh peer discovery, ping/pong, challenge-response, content synchronization.
   * `r3.graffiti.GraffitiAPI`: HTTP/JSON REST API serving peer status, identity, messages, and storage.
   * `r3.graffiti.*`: Message types (`ChallengeMessage`, `ContentRequestMessage`, `EncryptedContentMessage`, etc.).
+
+### License
+
+This project is licensed under the [MIT License](LICENSE).
+
+Embedded third-party components and assets (including `org.nanohttpd.*` under **BSD 3-Clause**, `r3.org.json.*` under **Public Domain**, `r3.upnp.*` under **LGPL-2.1-or-later**, and `font/GMF.woff2` under **Apache-2.0**) retain their original licenses. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for full details.
+
